@@ -118,3 +118,28 @@ pub async fn get_game_state() -> GameState {
 
     state
 }
+
+/// Get full live client data (all players, active player, events).
+/// Only available during an active game on localhost:2999 with no auth.
+#[tauri::command]
+pub async fn get_live_client_data() -> Option<serde_json::Value> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .ok()?;
+
+    client
+        .get("https://127.0.0.1:2999/liveclientdata/allgamedata")
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()
+}
+
+/// Read a text file from disk. Used for loading saved config/calibration.
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", path, e))
+}

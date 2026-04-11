@@ -38,6 +38,11 @@ export async function createRnnoiseNode(audioContext: AudioContext): Promise<Rnn
   let vadScore = 0;
 
   // Use 2048 buffer for ScriptProcessorNode (~42ms latency at 48kHz)
+  // Note: createScriptProcessor is deprecated but AudioWorklet requires a separate
+  // file/module which complicates Overwolf packaging. Guard against removal.
+  if (typeof audioContext.createScriptProcessor !== 'function') {
+    throw new Error('ScriptProcessorNode not available — AudioWorklet migration needed');
+  }
   const scriptNode = audioContext.createScriptProcessor(2048, 1, 1);
 
   scriptNode.onaudioprocess = (event: AudioProcessingEvent) => {

@@ -46,7 +46,12 @@ async function encryptPosition(key: CryptoKey, x: number, y: number): Promise<st
   const combined = new Uint8Array(iv.length + encrypted.byteLength);
   combined.set(iv);
   combined.set(new Uint8Array(encrypted), iv.length);
-  return btoa(String.fromCharCode(...combined));
+  // Chunk the conversion to avoid stack overflow with large arrays
+  let binary = '';
+  for (let i = 0; i < combined.length; i++) {
+    binary += String.fromCharCode(combined[i]);
+  }
+  return btoa(binary);
 }
 
 async function decryptPosition(key: CryptoKey, blob: string): Promise<{ x: number; y: number } | null> {

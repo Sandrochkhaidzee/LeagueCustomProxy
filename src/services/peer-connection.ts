@@ -1,4 +1,4 @@
-import { getIceServers, ICE_SERVERS } from '../core/config';
+import { getIceServers } from '../core/config';
 
 export class PeerConnection {
   private pc: RTCPeerConnection;
@@ -29,10 +29,8 @@ export class PeerConnection {
     this.pc.ontrack = (event) => {
       console.log('[WebRTC] Got remote track from', remoteName, 'kind:', event.track.kind);
       this.remoteStream.addTrack(event.track);
-      // Ensure audio plays (autoplay may be blocked)
-      this.audioElement.play().catch((e) => {
-        console.warn('[WebRTC] Audio play failed for', remoteName, ':', e);
-      });
+      // Ensure audio plays (autoplay may be blocked by Chromium policy)
+      this.tryPlay();
     };
 
     this.pc.onconnectionstatechange = () => {
@@ -52,6 +50,19 @@ export class PeerConnection {
   static async create(remoteName: string): Promise<PeerConnection> {
     const iceServers = await getIceServers();
     return new PeerConnection(remoteName, iceServers);
+  }
+
+  private tryPlay(): void {
+    this.audioElement.play().catch(() => {
+      // Autoplay blocked — retry on next user gesture (click/keydown)
+      const resume = () => {
+        this.audioElement.play().catch(() => {});
+        document.removeEventListener('click', resume);
+        document.removeEventListener('keydown', resume);
+      };
+      document.addEventListener('click', resume, { once: true });
+      document.addEventListener('keydown', resume, { once: true });
+    });
   }
 
   private setupDataChannel(): void {

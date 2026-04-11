@@ -26,6 +26,11 @@ export class AudioService {
   private rnnoiseNode: RnnoiseNode | null = null;
   private vadActive = false;
 
+  // Guard against concurrent connectToPeer calls for the same peer
+  private connectingPeers: Set<string> = new Set();
+  // Buffer signals that arrive before the peer connection is created
+  private pendingSignals: Map<string, SignalMessage[]> = new Map();
+
   // PTT state
   private pttHeld = false;
 
@@ -129,11 +134,19 @@ export class AudioService {
 
   // Connect to a new peer
   async connectToPeer(remoteName: string, isInitiator?: boolean): Promise<void> {
-    if (this.peers.has(remoteName)) return;
+    if (this.peers.has(remoteName) || this.connectingPeers.has(remoteName)) return;
+    this.connectingPeers.add(remoteName);
 
     console.log('[Audio] Connecting to peer:', remoteName);
-    const peer = await PeerConnection.create(remoteName);
+    let peer: PeerConnection;
+    try {
+      peer = await PeerConnection.create(remoteName);
+    } catch (e) {
+      this.connectingPeers.delete(remoteName);
+      throw e;
+    }
     this.peers.set(remoteName, peer);
+    this.connectingPeers.delete(remoteName);
 
     if (this.outputStream) {
       peer.addLocalStream(this.outputStream);
@@ -166,6 +179,16 @@ export class AudioService {
         console.error('[Audio] Failed to create offer for:', remoteName, e);
         this.peers.delete(remoteName);
         peer.close();
+      }
+    }
+
+    // Flush any signals that arrived before this peer was created
+    const pending = this.pendingSignals.get(remoteName);
+    if (pending) {
+      this.pendingSignals.delete(remoteName);
+      for (const sig of pending) {
+        this.handleSignal(sig).catch(e =>
+          console.error('[Audio] Failed to replay buffered signal:', sig.type, e));
       }
     }
   }
@@ -202,6 +225,14 @@ export class AudioService {
         await peer.handleAnswer(signal.payload);
       } else if (signal.type === 'ice-candidate' && peer) {
         await peer.addIceCandidate(signal.payload);
+      } else if (!peer && (signal.type === 'answer' || signal.type === 'ice-candidate')) {
+        // Buffer signals that arrive before the peer connection is created
+        let pending = this.pendingSignals.get(signal.from);
+        if (!pending) {
+          pending = [];
+          this.pendingSignals.set(signal.from, pending);
+        }
+        pending.push(signal);
       }
     } catch (e) {
       console.error('[Audio] Signal handling failed:', signal.type, 'from:', signal.from, e);

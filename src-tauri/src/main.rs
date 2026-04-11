@@ -16,6 +16,8 @@ fn main() {
             capture::capture_minimap,
             lcu::check_league_running,
             lcu::get_game_state,
+            lcu::get_live_client_data,
+            lcu::read_text_file,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");

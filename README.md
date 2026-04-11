@@ -17,7 +17,8 @@ Overwolf App
 ├── background window     -- orchestrator, GEP, signaling, tracking, audio
 ├── overlay window        -- draggable widget with nearby players, mute controls
 └── supabase/
-    └── compute-volumes/  -- Edge Function for server-side volume computation
+    ├── compute-volumes/   -- Edge Function for server-side volume computation
+    └── turn-credentials/  -- Edge Function for TURN credential generation
 ```
 
 **Key services:**
@@ -25,8 +26,8 @@ Overwolf App
 - `ChampionClassifier` -- ONNX Runtime Web (WASM) inference for champion icon identification
 - `AudioService` -- WebRTC audio with RNNoise VAD/PTT, per-peer volume control
 - `RNNoise` -- WASM noise suppression + VAD via ScriptProcessorNode
-- `SignalingService` -- Supabase Realtime presence + position broadcast
-- `PeerConnection` -- WebRTC with Opus 128kbps + DTX, TURN credential generation
+- `SignalingService` -- Supabase Realtime presence + peer discovery (no plaintext positions)
+- `PeerConnection` -- WebRTC with Opus 128kbps + DTX, server-side TURN credentials
 - `VolumeClient` -- calls Edge Function with encrypted position blobs
 - `DataChannelService` -- WebRTC data channels for encrypted blob exchange
 
@@ -43,17 +44,25 @@ Overwolf App
 ```bash
 npm install
 cp .env.example .env
-# Edit .env with your Supabase URL, anon key, and optionally TURN server/secret
+# Edit .env with your Supabase URL and anon key
 npx webpack
 ```
 
 ### Environment Variables
 
+**Client `.env`** (baked into the Overwolf app at build time):
+
 | Variable | Description |
 |----------|-------------|
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_ANON_KEY` | Supabase anonymous/public API key |
-| `TURN_SERVER` | TURN server hostname (optional) |
+
+**Server-side** (set on your Supabase Edge Functions runtime):
+
+| Variable | Description |
+|----------|-------------|
+| `POSITION_ENCRYPTION_KEY` | 256-bit hex key for AES-GCM position encryption |
+| `TURN_SERVER` | TURN server hostname (optional, for NAT traversal) |
 | `TURN_SECRET` | coturn shared secret for HMAC credentials (optional) |
 
 ### Run in Overwolf
@@ -67,13 +76,22 @@ npx webpack
 
 You can self-host Supabase using their [Docker setup](https://supabase.com/docs/guides/self-hosting/docker). The app only uses:
 - **Realtime** -- for signaling (presence + broadcast channels)
-- **Edge Functions** -- for server-side volume computation
+- **Edge Functions** -- volume computation + TURN credential generation
 - No database tables or auth required
 
-Deploy the edge function to your instance:
+Deploy edge functions to your instance:
 
 ```bash
 npx supabase functions deploy compute-volumes
+npx supabase functions deploy turn-credentials
+```
+
+Set server-side secrets (Edge Functions environment):
+
+```bash
+npx supabase secrets set POSITION_ENCRYPTION_KEY=<64-hex-chars>
+npx supabase secrets set TURN_SERVER=your-turn-server.example.com
+npx supabase secrets set TURN_SECRET=your-coturn-shared-secret
 ```
 
 ### Train the Champion Classifier (optional)
@@ -118,7 +136,8 @@ models/
 scripts/
 └── train_champion_classifier.py
 supabase/functions/
-└── compute-volumes/index.ts
+├── compute-volumes/index.ts
+└── turn-credentials/index.ts
 ```
 
 ## Acknowledgements
