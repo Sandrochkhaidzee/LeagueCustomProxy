@@ -30,7 +30,7 @@ async function importKey(hexKey: string): Promise<CryptoKey> {
     throw new Error('ENCRYPTION_KEY must be 64 hex chars (256-bit)');
   }
   const keyBytes = hexToBytes(hexKey);
-  return crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, [
+  return crypto.subtle.importKey('raw', keyBytes.buffer as ArrayBuffer, 'AES-GCM', false, [
     'encrypt',
     'decrypt',
   ]);
