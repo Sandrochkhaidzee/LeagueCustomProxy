@@ -1,4 +1,4 @@
-import { webcrypto } from 'node:crypto';
+const crypto = globalThis.crypto;
 
 export interface IceServer {
   urls: string;
@@ -18,14 +18,14 @@ export async function generateTurnCredentials(
   const username = `${expiry}:proxchat`;
 
   const encoder = new TextEncoder();
-  const key = await webcrypto.subtle.importKey(
+  const key = await crypto.subtle.importKey(
     'raw',
     encoder.encode(turnSecret),
     { name: 'HMAC', hash: 'SHA-1' },
     false,
     ['sign'],
   );
-  const sig = await webcrypto.subtle.sign('HMAC', key, encoder.encode(username));
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(username));
   const credential = Buffer.from(sig).toString('base64');
 
   const iceServers: IceServer[] = [

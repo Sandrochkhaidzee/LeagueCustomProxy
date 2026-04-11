@@ -1,4 +1,4 @@
-import { webcrypto } from 'node:crypto';
+const crypto = globalThis.crypto;
 
 const MAX_HEARING_RANGE = 1200;
 const BLOB_MAX_AGE_MS = 10_000; // 10s to handle clock skew
@@ -30,7 +30,7 @@ async function importKey(hexKey: string): Promise<CryptoKey> {
     throw new Error('ENCRYPTION_KEY must be 64 hex chars (256-bit)');
   }
   const keyBytes = hexToBytes(hexKey);
-  return webcrypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, [
+  return crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, [
     'encrypt',
     'decrypt',
   ]);
@@ -55,8 +55,8 @@ export async function encryptPosition(
   const payload = new TextEncoder().encode(
     JSON.stringify({ x, y, t: timestamp }),
   );
-  const iv = webcrypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await webcrypto.subtle.encrypt(
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
     key,
     payload,
@@ -76,7 +76,7 @@ export async function decryptPosition(
     const combined = new Uint8Array(Buffer.from(blob, 'base64'));
     const iv = combined.slice(0, 12);
     const ciphertext = combined.slice(12);
-    const decrypted = await webcrypto.subtle.decrypt(
+    const decrypted = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv },
       key,
       ciphertext,
