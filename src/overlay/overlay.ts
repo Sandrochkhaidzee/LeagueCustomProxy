@@ -39,109 +39,9 @@ let debugEnabled = false;
 // Per-player volume cache (so sliders don't reset on re-render)
 const playerVolumes: Map<string, number> = new Map();
 
-// --- Window info cache ---
-let cachedWinId = '';
-let cachedWinLeft = 0;
-let cachedWinTop = 0;
-let cachedWinWidth = 0;
-let cachedWinHeight = 0;
-const PANEL_WIDTH = 240;
-
-overwolf.windows.getCurrentWindow((result: any) => {
-  if (result.success) {
-    cachedWinId = result.window.id;
-    cachedWinLeft = result.window.left;
-    cachedWinTop = result.window.top;
-    cachedWinWidth = result.window.width;
-    cachedWinHeight = result.window.height;
-  }
-});
-
-// --- Refresh cached position/size from Overwolf ---
-function refreshWindowInfo(): void {
-  if (!cachedWinId) return;
-  overwolf.windows.getCurrentWindow((result: any) => {
-    if (result.success) {
-      cachedWinLeft = result.window.left;
-      cachedWinTop = result.window.top;
-      cachedWinWidth = result.window.width;
-      cachedWinHeight = result.window.height;
-    }
-  });
-}
-
-// --- Dragging (move window via header) ---
-let isDragging = false;
-let dragStartX = 0;
-let dragStartY = 0;
-
-dragHandle.addEventListener('mousedown', (e) => {
-  isDragging = true;
-  dragStartX = e.screenX;
-  dragStartY = e.screenY;
-  dragHandle.style.cursor = 'grabbing';
-});
-
-document.addEventListener('mousemove', (e) => {
-  if (!isDragging || !cachedWinId) return;
-  const dx = e.screenX - dragStartX;
-  const dy = e.screenY - dragStartY;
-  dragStartX = e.screenX;
-  dragStartY = e.screenY;
-  cachedWinLeft += dx;
-  cachedWinTop += dy;
-  overwolf.windows.changePosition(cachedWinId, cachedWinLeft, cachedWinTop, () => {});
-});
-
-document.addEventListener('mouseup', () => {
-  if (isDragging) {
-    isDragging = false;
-    dragHandle.style.cursor = 'grab';
-  }
-});
-
-// --- Resize handles (use Overwolf native dragResize) ---
-const resizeMap: Record<string, string> = {
-  'corner-tr': 'TopRight',
-  'corner-br': 'BottomRight',
-  'edge-top': 'Top',
-  'edge-right': 'Right',
-  'edge-bottom': 'Bottom',
-};
-
-for (const [id, edge] of Object.entries(resizeMap)) {
-  document.getElementById(id)!.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (cachedWinId) {
-      overwolf.windows.dragResize(cachedWinId, edge as any);
-    }
-  });
-}
-
-// After a resize ends, refresh window info to get new size
-for (const id of Object.keys(resizeMap)) {
-  document.getElementById(id)!.addEventListener('mouseup', () => {
-    setTimeout(refreshWindowInfo, 100);
-    setTimeout(refreshWindowInfo, 300);
-  });
-}
-
-// Also listen for window size changes via a periodic check during resize
-let resizeCheckInterval: number | null = null;
-document.addEventListener('mousedown', (e) => {
-  const target = e.target as HTMLElement;
-  if (target.classList.contains('corner') || target.classList.contains('edge')) {
-    resizeCheckInterval = window.setInterval(refreshWindowInfo, 200);
-  }
-});
-document.addEventListener('mouseup', () => {
-  if (resizeCheckInterval) {
-    clearInterval(resizeCheckInterval);
-    resizeCheckInterval = null;
-    setTimeout(refreshWindowInfo, 100);
-  }
-});
+// Tauri handles window dragging and resizing via its window config.
+// The drag handle uses Tauri's built-in data-tauri-drag-region attribute
+// (set in the HTML). No manual drag/resize logic needed.
 
 // --- Controls ---
 btnSelfMute.addEventListener('click', () => {
@@ -223,7 +123,9 @@ scanRateInput.addEventListener('input', () => {
 });
 
 function sendToBackground(action: string, payload: any): void {
-  overwolf.windows.sendMessage('background', action, payload, () => {});
+  // In Tauri, both background and overlay run in the same WebView,
+  // so we use window events for communication
+  window.dispatchEvent(new CustomEvent('overlayAction', { detail: { action, payload } }));
 }
 
 // --- Track active player row DOM elements for in-place updates ---
@@ -390,11 +292,9 @@ function renderState(state: OverlayState): void {
 }
 
 // --- Listen for state updates from background ---
-overwolf.windows.onMessageReceived.addListener((message: any) => {
-  if (message.id === 'overlayUpdate') {
-    renderState(message.content);
-  }
-});
+window.addEventListener('overlayUpdate', ((event: CustomEvent) => {
+  renderState(event.detail);
+}) as EventListener);
 
 console.log('LoLProxChat overlay loaded');
 

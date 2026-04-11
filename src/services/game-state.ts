@@ -1,6 +1,23 @@
+import { invoke } from '@tauri-apps/api/core';
 import { Player, MapType } from '../core/types';
 import { isStreamerMode } from '../core/streamer-detect';
 import { generateRoomId } from '../core/room';
+
+/** Shape returned by the Rust get_game_state command */
+export interface TauriGameState {
+  isLeagueRunning: boolean;
+  isInGame: boolean;
+  summonerName: string | null;
+  isDead: boolean;
+  gameFlowPhase: string;
+}
+
+/** Shape returned by the Rust get_live_client_data command */
+export interface LiveClientData {
+  activePlayer: any;
+  allPlayers: any[];
+  gameData: any;
+}
 
 export interface GameSession {
   roomId: string;
@@ -64,6 +81,20 @@ export class GameStateService {
 
   clearSession(): void {
     this.session = null;
+  }
+
+  /** Poll Tauri backend for basic game state (league running, in-game, summoner name) */
+  async pollGameState(): Promise<TauriGameState> {
+    return invoke<TauriGameState>('get_game_state');
+  }
+
+  /** Poll League Live Client Data API via Tauri backend */
+  async pollLiveClientData(): Promise<LiveClientData | null> {
+    try {
+      return await invoke<LiveClientData>('get_live_client_data');
+    } catch {
+      return null;
+    }
   }
 
   private detectMapType(gameMode: string): MapType {

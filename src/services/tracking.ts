@@ -1,5 +1,4 @@
-declare const overwolf: any;
-
+import { invoke } from '@tauri-apps/api/core';
 import { Position, MapType, MAP_DIMENSIONS } from '../core/types';
 import { getMinimapBounds, MinimapBounds } from '../core/map-calibration';
 import { ChampionClassifier } from './champion-classifier';
@@ -66,6 +65,11 @@ export class TrackingService {
   // EMA-smoothed classifier scores to dampen single-frame misclassifications
   private smoothedClassifierScores: Map<string, number> = new Map();
   private classifierTick = 0;
+  private classifierRunning = false;
+
+  // Debug canvas (reused to avoid allocation per frame)
+  private debugCanvas: HTMLCanvasElement | null = null;
+  private debugCtx: CanvasRenderingContext2D | null = null;
 
   // Diagnostics
   private lockedTickCount = 0;
@@ -80,6 +84,18 @@ export class TrackingService {
     this.canvas.width = this.captureBounds.width;
     this.canvas.height = this.captureBounds.height;
     this.ctx = this.canvas.getContext('2d', { willReadFrequently: true })!;
+  }
+
+  /** Send capture bounds to the Tauri backend for screen capture cropping */
+  async initCaptureBounds(): Promise<void> {
+    await invoke('set_capture_bounds', {
+      bounds: {
+        x: this.captureBounds.x,
+        y: this.captureBounds.y,
+        width: this.captureBounds.width,
+        height: this.captureBounds.height,
+      },
+    });
   }
 
   getState(): TrackingState { return this.state; }
@@ -553,12 +569,13 @@ export class TrackingService {
     whiteMask: Uint8Array,
     viewportMask: Uint8Array,
     regionWidth: number,
+    regionHeight: number,
   ): number {
     const pad = Math.max(4, Math.round(this.expectedIconDiam * 0.3));
     const x0 = Math.max(0, blob.minX - pad);
     const y0 = Math.max(0, blob.minY - pad);
     const x1 = Math.min(regionWidth - 1, blob.maxX + pad);
-    const y1 = Math.min(regionWidth - 1, blob.maxY + pad);
+    const y1 = Math.min(regionHeight - 1, blob.maxY + pad);
     // Inner bbox (the blob's own area — skip these pixels)
     const ix0 = blob.minX;
     const iy0 = blob.minY;
@@ -589,8 +606,9 @@ export class TrackingService {
     whiteMask: Uint8Array,
     viewportMask: Uint8Array,
     regionWidth: number,
+    regionHeight: number,
   ): number {
-    const count = this.countWhiteNearBlob(blob, whiteMask, viewportMask, regionWidth);
+    const count = this.countWhiteNearBlob(blob, whiteMask, viewportMask, regionWidth, regionHeight);
     return Math.min(1, count / 8);
   }
 
@@ -600,10 +618,14 @@ export class TrackingService {
     mask: Uint8Array, w: number, h: number, blobs: Blob[],
     imageData?: ImageData, region?: { x: number; y: number; width: number; height: number },
   ): string {
-    const c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
-    const ctx = c.getContext('2d')!;
+    if (!this.debugCanvas || this.debugCanvas.width !== w || this.debugCanvas.height !== h) {
+      this.debugCanvas = document.createElement('canvas');
+      this.debugCanvas.width = w;
+      this.debugCanvas.height = h;
+      this.debugCtx = this.debugCanvas.getContext('2d')!;
+    }
+    const c = this.debugCanvas;
+    const ctx = this.debugCtx!;
     const img = ctx.createImageData(w, h);
 
     // Draw filtered pixels (teal, red, and movement path white)
@@ -665,69 +687,61 @@ export class TrackingService {
       return;
     }
 
-    const params = {
-      roundAwayFromZero: 'true',
-      crop: {
-        x: this.captureBounds.x,
-        y: this.captureBounds.y,
-        width: this.captureBounds.width,
-        height: this.captureBounds.height,
-      },
-    };
+    invoke<{ data_url: string; width: number; height: number }>('capture_minimap')
+      .then((result) => {
+        const img = new Image();
+        img.onload = () => {
+          this.ctx.drawImage(img, 0, 0);
+          const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
 
-    (overwolf.media as any).getScreenshotUrl(params, (result: any) => {
-      if (!result?.url) return;
+          // Minimap region is set from game.cfg config (or manual calibration).
+          // No CV-based auto-detection needed.
+          if (!this.minimapRegion && this.userMinimapRegion) {
+            this.minimapRegion = this.userMinimapRegion;
+            this.expectedIconDiam = Math.round(this.minimapRegion.width * 0.087);
+          }
 
-      const img = new Image();
-      img.onload = () => {
-        this.ctx.drawImage(img, 0, 0);
-        if (result.url.startsWith('blob:')) {
-          try { URL.revokeObjectURL(result.url); } catch (_) { /* ignore */ }
-        }
-        const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+          if (!this.minimapRegion) return;
 
-        // Minimap region is set from game.cfg config (or manual calibration).
-        // No CV-based auto-detection needed.
-        if (!this.minimapRegion && this.userMinimapRegion) {
-          this.minimapRegion = this.userMinimapRegion;
-          this.expectedIconDiam = Math.round(this.minimapRegion.width * 0.087);
-        }
+          // Create filtered mask and find blobs
+          const region = this.minimapRegion;
+          let mask = this.createMask(imageData, region);
+          mask = this.dilate(mask, region.width, region.height);
+          const allBlobs = this.findBlobs(mask, region.width, region.height);
+          const iconBlobs = this.filterIconBlobs(allBlobs);
 
-        if (!this.minimapRegion) return;
+          // Generate filtered debug image ~every 1 second (every 8 frames)
+          this.filteredImageTick++;
+          if (this.filteredImageTick % 8 === 0) {
+            this.filteredImageUrl = this.generateFilteredImage(mask, region.width, region.height, iconBlobs, imageData, region);
+          }
 
-        // Create filtered mask and find blobs
-        const region = this.minimapRegion;
-        let mask = this.createMask(imageData, region);
-        mask = this.dilate(mask, region.width, region.height);
-        const allBlobs = this.findBlobs(mask, region.width, region.height);
-        const iconBlobs = this.filterIconBlobs(allBlobs);
+          this.diagCounter++;
 
-        // Generate filtered debug image ~every 1 second (every 8 frames)
-        this.filteredImageTick++;
-        if (this.filteredImageTick % 8 === 0) {
-          this.filteredImageUrl = this.generateFilteredImage(mask, region.width, region.height, iconBlobs, imageData, region);
-        }
+          // Build white pixel masks (separating movement path from viewport rectangle)
+          const { whiteMask, viewportMask } = this.buildWhiteMasks(imageData, region);
 
-        this.diagCounter++;
+          // Run classifier every 4th frame to amortize cost
+          this.classifierTick++;
+          const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
+          if (this.classifier && this.classifierTick % 4 === 0 && tealBlobs.length > 0 && !this.classifierRunning) {
+            this.classifierRunning = true;
+            this.updateClassifierScores(tealBlobs, imageData, region).finally(() => {
+              this.classifierRunning = false;
+            });
+          }
 
-        // Build white pixel masks (separating movement path from viewport rectangle)
-        const { whiteMask, viewportMask } = this.buildWhiteMasks(imageData, region);
-
-        // Run classifier every 4th frame to amortize cost
-        this.classifierTick++;
-        const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
-        if (this.classifier && this.classifierTick % 4 === 0 && tealBlobs.length > 0) {
-          this.updateClassifierScores(tealBlobs, imageData, region);
-        }
-
-        if (this.state === TrackingState.SCANNING) {
-          this.handleScanning(iconBlobs, whiteMask, viewportMask, region);
-        } else if (this.state === TrackingState.LOCKED) {
-          this.handleLocked(iconBlobs, whiteMask, viewportMask, region);
-        }
-      };
-      img.src = result.url;
-    });
+          if (this.state === TrackingState.SCANNING) {
+            this.handleScanning(iconBlobs, whiteMask, viewportMask, region);
+          } else if (this.state === TrackingState.LOCKED) {
+            this.handleLocked(iconBlobs, whiteMask, viewportMask, region);
+          }
+        };
+        img.src = result.data_url;
+      })
+      .catch((err) => {
+        console.error('[Tracking] capture_minimap failed:', err);
+      });
   }
 
   /**
@@ -765,7 +779,7 @@ export class TrackingService {
 
     for (const b of tealBlobs) {
       const peerScore = this.peerAvoidanceScore(b);
-      const whiteScore = this.whitePixelScore(b, whiteMask, viewportMask, region.width);
+      const whiteScore = this.whitePixelScore(b, whiteMask, viewportMask, region.width, region.height);
       const clsScore = this.getClassifierScore(b);
       const ringScore = Math.min(1, b.pixels * (1 - b.fillRatio) / 200);
 
@@ -871,7 +885,7 @@ export class TrackingService {
       const posScore = 1 - (dxPred * dxPred + dyPred * dyPred) / maxJumpSq;
 
       const peerScore = this.peerAvoidanceScore(b);
-      const whiteScore = this.whitePixelScore(b, whiteMask, viewportMask, region.width);
+      const whiteScore = this.whitePixelScore(b, whiteMask, viewportMask, region.width, region.height);
       const clsScore = this.getClassifierScore(b);
 
       // If classifier is loaded, reject blobs it confidently says aren't our champion

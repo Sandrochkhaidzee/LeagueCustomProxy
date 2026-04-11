@@ -1,5 +1,5 @@
-import { GEPService } from './gep';
-import { GameStateService, GameSession } from './game-state';
+import { invoke } from '@tauri-apps/api/core';
+import { GameStateService, GameSession, TauriGameState } from './game-state';
 import { SignalingService, SignalMessage, PositionBroadcast } from './signaling';
 import { AudioService } from './audio';
 import { TrackingService, TrackingState } from './tracking';
@@ -10,7 +10,6 @@ import { PeerState } from '../core/types';
 import { isStreamerMode } from '../core/streamer-detect';
 
 export class Orchestrator {
-  private gep: GEPService;
   private gameState: GameStateService;
   private signaling: SignalingService;
   private audio: AudioService | null = null;
@@ -24,10 +23,9 @@ export class Orchestrator {
   // VAD is now handled internally by AudioService (RNNoise polling)
   private volumeTickId: number | null = null;
   private configPollId: number | null = null;
-  private gepStarted = false;
+  private gameStatePollId: number | null = null;
   private positionTickRunning = false;
   private sessionActive = false;
-  private overlayWindowId: string | null = null;
   private lastOverlayRepositionTime = 0;
   private lastOverlayPositionKey = '';
   private leagueConfigPath: string | null = null;
@@ -36,7 +34,6 @@ export class Orchestrator {
 
 
   constructor() {
-    this.gep = new GEPService();
     this.gameState = new GameStateService();
     this.signaling = new SignalingService();
   }
@@ -44,85 +41,85 @@ export class Orchestrator {
   start(): void {
     console.log('[ProxChat] Orchestrator.start() called');
 
-    // Listen for game launch
-    overwolf.games.onGameInfoUpdated.addListener((event: any) => {
-      console.log('[ProxChat] onGameInfoUpdated:', JSON.stringify(event?.gameInfo?.classId), 'running:', event?.gameInfo?.isRunning);
-      if (event.gameInfo?.classId === 5426) {
-        if (event.gameInfo.isRunning) {
-          this.startGEP();
-        } else {
+    // Poll Tauri backend for game state every 3 seconds
+    this.gameStatePollId = window.setInterval(() => this.pollGameState(), 3000) as unknown as number;
+
+    // Also poll immediately on start
+    this.pollGameState();
+  }
+
+  private async pollGameState(): Promise<void> {
+    try {
+      const state: TauriGameState = await this.gameState.pollGameState();
+
+      if (!state.isLeagueRunning) {
+        if (this.session) {
           console.log('[ProxChat] LoL closed, ending session');
-          this.gepStarted = false;
           this.endSession();
-          this.gep.stop();
+        }
+        return;
+      }
+
+      if (state.isInGame && !this.session) {
+        // Game is in progress but we don't have a session yet — try to get live client data
+        await this.pollForLiveClientData();
+      }
+
+      // Update death state from Tauri backend
+      if (this.session && state.isDead !== this.session.localPlayer.isDead) {
+        if (state.isDead) {
+          this.session.localPlayer.isDead = true;
+          this.tracking?.onDeath();
+        } else {
+          this.session.localPlayer.isDead = false;
+          this.tracking?.onRespawn();
         }
       }
-    });
 
-    // Check if already running
-    overwolf.games.getRunningGameInfo((result: any) => {
-      console.log('[ProxChat] getRunningGameInfo result:', JSON.stringify(result?.classId), 'running:', result?.isRunning);
-      if (result?.classId === 5426) {
-        this.startGEP();
+      if (!state.isInGame && this.session) {
+        console.log('[ProxChat] Game ended (phase: ' + state.gameFlowPhase + ')');
+        this.endSession();
       }
-    });
-  }
-
-  private startGEP(): void {
-    if (this.gepStarted) {
-      console.log('[ProxChat] GEP already started, skipping');
-      return;
+    } catch (e) {
+      console.error('[ProxChat] pollGameState failed:', e);
     }
-    this.gepStarted = true;
-    console.log('[ProxChat] Starting GEP (first time)');
-    this.gep.start(
-      (name, data) => this.handleGameEvent(name, data),
-      (info) => this.handleInfoUpdate(info),
-    );
-
-    // Poll getInfo since onInfoUpdates2 may not fire for existing data
-    this.pollForGameInfo();
   }
 
-  private pollForGameInfo(): void {
-    if (this.session || !this.gepStarted) return;
+  private async pollForLiveClientData(): Promise<void> {
+    if (this.session) return;
 
-    this.gep.getInfo((result: any) => {
-      if (!this.gepStarted) return; // Stop polling if GEP was stopped
-      console.log('[ProxChat] pollForGameInfo result:', JSON.stringify(result).substring(0, 500));
-      if (result.success && result.res?.live_client_data) {
-        const lcd = result.res.live_client_data;
+    try {
+      // Fetch live client data directly from League's local API via Tauri
+      const lcd = await this.gameState.pollLiveClientData();
+      if (lcd) {
         this.processLiveClientData(lcd);
       }
-
-      // Retry every 3 seconds if no session yet and still active
-      if (!this.session && this.gepStarted) {
-        setTimeout(() => this.pollForGameInfo(), 3000);
-      }
-    });
+    } catch (e) {
+      console.error('[ProxChat] pollForLiveClientData failed:', e);
+    }
   }
 
   private processLiveClientData(lcd: any): void {
     if (this.session) return;
 
     try {
-      if (lcd.active_player && !this.localSummonerName) {
-        const active = typeof lcd.active_player === 'string'
-          ? JSON.parse(lcd.active_player)
-          : lcd.active_player;
-        this.localSummonerName = active.summonerName || '';
+      if (lcd.activePlayer && !this.localSummonerName) {
+        const active = typeof lcd.activePlayer === 'string'
+          ? JSON.parse(lcd.activePlayer)
+          : lcd.activePlayer;
+        this.localSummonerName = active.riotId || active.summonerName || '';
         console.log('[ProxChat] Local summoner:', this.localSummonerName);
       }
 
-      if (lcd.all_players && this.localSummonerName) {
-        const playersData = typeof lcd.all_players === 'string'
-          ? JSON.parse(lcd.all_players)
-          : lcd.all_players;
+      if (lcd.allPlayers && this.localSummonerName) {
+        const playersData = typeof lcd.allPlayers === 'string'
+          ? JSON.parse(lcd.allPlayers)
+          : lcd.allPlayers;
         const players = this.gameState.parsePlayerList({ players: playersData });
         console.log('[ProxChat] Parsed players:', players.length);
 
-        const gameMode = lcd.game_data
-          ? (typeof lcd.game_data === 'string' ? JSON.parse(lcd.game_data) : lcd.game_data).gameMode || 'CLASSIC'
+        const gameMode = lcd.gameData
+          ? (typeof lcd.gameData === 'string' ? JSON.parse(lcd.gameData) : lcd.gameData).gameMode || 'CLASSIC'
           : 'CLASSIC';
 
         const session = this.gameState.createSession(
@@ -139,29 +136,6 @@ export class Orchestrator {
       }
     } catch (e) {
       console.error('[ProxChat] Failed to process live client data:', e);
-    }
-  }
-
-  private handleGameEvent(name: string, _data: any): void {
-    console.log('[ProxChat] GameEvent:', name, JSON.stringify(_data).substring(0, 200));
-    if (name === 'matchEnd' || name === 'match_end') {
-      this.endSession();
-    }
-    if (name === 'death' && this.session) {
-      this.session.localPlayer.isDead = true;
-      this.tracking?.onDeath();
-    }
-    if (name === 'respawn' && this.session) {
-      this.session.localPlayer.isDead = false;
-      this.tracking?.onRespawn();
-    }
-  }
-
-  private handleInfoUpdate(info: any): void {
-    console.log('[ProxChat] InfoUpdate feature:', info.feature);
-    if (info.feature === 'live_client_data') {
-      const lcd = info.info?.live_client_data;
-      if (lcd) this.processLiveClientData(lcd);
     }
   }
 
@@ -191,80 +165,68 @@ export class Orchestrator {
     this.sessionActive = true;
 
     // Start tracking service
-    overwolf.games.getRunningGameInfo(async (gameResult: any) => {
-      if (!this.sessionActive) return; // Session ended before callback fired
-      try {
-        // Overwolf naming is inverted:
-        //   width/height = DPI-scaled logical coords (1536x864 at 125%)
-        //   logicalWidth/logicalHeight = actual game render resolution (1920x1080)
-        const gameW = gameResult?.logicalWidth || gameResult?.width || 1920;
-        const gameH = gameResult?.logicalHeight || gameResult?.height || 1080;
-        const owW = gameResult?.width || gameW;
-        const owH = gameResult?.height || gameH;
-        // DPI scale: game pixels → Overwolf window coords
-        this.dpiScale = gameW / owW;
-        console.log('[ProxChat] Resolution: game=' + gameW + 'x' + gameH +
-          ' overwolf=' + owW + 'x' + owH + ' dpiScale=' + this.dpiScale);
-        const w = gameW;
-        const h = gameH;
+    try {
+      // Use screen resolution from Tauri (defaulting to common values)
+      // TODO: Get actual game resolution from Tauri backend
+      const gameW = window.screen.width;
+      const gameH = window.screen.height;
+      this.dpiScale = window.devicePixelRatio || 1;
+      console.log('[ProxChat] Resolution: game=' + gameW + 'x' + gameH +
+        ' dpiScale=' + this.dpiScale);
 
-        // Auto-detect League config path from running game
-        this.leagueConfigPath = this.resolveLeagueConfigPath(gameResult);
-        console.log('[ProxChat] League config path:', this.leagueConfigPath);
+      // Auto-detect League config path (use default since Tauri doesn't provide exe path)
+      this.leagueConfigPath = 'C:/Riot Games/League of Legends/Config/game.cfg';
+      console.log('[ProxChat] League config path:', this.leagueConfigPath);
 
-        this.tracking = new TrackingService(w, h, session.mapType);
-        this.tracking.loadChampionTemplate(session.localPlayer.championName);
+      this.tracking = new TrackingService(gameW, gameH, session.mapType);
+      this.tracking.loadChampionTemplate(session.localPlayer.championName);
 
-        // Load champion classifier (async, non-blocking — tracking works without it)
-        const classifier = new ChampionClassifier();
-        classifier.load(
-          '../models/champion_classifier.onnx',
-          '../models/champion_labels.json',
-          session.localPlayer.championName,
-        ).then(() => {
-          if (this.tracking) {
-            this.tracking.setClassifier(classifier);
-            console.log('[ProxChat] Champion classifier loaded');
-          }
-        }).catch(err => {
-          console.warn('[ProxChat] Champion classifier failed to load (tracking continues without it):', err);
-        });
+      // Set capture bounds in Tauri backend
+      await this.tracking.initCaptureBounds();
 
-        // Read minimap scale from League config and apply before starting tracking
-        this.readMinimapScale((scale) => {
-          if (scale !== null && this.tracking) {
-            this.lastMinimapScale = scale;
-            this.tracking.setMinimapScaleFromConfig(scale);
-          }
-        });
+      // Load champion classifier (async, non-blocking — tracking works without it)
+      const classifier = new ChampionClassifier();
+      classifier.load(
+        '../models/champion_classifier.onnx',
+        '../models/champion_labels.json',
+        session.localPlayer.championName,
+      ).then(() => {
+        if (this.tracking) {
+          this.tracking.setClassifier(classifier);
+          console.log('[ProxChat] Champion classifier loaded');
+        }
+      }).catch(err => {
+        console.warn('[ProxChat] Champion classifier failed to load (tracking continues without it):', err);
+      });
 
-        this.tracking.start((pos) => {
-          // Position callback — no longer directly updates audio
-          // Position updates handled by volume tick
-        }, 15);
+      // Read minimap scale from League config and apply before starting tracking
+      this.readMinimapScale((scale) => {
+        if (scale !== null && this.tracking) {
+          this.lastMinimapScale = scale;
+          this.tracking.setMinimapScaleFromConfig(scale);
+        }
+      });
 
-        // Initialize data channel service and volume client
-        this.dataChannels = new DataChannelService();
-        this.volumeClient = new VolumeClient();
+      this.tracking.start((_pos) => {
+        // Position callback — no longer directly updates audio
+        // Position updates handled by volume tick
+      }, 15);
 
-        // Start volume computation tick (~8Hz)
-        this.volumeTickId = window.setInterval(() => this.positionTick(), 125) as unknown as number;
+      // Initialize data channel service and volume client
+      this.dataChannels = new DataChannelService();
+      this.volumeClient = new VolumeClient();
 
-        // Poll game.cfg every 5 seconds for minimap scale changes
-        this.configPollId = window.setInterval(() => this.pollMinimapScale(), 5000) as unknown as number;
+      // Start volume computation tick (~4Hz)
+      this.volumeTickId = window.setInterval(() => this.positionTick(), 250) as unknown as number;
 
-      } catch (e) {
-        console.error('[ProxChat] Tracking initialization failed:', e);
-      }
-    });
+      // Poll game.cfg every 5 seconds for minimap scale changes
+      this.configPollId = window.setInterval(() => this.pollMinimapScale(), 5000) as unknown as number;
 
-    // Open overlay window and cache its ID for direct repositioning
-    overwolf.windows.obtainDeclaredWindow('overlay', (result: any) => {
-      if (result.success) {
-        this.overlayWindowId = result.window.id;
-        overwolf.windows.restore(result.window.id, () => {});
-      }
-    });
+    } catch (e) {
+      console.error('[ProxChat] Tracking initialization failed:', e);
+    }
+
+    // Overlay is managed by Tauri window configuration — no manual window open needed
 
     // VAD is handled internally by AudioService (RNNoise polling)
   }
@@ -284,11 +246,11 @@ export class Orchestrator {
     if (!this.audio || !this.session || !this.tracking || !this.volumeClient || !this.dataChannels) return;
 
     // Broadcast presence over signaling so peers can discover us
+    // Position is NOT included — it's exchanged only via encrypted data channel
     this.signaling.broadcastPosition({
       summonerName: this.localSummonerName,
       championName: this.session.localPlayer.championName,
       team: this.session.localPlayer.team,
-      position: this.tracking.getLastPosition() ?? { x: 0, y: 0 },
       isMuted: this.audio.isSelfMuted(),
       isDead: this.session.localPlayer.isDead ?? false,
     });
@@ -348,11 +310,12 @@ export class Orchestrator {
     );
     if (player && isStreamerMode(player)) return;
 
+    const existing = this.peerStates.get(peer.summonerName);
     const peerState: PeerState = {
       summonerName: peer.summonerName,
       championName: peer.championName,
       team: peer.team as 'ORDER' | 'CHAOS',
-      position: peer.position,
+      position: existing?.position ?? { x: 0, y: 0 },
       isMuted: peer.isMuted,
       isDead: peer.isDead,
     };
@@ -388,7 +351,8 @@ export class Orchestrator {
   }
 
   private broadcastOverlayState(): void {
-    if (!this.audio) return;
+    const audio = this.audio;
+    if (!audio) return;
 
     const nearbyPeers = Array.from(this.peerStates.values())
       .map((p) => ({
@@ -396,13 +360,13 @@ export class Orchestrator {
         championName: p.championName,
         team: p.team,
         isMuted: p.isMuted,
-        isMutedByLocal: this.audio!.isPlayerMuted(p.summonerName),
+        isMutedByLocal: audio.isPlayerMuted(p.summonerName),
         isDead: p.isDead,
       }));
 
     const data = {
-      selfMuted: this.audio.isSelfMuted(),
-      muteAll: this.audio.isMuteAll(),
+      selfMuted: audio.isSelfMuted(),
+      muteAll: audio.isMuteAll(),
       nearbyPeers,
       trackingState: this.tracking?.getState() ?? 'none',
       lastPosition: this.tracking?.getLastPosition() ?? null,
@@ -410,52 +374,8 @@ export class Orchestrator {
       detectedMinimapBounds: this.tracking?.getDetectedMinimapScreenBounds() ?? null,
     };
 
-    overwolf.windows.sendMessage('overlay', 'overlayUpdate', data, () => {});
-
-    // Directly reposition overlay window to fit around detected minimap
-    this.repositionOverlay();
-  }
-
-  private repositionOverlay(): void {
-    if (!this.overlayWindowId || !this.tracking) return;
-
-    const bounds = this.tracking.getDetectedMinimapScreenBounds();
-    if (!bounds) return;
-
-    // changeSize uses CSS/logical pixels; changePosition uses physical/game pixels
-    const PANEL_WIDTH = 240;
-    const scale = this.dpiScale || 1;
-    // Pad the minimap border outward by a few pixels (top/left expansion)
-    const PAD = 8;
-    // Size in CSS/logical pixels (divide minimap size by DPI scale, add padding)
-    const mmWidthCSS = Math.round(bounds.screenWidth / scale) + PAD;
-    const mmHeightCSS = Math.round(bounds.screenHeight / scale) + PAD;
-    const targetWidth = PANEL_WIDTH + mmWidthCSS;
-    const targetHeight = mmHeightCSS;
-    // Position in physical/game pixels — anchor right/bottom edges to minimap
-    const mmRight = bounds.screenX + bounds.screenWidth;
-    const mmBottom = bounds.screenY + bounds.screenHeight;
-    const targetLeft = Math.round(mmRight - targetWidth * scale);
-    const targetTop = Math.round(mmBottom - targetHeight * scale);
-
-    // Only reposition if bounds actually changed (prevents visual shifting)
-    const key = targetLeft + ',' + targetTop + ',' + targetWidth + ',' + targetHeight;
-    if (key === this.lastOverlayPositionKey) return;
-
-    // Throttle: at most every 3 seconds (allows re-snap after manual drag)
-    const now = Date.now();
-    if (now - this.lastOverlayRepositionTime < 3000) return;
-    this.lastOverlayRepositionTime = now;
-    this.lastOverlayPositionKey = key;
-
-    console.log('[ProxChat] Repositioning overlay:' +
-      ' minimapBounds=' + JSON.stringify(bounds) +
-      ' dpiScale=' + scale +
-      ' target=(' + targetLeft + ',' + targetTop + ' ' + targetWidth + 'x' + targetHeight + ')');
-
-    const winId = this.overlayWindowId;
-    overwolf.windows.changeSize({ window_id: winId, width: targetWidth, height: targetHeight }, () => {});
-    overwolf.windows.changePosition(winId, targetLeft, targetTop, () => {});
+    // Broadcast to overlay via custom event (both windows share the same WebView in Tauri)
+    window.dispatchEvent(new CustomEvent('overlayUpdate', { detail: data }));
   }
 
   // Public controls (called from overlay via messaging)
@@ -468,8 +388,8 @@ export class Orchestrator {
     const clamped = Math.max(1, Math.min(30, Math.round(fps)));
     console.log('[ProxChat] Scan rate changed to ' + clamped + ' FPS');
     this.tracking.stop();
-    this.tracking.start((pos) => {
-      console.log('[ProxChat] Position update:', Math.round(pos.x), Math.round(pos.y));
+    this.tracking.start(() => {
+      // Position updates handled by volume tick
     }, clamped);
   }
   setPTTState(held: boolean): void { this.audio?.setPTTState(held); }
@@ -489,54 +409,18 @@ export class Orchestrator {
   captureCalibrationData(data: any): void {
     this.calibrationIndex++;
     const idx = String(this.calibrationIndex).padStart(3, '0');
-    const writeText = (overwolf as any).extensions.io.writeTextFile.bind((overwolf as any).extensions.io);
-    const storageSpace = (overwolf as any).extensions.io.enums.StorageSpace.appData;
 
-    // 1. Save the user-annotated positions as JSON
-    const posJson = JSON.stringify(data, null, 2);
-    writeText(storageSpace, `calibration/positions-${idx}.json`, posJson, (result: any) => {
-      console.log('[ProxChat] Saved calibration positions:', idx, result?.success ?? result?.status);
-    });
+    // TODO: Implement calibration data saving via Tauri file system commands
+    console.log('[ProxChat] Calibration capture #' + idx, JSON.stringify(data).substring(0, 200));
 
-    // 2. Save full game screenshot (Overwolf saves JPEG to its screenshots folder)
-    (overwolf.media as any).takeScreenshot((fullResult: any) => {
-      console.log('[ProxChat] Full screenshot result:', JSON.stringify(fullResult).substring(0, 200));
-      if (fullResult.url) {
-        writeText(storageSpace, `calibration/full-${idx}.txt`, fullResult.url, () => {});
-      }
-    });
-
-    // 3. Save cropped minimap screenshot as base64 data URL
-    const bounds = this.tracking?.captureBounds;
-    const cropParams = {
-      roundAwayFromZero: 'true',
-      crop: bounds ? {
-        x: bounds.x,
-        y: bounds.y,
-        width: bounds.width,
-        height: bounds.height,
-      } : undefined,
-    };
-
-    (overwolf.media as any).getScreenshotUrl(cropParams, (cropResult: any) => {
-      if (!(cropResult.success || cropResult.status === 'success') || !cropResult.url) return;
-
-      const img = new Image();
-      img.onload = () => {
-        const c = document.createElement('canvas');
-        c.width = img.width;
-        c.height = img.height;
-        const ctx = c.getContext('2d')!;
-        ctx.drawImage(img, 0, 0);
-        const dataUrl = c.toDataURL('image/png');
-        writeText(storageSpace, `calibration/minimap-${idx}.txt`, dataUrl, (result: any) => {
-          console.log('[ProxChat] Saved minimap:', idx, img.width, 'x', img.height, 'size:', dataUrl.length, result?.success ?? result?.status);
-        });
-      };
-      img.src = cropResult.url;
-    });
-
-    console.log('[ProxChat] Calibration capture #' + idx);
+    // Capture minimap screenshot via Tauri
+    invoke<{ data_url: string; width: number; height: number }>('capture_minimap')
+      .then((result) => {
+        console.log('[ProxChat] Calibration minimap captured:', idx, 'size:', result.data_url.length);
+      })
+      .catch((err) => {
+        console.error('[ProxChat] Calibration capture failed:', err);
+      });
   }
 
   /**
@@ -562,27 +446,11 @@ export class Orchestrator {
   }
 
   /**
-   * Derive the League config directory from the running game's executable path.
-   * Overwolf gives us something like "C:\Riot Games\League of Legends\Game\League of Legends.exe"
-   * and the config lives at "C:\Riot Games\League of Legends\Config\game.cfg".
+   * Derive the League config directory.
+   * TODO: Get actual install path from Tauri backend (e.g., from LCU lockfile location).
    * Falls back to the default install path.
    */
-  private resolveLeagueConfigPath(gameResult: any): string {
-    // Try to get the exe path from various Overwolf properties
-    const exePath: string = gameResult?.path || gameResult?.executionPath || gameResult?.ProcessPath || '';
-    console.log('[ProxChat] Game exe path:', exePath);
-
-    if (exePath) {
-      // Normalize slashes and go up from Game/LeagueOfLegends.exe to the League root
-      const normalized = exePath.replace(/\\/g, '/');
-      const gameDir = normalized.substring(0, normalized.lastIndexOf('/'));  // remove exe filename
-      const leagueRoot = gameDir.substring(0, gameDir.lastIndexOf('/'));    // remove "Game" dir
-      if (leagueRoot) {
-        return leagueRoot + '/Config/game.cfg';
-      }
-    }
-
-    // Fallback to default install path
+  private resolveLeagueConfigPath(): string {
     return 'C:/Riot Games/League of Legends/Config/game.cfg';
   }
 
@@ -597,12 +465,8 @@ export class Orchestrator {
       return;
     }
 
-    // Use overwolf-fs:// protocol (allowed by Overwolf's CORS policy)
-    const fileUrl = 'overwolf-fs:///' + this.leagueConfigPath.replace(/\\/g, '/');
-    console.log('[ProxChat] Reading game.cfg via:', fileUrl);
-
-    fetch(fileUrl)
-      .then(r => r.text())
+    // Read game.cfg via Tauri backend
+    invoke<string>('read_text_file', { path: this.leagueConfigPath })
       .then(text => this.parseMinimapScale(text, callback))
       .catch(err => {
         console.warn('[ProxChat] Failed to read game.cfg:', err);
@@ -671,11 +535,7 @@ export class Orchestrator {
     this.peerStates.clear();
     this.localSummonerName = '';
 
-    // Close overlay
-    overwolf.windows.obtainDeclaredWindow('overlay', (result: any) => {
-      if (result.success) {
-        overwolf.windows.close(result.window.id, () => {});
-      }
-    });
+    // Notify overlay that session ended
+    window.dispatchEvent(new CustomEvent('sessionEnded'));
   }
 }
