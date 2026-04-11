@@ -3,17 +3,19 @@ import { WebSocketServer } from 'ws';
 import { RoomManager } from './rooms.js';
 import { handleConnection } from './ws-handler.js';
 import { generateTurnCredentials } from './turn.js';
+import { computeVolumes } from './volumes.js';
 
 const PORT = parseInt(process.env.PORT || '3100');
 const TURN_SERVER = process.env.TURN_SERVER || '';
 const TURN_SECRET = process.env.TURN_SECRET || '';
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
 
 const rooms = new RoomManager();
 
 const httpServer = createServer((req, res) => {
   // CORS headers on all responses
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
@@ -25,6 +27,23 @@ const httpServer = createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', rooms: rooms.roomCount }));
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/compute-volumes') {
+    let body = '';
+    req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+    req.on('end', async () => {
+      try {
+        const parsed = JSON.parse(body);
+        const result = await computeVolumes(parsed, ENCRYPTION_KEY);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message || 'Invalid request' }));
+      }
+    });
     return;
   }
 
