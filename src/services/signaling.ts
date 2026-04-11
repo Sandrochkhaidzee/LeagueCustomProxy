@@ -1,6 +1,4 @@
-import { createClient, RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../core/config';
-import { Position } from '../core/types';
+import { WS_URL } from '../core/config';
 
 export type SignalType = 'offer' | 'answer' | 'ice-candidate';
 
@@ -15,7 +13,6 @@ export interface PositionBroadcast {
   summonerName: string;
   championName: string;
   team: string;
-  position: Position;
   isMuted: boolean;
   isDead: boolean;
 }
@@ -23,15 +20,11 @@ export interface PositionBroadcast {
 type OnPeerPosition = (peer: PositionBroadcast) => void;
 type OnSignal = (signal: SignalMessage) => void;
 type OnPeerLeave = (summonerName: string) => void;
+type OnPeerJoined = (name: string) => void;
 
 export class SignalingService {
-  private supabase: SupabaseClient;
-  private channel: RealtimeChannel | null = null;
+  private ws: WebSocket | null = null;
   private localName: string = '';
-
-  constructor() {
-    this.supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  }
 
   joinRoom(
     roomId: string,
@@ -39,64 +32,111 @@ export class SignalingService {
     onPeerPosition: OnPeerPosition,
     onSignal: OnSignal,
     onPeerLeave: OnPeerLeave,
+    onPeerJoined?: OnPeerJoined,
   ): void {
     this.localName = localName;
+    this.leaveRoom();
 
-    this.channel = this.supabase.channel('game:' + roomId, {
-      config: {
-        broadcast: { ack: false, self: false },
-        presence: { key: localName },
-      },
+    const ws = new WebSocket(WS_URL);
+    this.ws = ws;
+
+    ws.addEventListener('open', () => {
+      console.log('[Signaling] WebSocket connected');
+      ws.send(JSON.stringify({ type: 'join', room: roomId, name: localName }));
     });
 
-    // Position broadcasts
-    this.channel.on('broadcast', { event: 'position' }, ({ payload }) => {
-      if (payload.summonerName !== this.localName) {
-        onPeerPosition(payload as PositionBroadcast);
+    ws.addEventListener('message', (event) => {
+      let msg: any;
+      try {
+        msg = JSON.parse(event.data as string);
+      } catch {
+        console.warn('[Signaling] Failed to parse message:', event.data);
+        return;
+      }
+
+      switch (msg.type) {
+        case 'room_state': {
+          // Existing peers already in the room
+          const peers: string[] = msg.peers || [];
+          for (const name of peers) {
+            onPeerJoined?.(name);
+          }
+          break;
+        }
+
+        case 'peer_joined': {
+          if (msg.name !== this.localName) {
+            onPeerJoined?.(msg.name);
+          }
+          break;
+        }
+
+        case 'peer_left': {
+          onPeerLeave(msg.name);
+          break;
+        }
+
+        case 'signal': {
+          onSignal({
+            type: msg.payload?.type,
+            from: msg.from,
+            to: this.localName,
+            payload: msg.payload,
+          });
+          break;
+        }
+
+        case 'position': {
+          if (msg.from !== this.localName) {
+            try {
+              const broadcast: PositionBroadcast = JSON.parse(msg.blob);
+              onPeerPosition(broadcast);
+            } catch {
+              console.warn('[Signaling] Failed to parse position blob from:', msg.from);
+            }
+          }
+          break;
+        }
+
+        case 'error': {
+          console.error('[Signaling] Server error:', msg.message);
+          break;
+        }
       }
     });
 
-    // WebRTC signaling
-    this.channel.on('broadcast', { event: 'signal' }, ({ payload }) => {
-      const signal = payload as SignalMessage;
-      if (signal.to === this.localName) {
-        onSignal(signal);
-      }
+    ws.addEventListener('close', () => {
+      console.log('[Signaling] WebSocket disconnected');
     });
 
-    // Presence tracking for leave detection
-    this.channel.on('presence', { event: 'leave' }, ({ key }) => {
-      if (key) onPeerLeave(key);
-    });
-
-    this.channel.subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        console.log('Joined room game:' + roomId);
-        this.channel!.track({ summonerName: localName });
-      }
+    ws.addEventListener('error', (err) => {
+      console.error('[Signaling] WebSocket error:', err);
     });
   }
 
   broadcastPosition(data: PositionBroadcast): void {
-    this.channel?.send({
-      type: 'broadcast',
-      event: 'position',
-      payload: data,
-    });
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'position',
+        blob: JSON.stringify(data),
+      }));
+    }
   }
 
   sendSignal(signal: SignalMessage): void {
-    this.channel?.send({
-      type: 'broadcast',
-      event: 'signal',
-      payload: signal,
-    });
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'signal',
+        to: signal.to,
+        payload: signal.payload,
+      }));
+    }
   }
 
   leaveRoom(): void {
-    if (this.channel) {
-      this.channel.unsubscribe();
-      this.channel = null;
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
     }
   }
 }

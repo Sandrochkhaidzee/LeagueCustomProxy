@@ -1,6 +1,6 @@
 // src/services/volume-client.ts
 import { Position } from '../core/types';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../core/config';
+import { SERVER_URL } from '../core/config';
 
 interface VolumeResponse {
   myBlob: string;
@@ -9,11 +9,9 @@ interface VolumeResponse {
 
 export class VolumeClient {
   private endpoint: string;
-  private authHeader: string;
 
   constructor() {
-    this.endpoint = `${SUPABASE_URL}/functions/v1/compute-volumes`;
-    this.authHeader = `Bearer ${SUPABASE_ANON_KEY}`;
+    this.endpoint = `${SERVER_URL}/compute-volumes`;
   }
 
   async computeVolumes(
@@ -28,7 +26,6 @@ export class VolumeClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': this.authHeader,
         },
         body: JSON.stringify({
           myPosition: { x: myPosition.x, y: myPosition.y },
