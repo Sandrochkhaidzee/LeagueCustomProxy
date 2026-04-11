@@ -17,6 +17,9 @@ scripts/__pycache__/
 # PyTorch checkpoint (large, ONNX model is the shipped artifact)
 models/*.pt
 
+# Rust/Tauri build artifacts
+src-tauri/target/
+
 # Temp/logs
 logs.txt
 supabase/.temp/
