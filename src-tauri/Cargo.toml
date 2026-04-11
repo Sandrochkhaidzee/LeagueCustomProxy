@@ -12,6 +12,10 @@ sysinfo = "0.33"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 tokio = { version = "1", features = ["full"] }
 base64 = "0.22"
+windows = { version = "0.58", features = [
+  "Win32_Graphics_Gdi",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

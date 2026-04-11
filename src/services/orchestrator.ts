@@ -31,6 +31,7 @@ export class Orchestrator {
   private leagueConfigPath: string | null = null;
   private lastMinimapScale: number | null = null;
   private dpiScale = 1;
+  private overlayPositioned = false;
 
 
   constructor() {
@@ -166,10 +167,16 @@ export class Orchestrator {
 
     // Start tracking service
     try {
-      // Use screen resolution from Tauri (defaulting to common values)
-      // TODO: Get actual game resolution from Tauri backend
-      const gameW = window.screen.width;
-      const gameH = window.screen.height;
+      // Get actual screen resolution from Tauri backend (Win32 GetSystemMetrics)
+      let gameW = window.screen.width;
+      let gameH = window.screen.height;
+      try {
+        const [w, h] = await invoke<[number, number]>('get_screen_size');
+        gameW = w;
+        gameH = h;
+      } catch (e) {
+        console.warn('[ProxChat] get_screen_size failed, using window.screen:', e);
+      }
       this.dpiScale = window.devicePixelRatio || 1;
       console.log('[ProxChat] Resolution: game=' + gameW + 'x' + gameH +
         ' dpiScale=' + this.dpiScale);
@@ -373,6 +380,20 @@ export class Orchestrator {
       filteredImageUrl: this.tracking?.getFilteredImageUrl() ?? null,
       detectedMinimapBounds: this.tracking?.getDetectedMinimapScreenBounds() ?? null,
     };
+
+    // Auto-position overlay above the minimap when bounds are detected
+    if (data.detectedMinimapBounds && !this.overlayPositioned) {
+      const mb = data.detectedMinimapBounds;
+      invoke('position_overlay', {
+        x: mb.screenX,
+        y: mb.screenY,
+        width: mb.screenWidth,
+        height: mb.screenHeight,
+      }).then(() => {
+        console.log('[ProxChat] Overlay positioned above minimap');
+        this.overlayPositioned = true;
+      }).catch((e) => console.warn('[ProxChat] position_overlay failed:', e));
+    }
 
     // Broadcast to overlay via custom event (both windows share the same WebView in Tauri)
     window.dispatchEvent(new CustomEvent('overlayUpdate', { detail: data }));
