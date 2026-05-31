@@ -34,11 +34,12 @@ export class PeerConnection {
     this.audioElement = new Audio();
     this.audioElement.autoplay = true;
     this.audioElement.srcObject = this.remoteStream;
-    // When routing via WebAudio, mute the element to avoid double-playback —
-    // it's only kept around because Chromium needs an HTMLMediaElement
-    // attachment to keep a remote WebRTC stream alive.
+    // When routing via WebAudio, silence the element via volume=0 rather than
+    // muted=true. Chromium can stop decoding *muted* remote streams, which
+    // leaves createMediaStreamSource producing silence — using volume=0 keeps
+    // the decode pipeline alive while preventing double-playback.
     if (audioContext) {
-      this.audioElement.muted = true;
+      this.audioElement.volume = 0;
     }
 
     this.pc.onicecandidate = (event) => {
@@ -87,6 +88,8 @@ export class PeerConnection {
       console.warn('[WebRTC] WebAudio routing failed for', this.remoteName, '— falling back to element volume:', e);
       this.sourceNode = null;
       this.gainNode = null;
+      // Restore the element as the audible path
+      this.audioElement.volume = this.muted ? 0 : this.targetVolume;
       this.audioElement.muted = false;
     }
   }
