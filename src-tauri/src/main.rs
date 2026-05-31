@@ -4,9 +4,27 @@ mod capture;
 mod lcu;
 
 use capture::CaptureState;
+use std::fs::File;
+use std::io::Write;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Manager;
+
+/// Holds the open log file. Written to only when the frontend's Debug toggle
+/// is on (the TS logging layer forwards each console call into append_log).
+struct LogFile {
+    file: Mutex<Option<File>>,
+}
+
+#[tauri::command]
+fn append_log(state: tauri::State<LogFile>, line: String) {
+    if let Ok(mut guard) = state.file.lock() {
+        if let Some(f) = guard.as_mut() {
+            let _ = writeln!(f, "{}", line);
+            let _ = f.flush();
+        }
+    }
+}
 
 // Hit-test box (in window-local px) for which clicks the overlay should
 // actually receive — everything else passes through to the game.
@@ -63,6 +81,9 @@ fn main() {
         .manage(CaptureState {
             bounds: Mutex::new(None),
         })
+        .manage(LogFile {
+            file: Mutex::new(None),
+        })
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -87,6 +108,24 @@ fn main() {
                 .build(),
         )
         .setup(|app| {
+            // Open the log file once at startup (truncated each session).
+            // The TS layer only writes to it while Debug is on.
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                let path = dir.join("proxchat.log");
+                if let Ok(file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&path)
+                {
+                    if let Ok(mut guard) = app.state::<LogFile>().file.lock() {
+                        *guard = Some(file);
+                    }
+                    println!("[proxchat] log file: {}", path.display());
+                }
+            }
+
             // Register the global shortcuts now that the plugin is initialized.
             // F8 (PTT) and Ctrl+Shift+M (toggle self-mute).
             let gs = app.global_shortcut();
@@ -167,6 +206,7 @@ fn main() {
             position_overlay,
             get_screen_size,
             set_panel_size,
+            append_log,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");
