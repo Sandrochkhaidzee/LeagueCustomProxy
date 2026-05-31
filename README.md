@@ -1,153 +1,197 @@
 # LoLProxChat
 
-Proximity voice chat for League of Legends. Hear nearby players with volume that scales by in-game distance, tied to minimap vision -- if you can't see them, you can't hear them.
+Proximity voice chat for League of Legends. Hear nearby players with volume that scales by in-game distance, tied to minimap vision — if you can't see them, you can't hear them.
+
+Standalone Windows desktop app built with Tauri 2 + WebView2. No Overwolf, no third-party voice service.
+
+## Install
+
+Download the latest `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxyChat/releases/latest). It's a single portable executable — no installer.
+
+**Requirements:** Windows 10 1809+ or Windows 11. WebView2 Runtime (ships with Windows 11; pushed via Edge on Windows 10).
+
+Launch the exe before or during a League match. The overlay auto-attaches beside the minimap once a game is detected.
 
 ## How It Works
 
-1. **Position detection** -- Screen captures the minimap, uses HSV color filtering + blob detection to find champion icons, then an ONNX neural network classifier identifies which blob is your champion
-2. **Signaling** -- Players in the same game join a shared Supabase Realtime room (room ID derived from sorted player names)
-3. **Voice** -- WebRTC peer-to-peer audio streams between players; no audio touches any server
-4. **Proximity volume** -- A Supabase Edge Function computes encrypted proximity volumes so no client knows another's exact position; logarithmic falloff up to 1200 game units
-5. **Audio processing** -- RNNoise WASM for noise suppression + voice activity detection, Opus codec at 128kbps with DTX for bandwidth efficiency
+1. **Game detection** — Polls the League Client (LCU) for game phase, then the Live Client Data API for player roster and your summoner identity. No memory reading.
+2. **Position detection** — Win32 BitBlt captures the minimap region, HSV color filtering + blob detection finds champion icons, and an ONNX champion classifier identifies which blob is your own champion.
+3. **Signaling** — Players in the same game join a deterministic WebSocket room (room ID = hash of sorted player names) on a self-hosted Node server.
+4. **Voice** — WebRTC peer-to-peer audio between players; no audio touches any server.
+5. **Proximity volume** — Server-side AES-GCM encrypted position blobs + volume computation, so no client learns another player's exact position. Logarithmic falloff up to 1200 game units.
+6. **Audio processing** — RNNoise WASM for noise suppression + voice activity detection; Opus at 128 kbps with DTX for bandwidth efficiency.
 
 ## Architecture
 
 ```
-Overwolf App
-├── background window     -- orchestrator, GEP, signaling, tracking, audio
-├── overlay window        -- draggable widget with nearby players, mute controls
-└── supabase/
-    ├── compute-volumes/   -- Edge Function for server-side volume computation
-    └── turn-credentials/  -- Edge Function for TURN credential generation
+proxchat.exe (Tauri 2)
+├── Rust backend       — Win32 screen capture, LCU/Live Client polling, window positioning
+└── WebView2 frontend  — orchestrator, signaling, WebRTC, CV, ONNX, RNNoise
+
+server/                — Node WebSocket + HTTP signaling server
+├── /ws                — WebSocket upgrade for room join, signaling, presence
+├── /compute-volumes   — POST: encrypted position blobs → per-peer volumes
+├── /turn-credentials  — GET: ephemeral HMAC TURN credentials
+└── /health            — health check
 ```
 
-**Key services:**
-- `TrackingService` -- minimap CV pipeline (capture → HSV mask → blob detect → classifier scoring → position)
-- `ChampionClassifier` -- ONNX Runtime Web (WASM) inference for champion icon identification
-- `AudioService` -- WebRTC audio with RNNoise VAD/PTT, per-peer volume control
-- `RNNoise` -- WASM noise suppression + VAD via ScriptProcessorNode
-- `SignalingService` -- Supabase Realtime presence + peer discovery (no plaintext positions)
-- `PeerConnection` -- WebRTC with Opus 128kbps + DTX, server-side TURN credentials
-- `VolumeClient` -- calls Edge Function with encrypted position blobs
-- `DataChannelService` -- WebRTC data channels for encrypted blob exchange
+**Key client services** (under `src/services/`):
+- `Orchestrator` — wires game state → tracking → signaling → audio
+- `TrackingService` — minimap CV pipeline (capture → HSV mask → blob detect → classifier)
+- `ChampionClassifier` — ONNX Runtime Web (WASM backend) inference
+- `AudioService` — WebRTC audio + RNNoise VAD/PTT + per-peer volume control
+- `SignalingService` — WebSocket presence and signal relay
+- `PeerConnection` — WebRTC with Opus 128 kbps DTX
+- `VolumeClient` — calls `/compute-volumes` with encrypted blobs
+- `DataChannelService` — WebRTC data channels for encrypted blob exchange
+- `GameStateService` — wraps Tauri commands for LCU + Live Client Data
 
-## Setup
+**Rust commands** (under `src-tauri/src/`):
+- `capture.rs` — `set_capture_bounds`, `capture_minimap` (Win32 GDI BitBlt)
+- `lcu.rs` — `check_league_running`, `get_game_state`, `get_live_client_data`, `read_text_file`
+- `main.rs` — `position_overlay`, `get_screen_size`; sets `WDA_EXCLUDEFROMCAPTURE` on the overlay window so its debug paint doesn't feed back into the next capture
+
+## Build From Source
 
 ### Prerequisites
 - [Node.js](https://nodejs.org/) 18+
-- [Overwolf](https://www.overwolf.com/) with a developer account
-- A [Supabase](https://supabase.com/) instance (cloud free tier or self-hosted)
-- A [coturn](https://github.com/coturn/coturn) TURN server (optional, for NAT traversal)
+- [Rust](https://rustup.rs/) (stable toolchain)
+- Windows 10/11 with the WebView2 SDK headers (installed automatically by Tauri on first build)
 
-### Install & Build
+### Build
 
 ```bash
 npm install
-cp .env.example .env
-# Edit .env with your Supabase URL and anon key
-npx webpack
+cp .env.example .env       # optional — defaults to https://proxchat.dant123.com
+npx tauri build
 ```
 
-### Environment Variables
+The portable exe lands at `src-tauri/target/release/proxchat.exe`.
 
-**Client `.env`** (baked into the Overwolf app at build time):
+For iterative dev, rebuild and relaunch:
+```bash
+npx tauri build && src-tauri/target/release/proxchat.exe
+```
+(No `tauri dev` workflow yet — there's no webpack dev server configured.)
 
-| Variable | Description |
-|----------|-------------|
-| `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_ANON_KEY` | Supabase anonymous/public API key |
+### Client environment
 
-**Server-side** (set on your Supabase Edge Functions runtime):
+Only one variable, baked in at build time:
 
-| Variable | Description |
-|----------|-------------|
-| `POSITION_ENCRYPTION_KEY` | 256-bit hex key for AES-GCM position encryption |
-| `TURN_SERVER` | TURN server hostname (optional, for NAT traversal) |
-| `TURN_SECRET` | coturn shared secret for HMAC credentials (optional) |
+| Variable | Default | Description |
+|---|---|---|
+| `PROXCHAT_SERVER` | `https://proxchat.dant123.com` | Base URL of the signaling server. WebSocket URL is derived (`https://` → `wss://`). |
 
-### Run in Overwolf
+## Self-Hosting the Signaling Server
 
-1. Open Overwolf Settings → About → Development Options
-2. Click **Load unpacked extension**
-3. Select the `dist/` folder
-4. Launch League of Legends -- the app starts automatically
-
-### Self-Hosted Supabase (optional)
-
-You can self-host Supabase using their [Docker setup](https://supabase.com/docs/guides/self-hosting/docker). The app only uses:
-- **Realtime** -- for signaling (presence + broadcast channels)
-- **Edge Functions** -- volume computation + TURN credential generation
-- No database tables or auth required
-
-Deploy edge functions to your instance:
+The server is a small Node app (~500 LOC) that replaces what used to be a stack of Supabase containers. Run it under Docker on any always-on host with HTTPS.
 
 ```bash
-npx supabase functions deploy compute-volumes
-npx supabase functions deploy turn-credentials
+cd server
+docker compose -f ../docker-compose.proxchat.yml up -d
 ```
 
-Set server-side secrets (Edge Functions environment):
+Or run it directly:
 
 ```bash
-npx supabase secrets set POSITION_ENCRYPTION_KEY=<64-hex-chars>
-npx supabase secrets set TURN_SERVER=your-turn-server.example.com
-npx supabase secrets set TURN_SECRET=your-coturn-shared-secret
+cd server
+npm install
+npm run build && npm start
 ```
 
-### Train the Champion Classifier (optional)
+### Server environment
 
-The pre-trained ONNX model is included in `models/`. To retrain:
+| Variable | Required | Description |
+|---|---|---|
+| `PORT` | no (default `3100`) | HTTP/WebSocket port |
+| `ENCRYPTION_KEY` | yes | 64-char hex (256-bit) key for AES-GCM position encryption |
+| `TURN_SERVER` | optional | TURN/STUN server hostname (returned to clients) |
+| `TURN_SECRET` | optional | coturn shared secret for HMAC credential generation |
+
+If `TURN_SERVER`/`TURN_SECRET` are unset, clients fall back to Google STUN only — fine for most NAT setups, may fail behind symmetric NAT.
+
+A working `docker-compose.proxchat.yml` is included at the repo root with the server + coturn sidecar. Front it with a TLS-terminating reverse proxy (Caddy, nginx, Traefik) that proxies `/` to `:3100` and supports WebSocket upgrades.
+
+### Tests
 
 ```bash
-# Requires Python 3.10+, PyTorch, ONNX, Pillow
-# Place champion circle icons in assets/champion-circles/<ChampionName>/*.png
-python scripts/train_champion_classifier.py
+cd server && npm test     # vitest — rooms, volumes, turn credentials
+npm test                  # jest — core logic (room hashing, proximity, etc)
 ```
 
 ## Project Structure
 
 ```
 src/
-├── background/          -- background window entry point
-├── overlay/             -- overlay window (HTML/CSS/TS)
-├── core/                -- pure logic modules (tested)
-│   ├── config.ts
+├── background/          — orchestrator entry point (loaded into the overlay window)
+├── overlay/             — overlay window (HTML/CSS/TS)
+├── core/                — pure logic modules (tested)
+│   ├── config.ts        — server URL, ICE servers
 │   ├── types.ts
-│   ├── room.ts
-│   ├── proximity.ts
+│   ├── room.ts          — deterministic room ID hashing
+│   ├── proximity.ts     — volume falloff math
 │   ├── map-calibration.ts
 │   ├── template-match.ts
 │   └── streamer-detect.ts
-└── services/            -- runtime services
-    ├── orchestrator.ts
-    ├── tracking.ts
-    ├── champion-classifier.ts
-    ├── audio.ts
-    ├── rnnoise.ts
-    ├── signaling.ts
-    ├── peer-connection.ts
-    ├── game-state.ts
-    ├── gep.ts
-    ├── volume-client.ts
-    └── data-channel.ts
+└── services/            — runtime services (see Architecture above)
+
+src-tauri/               — Tauri 2 Rust backend
+├── src/
+│   ├── main.rs
+│   ├── capture.rs
+│   └── lcu.rs
+├── Cargo.toml
+└── tauri.conf.json
+
+server/                  — Node signaling server
+├── src/
+│   ├── index.ts         — HTTP + WebSocket server
+│   ├── ws-handler.ts    — join, signal, position, presence
+│   ├── rooms.ts         — room state
+│   ├── volumes.ts       — AES-GCM blob encryption + volume math
+│   ├── turn.ts          — TURN HMAC credential generation
+│   └── types.ts
+├── tests/
+└── Dockerfile
+
 models/
-├── champion_classifier.onnx   -- trained ONNX model
-└── champion_labels.json       -- class index → champion name
+├── champion_classifier.onnx
+└── champion_labels.json
+
 scripts/
 └── train_champion_classifier.py
-supabase/functions/
-├── compute-volumes/index.ts
-└── turn-credentials/index.ts
+
+docs/
+├── SETUP.md             — deeper deployment + self-host guide
+└── plans/               — historical design + implementation plans
+```
+
+## Releases
+
+New builds are published to [GitHub Releases](https://github.com/danthi123/LoLProxyChat/releases). To cut a release:
+
+```bash
+# bump src-tauri/Cargo.toml version
+npx tauri build
+gh release create v0.1.X src-tauri/target/release/proxchat.exe \
+  --title "v0.1.X — short summary" \
+  --notes "release notes here"
+```
+
+Users can always grab the most recent via:
+```
+https://github.com/danthi123/LoLProxyChat/releases/latest/download/proxchat.exe
 ```
 
 ## Acknowledgements
 
-- [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) -- reference code for minimap detection
-- [League of Legends Wiki](https://wiki.leagueoflegends.com) -- champion circle icon assets used for classifier training
-- [RNNoise](https://jmvalin.ca/demo/rnnoise/) -- noise suppression via [@jitsi/rnnoise-wasm](https://github.com/nicknisi/rnnoise-wasm)
+- [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) — reference code for minimap detection
+- [League of Legends Wiki](https://wiki.leagueoflegends.com) — champion circle icon assets used for classifier training
+- [RNNoise](https://jmvalin.ca/demo/rnnoise/) — noise suppression via [@jitsi/rnnoise-wasm](https://github.com/nicknisi/rnnoise-wasm)
+- [Tauri](https://tauri.app) — desktop app framework
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE) -- source available for personal and noncommercial use only.
+[PolyForm Noncommercial 1.0.0](LICENSE) — source available for personal and noncommercial use only.
 
 Champion icon assets from the [League of Legends Wiki](https://wiki.leagueoflegends.com) (CC BY-SA 3.0) were used for model training only and are not distributed with this software.
