@@ -28,6 +28,7 @@ export class Orchestrator {
   private sessionActive = false;
   private lastOverlayRepositionTime = 0;
   private lastOverlayBounds: { x: number; y: number; w: number; h: number } | null = null;
+  private lastLoggedPosition: { x: number; y: number } | null = null;
   private leagueConfigPath: string | null = null;
   private lastMinimapScale: number | null = null;
   private dpiScale = 1;
@@ -303,6 +304,16 @@ export class Orchestrator {
     try {
       // Collect encrypted blobs received from peers
       const peerBlobs = this.dataChannels.getPeerBlobs();
+
+      // Log our position whenever it moves >500 game units so we can see the
+      // coordinates we're broadcasting (useful for verifying CV accuracy).
+      const moved = !this.lastLoggedPosition
+        || Math.abs(position.x - this.lastLoggedPosition.x) > 500
+        || Math.abs(position.y - this.lastLoggedPosition.y) > 500;
+      if (moved) {
+        this.lastLoggedPosition = { x: position.x, y: position.y };
+        console.log('[ProxChat] My position: (' + Math.round(position.x) + ', ' + Math.round(position.y) + '), sending to ' + Object.keys(peerBlobs).length + ' peers');
+      }
 
       // Call Edge Function: encrypt our position + compute volumes
       const result = await this.volumeClient.computeVolumes(position, peerBlobs);

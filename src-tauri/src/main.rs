@@ -18,12 +18,30 @@ struct LogFile {
 
 #[tauri::command]
 fn append_log(state: tauri::State<LogFile>, line: String) {
+    write_log_line(&state, line);
+}
+
+fn write_log_line(state: &tauri::State<LogFile>, line: String) {
     if let Ok(mut guard) = state.file.lock() {
         if let Some(f) = guard.as_mut() {
             let _ = writeln!(f, "{}", line);
             let _ = f.flush();
         }
     }
+}
+
+/// Write a `[rust]`-tagged line to the log file from non-frontend code paths
+/// (the global-shortcut handler, setup hooks, etc).
+fn rust_log<S: AsRef<str>>(app: &tauri::AppHandle, msg: S) {
+    let Some(state) = app.try_state::<LogFile>() else { return };
+    let Ok(mut guard) = state.file.lock() else { return };
+    let Some(f) = guard.as_mut() else { return };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let _ = writeln!(f, "{} [rust] {}", now, msg.as_ref());
+    let _ = f.flush();
 }
 
 // Hit-test box (in window-local px) for which clicks the overlay should
@@ -87,6 +105,7 @@ fn main() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
+                    rust_log(app, format!("shortcut handler fired: state={:?}", event.state()));
                     // Rebuild shortcuts each call to avoid closure-capture/move issues.
                     // Comparison is cheap (struct of bitset + enum).
                     let toggle_mute = Shortcut::new(
@@ -102,7 +121,8 @@ fn main() {
                         None
                     };
                     if let Some(p) = payload {
-                        let _ = app.emit("global_shortcut", p);
+                        let result = app.emit("global_shortcut", p);
+                        rust_log(app, format!("emit({}) → {:?}", p, result.map_err(|e| e.to_string())));
                     }
                 })
                 .build(),
@@ -129,8 +149,13 @@ fn main() {
             // Register the global shortcuts now that the plugin is initialized.
             // F8 (PTT) and Ctrl+Shift+M (toggle self-mute).
             let gs = app.global_shortcut();
-            let _ = gs.register(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyM));
-            let _ = gs.register(Shortcut::new(None, Code::F8));
+            let r1 = gs.register(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyM));
+            let r2 = gs.register(Shortcut::new(None, Code::F8));
+            rust_log(&app.handle(), format!(
+                "register Ctrl+Shift+M → {:?}, F8 → {:?}",
+                r1.as_ref().map(|_| "ok").map_err(|e| e.to_string()),
+                r2.as_ref().map(|_| "ok").map_err(|e| e.to_string()),
+            ));
 
             let Some(window) = app.get_webview_window("overlay") else {
                 return Ok(());
