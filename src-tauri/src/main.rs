@@ -7,19 +7,21 @@ use capture::CaptureState;
 use std::sync::Mutex;
 use tauri::Manager;
 
-/// Reposition the overlay window to sit above the minimap area.
-/// Called from TypeScript with the minimap's screen coordinates.
+/// Reposition the overlay so the control panel sits immediately left of the
+/// minimap and the (transparent) calibration region overlaps the minimap itself.
+/// `x, y, width, height` describe the minimap's screen rect.
 #[tauri::command]
-fn position_overlay(app: tauri::AppHandle, x: f64, y: f64, width: f64, _height: f64) {
+fn position_overlay(app: tauri::AppHandle, x: f64, y: f64, width: f64, height: f64) {
     if let Some(window) = app.get_webview_window("overlay") {
-        // Position overlay just above the minimap, right-aligned
-        let overlay_width = 280.0;
-        let overlay_height = 350.0;
-        let new_x = x + width - overlay_width; // right-align with minimap
-        let new_y = y - overlay_height - 10.0; // 10px gap above minimap
+        // Must match .panel width + #minimap-border margin-left in overlay.css
+        const PANEL_WIDTH: f64 = 240.0;
+        const PANEL_GAP: f64 = 4.0;
 
-        let _ = window.set_position(tauri::PhysicalPosition::new(new_x as i32, new_y as i32));
-        let _ = window.set_size(tauri::PhysicalSize::new(overlay_width as u32, overlay_height as u32));
+        let total_width = (PANEL_WIDTH + PANEL_GAP + width) as i32;
+        let new_x = (x - PANEL_WIDTH - PANEL_GAP) as i32;
+
+        let _ = window.set_position(tauri::PhysicalPosition::new(new_x, y as i32));
+        let _ = window.set_size(tauri::PhysicalSize::new(total_width as u32, height as u32));
     }
 }
 
