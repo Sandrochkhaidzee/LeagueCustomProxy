@@ -20,6 +20,7 @@
         "transparent": true,
         "alwaysOnTop": true,
         "resizable": true,
+        "shadow": false,
         "url": "overlay/overlay.html"
       }
     ],
