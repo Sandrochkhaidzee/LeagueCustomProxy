@@ -128,6 +128,18 @@ function sendToBackground(action: string, payload: any): void {
   window.dispatchEvent(new CustomEvent('overlayAction', { detail: { action, payload } }));
 }
 
+// Report the panel's current size to Rust so the click-through hit-test
+// follows collapse/expand/settings open.
+const reportPanelSize = () => {
+  sendToBackground('panelResize', {
+    width: panel.offsetWidth,
+    height: panel.offsetHeight,
+  });
+};
+new ResizeObserver(reportPanelSize).observe(panel);
+// Initial report once the layout has settled
+requestAnimationFrame(reportPanelSize);
+
 // --- Track active player row DOM elements for in-place updates ---
 const playerRows: Map<string, {
   row: HTMLElement;

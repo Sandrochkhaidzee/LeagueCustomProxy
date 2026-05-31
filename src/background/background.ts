@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { Orchestrator } from '../services/orchestrator';
 
 console.log('[ProxChat] Background script loading...');
@@ -35,6 +36,11 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
       break;
     case 'calibrationBounds':
       orchestrator.setMinimapCalibration(payload);
+      break;
+    case 'panelResize':
+      // Tell the Rust click-through loop how big the interactive zone is.
+      invoke('set_panel_size', { width: payload.width, height: payload.height })
+        .catch(() => { /* ignore — loop falls back to last value */ });
       break;
   }
 }) as EventListener);

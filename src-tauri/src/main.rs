@@ -5,7 +5,20 @@ mod lcu;
 
 use capture::CaptureState;
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::Manager;
+
+// Hit-test box (in window-local px) for which clicks the overlay should
+// actually receive — everything else passes through to the game.
+// Width includes the 4px gap to the calibration region so the panel border
+// isn't a pixel-thin edge to land on.
+static PANEL_HIT_RECT: Mutex<(i32, i32)> = Mutex::new((244, 400));
+
+/// JS calls this whenever the panel resizes (settings expand, collapse, etc).
+#[tauri::command]
+fn set_panel_size(width: i32, height: i32) {
+    *PANEL_HIT_RECT.lock().unwrap() = (width + 4, height);
+}
 
 /// Reposition the overlay so the control panel sits immediately left of the
 /// minimap and the (transparent) calibration region overlaps the minimap itself.
@@ -42,22 +55,68 @@ fn main() {
             bounds: Mutex::new(None),
         })
         .setup(|app| {
+            let Some(window) = app.get_webview_window("overlay") else {
+                return Ok(());
+            };
+
             // Hide overlay from desktop capture so our own debug paint
             // doesn't feed back into the next BitBlt frame.
-            if let Some(window) = app.get_webview_window("overlay") {
-                if let Ok(hwnd) = window.hwnd() {
-                    use windows::Win32::Foundation::HWND;
-                    use windows::Win32::UI::WindowsAndMessaging::{
-                        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
-                    };
-                    unsafe {
-                        let _ = SetWindowDisplayAffinity(
-                            HWND(hwnd.0 as _),
-                            WDA_EXCLUDEFROMCAPTURE,
-                        );
-                    }
+            if let Ok(hwnd) = window.hwnd() {
+                use windows::Win32::Foundation::HWND;
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+                };
+                unsafe {
+                    let _ = SetWindowDisplayAffinity(
+                        HWND(hwnd.0 as _),
+                        WDA_EXCLUDEFROMCAPTURE,
+                    );
                 }
             }
+
+            // Start globally click-through. The polling loop below flips it
+            // off only when the cursor is over the panel region.
+            let _ = window.set_ignore_cursor_events(true);
+
+            // Stash the HWND as an integer — the windows::HWND type wraps a raw
+            // pointer that isn't Send, so we can't hold it across an await.
+            let hwnd_addr: isize = match window.hwnd() {
+                Ok(h) => h.0 as isize,
+                Err(_) => return Ok(()),
+            };
+            let window_for_loop = window.clone();
+            tauri::async_runtime::spawn(async move {
+                use windows::Win32::Foundation::{HWND, POINT, RECT};
+                use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+
+                let mut last_ignore = true;
+                loop {
+                    let mut cursor = POINT::default();
+                    let mut win_rect = RECT::default();
+                    let ok = unsafe {
+                        let hwnd = HWND(hwnd_addr as *mut _);
+                        GetCursorPos(&mut cursor).is_ok()
+                            && GetWindowRect(hwnd, &mut win_rect).is_ok()
+                    };
+
+                    if ok {
+                        let (pw, ph) = *PANEL_HIT_RECT.lock().unwrap();
+                        let over_panel = cursor.x >= win_rect.left
+                            && cursor.x < win_rect.left + pw
+                            && cursor.y >= win_rect.top
+                            && cursor.y < win_rect.top + ph;
+
+                        let should_ignore = !over_panel;
+                        if should_ignore != last_ignore {
+                            let _ = window_for_loop.set_ignore_cursor_events(should_ignore);
+                            last_ignore = should_ignore;
+                        }
+                    }
+
+                    tokio::time::sleep(Duration::from_millis(33)).await;
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -69,6 +128,7 @@ fn main() {
             lcu::read_text_file,
             position_overlay,
             get_screen_size,
+            set_panel_size,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");
