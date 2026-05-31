@@ -119,16 +119,26 @@ export class AudioService {
   }
 
   setPTTState(held: boolean): void {
+    console.log('[Audio] setPTTState(' + held + '), inputMode=' + this.settings.inputMode);
     this.pttHeld = held;
     this.updateLocalTrackState();
   }
 
+  private lastTrackEnabled: boolean | null = null;
   private updateLocalTrackState(): void {
     if (!this.outputStream) return;
     const enabled = !this.selfMuted && this.isTransmitting();
-    // Disable/enable on outputStream tracks (what peers actually receive)
     for (const track of this.outputStream.getAudioTracks()) {
       track.enabled = enabled;
+    }
+    if (enabled !== this.lastTrackEnabled) {
+      this.lastTrackEnabled = enabled;
+      const reason = this.selfMuted
+        ? 'selfMuted'
+        : this.settings.inputMode === 'ptt'
+          ? 'ptt=' + this.pttHeld
+          : 'vad=' + this.vadActive;
+      console.log('[Audio] Local mic transmit → ' + enabled + ' (' + reason + ')');
     }
   }
 

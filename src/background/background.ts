@@ -52,6 +52,7 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
 
 // Global shortcuts: Ctrl+Shift+M toggles self-mute, F8 is push-to-talk.
 listen<string>('global_shortcut', (event) => {
+  console.log('[Shortcut] Fired:', event.payload);
   switch (event.payload) {
     case 'toggleMute':
       orchestrator.toggleSelfMute();
