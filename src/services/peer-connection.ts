@@ -5,6 +5,25 @@ import { getIceServers } from '../core/config';
 // audible lag between volume tick updates.
 const VOLUME_RAMP_TC = 0.05;
 
+/**
+ * Render an ICE candidate as `type addr:port proto` for diagnostic logs.
+ * Parses the SDP "candidate:..." line because not every browser exposes the
+ * convenience getters (.address, .type, etc.) on RTCIceCandidate.
+ */
+function describeCandidate(c: RTCIceCandidateInit | null): string {
+  if (!c) return 'end-of-candidates';
+  const cand = c.candidate || '';
+  if (!cand) return 'end-of-candidates';
+  const parts = cand.split(' ');
+  // Format: "candidate:foundation component proto priority addr port typ TYPE ..."
+  const proto = parts[2] || '?';
+  const addr = parts[4] || '?';
+  const port = parts[5] || '?';
+  const typeIdx = parts.indexOf('typ');
+  const type = typeIdx > 0 ? parts[typeIdx + 1] : '?';
+  return `${type} ${addr}:${port} ${proto.toLowerCase()}`;
+}
+
 export class PeerConnection {
   private pc: RTCPeerConnection;
   private remoteStream: MediaStream = new MediaStream();
@@ -44,7 +63,10 @@ export class PeerConnection {
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate && this.onIceCandidate) {
+        console.log('[WebRTC] Local ICE → ' + remoteName + ':', describeCandidate(event.candidate.toJSON()));
         this.onIceCandidate(event.candidate);
+      } else if (!event.candidate) {
+        console.log('[WebRTC] Local ICE gathering complete for ' + remoteName);
       }
     };
 
@@ -202,6 +224,7 @@ export class PeerConnection {
       this.pendingCandidates.push(candidate);
       return;
     }
+    console.log('[WebRTC] Remote ICE ← ' + this.remoteName + ':', describeCandidate(candidate));
     await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
   }
 
