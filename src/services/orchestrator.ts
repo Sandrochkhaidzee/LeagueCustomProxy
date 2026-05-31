@@ -215,8 +215,10 @@ export class Orchestrator {
       });
 
       this.tracking.start((_pos) => {
-        // Position callback — no longer directly updates audio
-        // Position updates handled by volume tick
+        // Fast overlay refresh at scan rate so position/debug visuals don't
+        // wait for the 4 Hz positionTick. Volume + peer state still flow
+        // through positionTick — broadcastOverlayState is read-only.
+        this.broadcastOverlayState();
       }, 30);
 
       // Initialize data channel service and volume client

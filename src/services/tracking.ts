@@ -746,9 +746,11 @@ export class TrackingService {
             const allBlobs = this.findBlobs(mask, region.width, region.height);
             const iconBlobs = this.filterIconBlobs(allBlobs);
 
-            // Generate debug image at most ~1/sec (scan-rate independent)
+            // Regenerate the debug-mode filtered image at 5Hz (scan-rate independent).
+            // This is what makes the debug overlay feel "live" without paying the
+            // canvas-encode cost on every tick.
             const nowMs = performance.now();
-            if (nowMs - this.lastDebugImageMs >= 1000) {
+            if (nowMs - this.lastDebugImageMs >= 200) {
               this.lastDebugImageMs = nowMs;
               this.filteredImageUrl = this.generateFilteredImage(mask, region.width, region.height, iconBlobs, imageData, region);
             }
