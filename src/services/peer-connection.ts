@@ -1,5 +1,10 @@
 import { getIceServers } from '../core/config';
 
+// Time constant for gain ramping (seconds). setTargetAtTime reaches ~63% in
+// timeConstant; ~95% in 3*timeConstant. 50ms = smooth-feeling steps without
+// audible lag between volume tick updates.
+const VOLUME_RAMP_TC = 0.05;
+
 export class PeerConnection {
   private pc: RTCPeerConnection;
   private remoteStream: MediaStream = new MediaStream();
@@ -9,16 +14,32 @@ export class PeerConnection {
   private hasRemoteDescription = false;
   readonly remoteName: string;
 
+  // WebAudio routing for smooth volume ramping. When audioContext is present
+  // the audioElement is muted and used only to prime the WebRTC stream in
+  // Chromium; real output flows through gainNode → destination.
+  private audioContext: AudioContext | null;
+  private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private gainNode: GainNode | null = null;
+  private targetVolume = 1;
+  private muted = false;
+
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
   onDataMessage: ((data: string) => void) | null = null;
 
-  private constructor(remoteName: string, iceServers: RTCIceServer[]) {
+  private constructor(remoteName: string, iceServers: RTCIceServer[], audioContext: AudioContext | null) {
     this.remoteName = remoteName;
     this.pc = new RTCPeerConnection({ iceServers });
+    this.audioContext = audioContext;
 
     this.audioElement = new Audio();
     this.audioElement.autoplay = true;
     this.audioElement.srcObject = this.remoteStream;
+    // When routing via WebAudio, mute the element to avoid double-playback —
+    // it's only kept around because Chromium needs an HTMLMediaElement
+    // attachment to keep a remote WebRTC stream alive.
+    if (audioContext) {
+      this.audioElement.muted = true;
+    }
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate && this.onIceCandidate) {
@@ -31,6 +52,7 @@ export class PeerConnection {
       this.remoteStream.addTrack(event.track);
       // Ensure audio plays (autoplay may be blocked by Chromium policy)
       this.tryPlay();
+      this.ensureWebAudioRoute();
     };
 
     this.pc.onconnectionstatechange = () => {
@@ -47,9 +69,35 @@ export class PeerConnection {
     };
   }
 
-  static async create(remoteName: string): Promise<PeerConnection> {
+  static async create(remoteName: string, audioContext: AudioContext | null = null): Promise<PeerConnection> {
     const iceServers = await getIceServers();
-    return new PeerConnection(remoteName, iceServers);
+    return new PeerConnection(remoteName, iceServers, audioContext);
+  }
+
+  private ensureWebAudioRoute(): void {
+    if (!this.audioContext || this.sourceNode) return;
+    if (this.remoteStream.getAudioTracks().length === 0) return;
+    try {
+      this.sourceNode = this.audioContext.createMediaStreamSource(this.remoteStream);
+      this.gainNode = this.audioContext.createGain();
+      this.gainNode.gain.value = this.muted ? 0 : this.targetVolume;
+      this.sourceNode.connect(this.gainNode);
+      this.gainNode.connect(this.audioContext.destination);
+    } catch (e) {
+      console.warn('[WebRTC] WebAudio routing failed for', this.remoteName, '— falling back to element volume:', e);
+      this.sourceNode = null;
+      this.gainNode = null;
+      this.audioElement.muted = false;
+    }
+  }
+
+  private applyGain(value: number): void {
+    if (this.gainNode && this.audioContext) {
+      this.gainNode.gain.setTargetAtTime(value, this.audioContext.currentTime, VOLUME_RAMP_TC);
+    } else {
+      // Fallback path — no smoothing available without WebAudio.
+      this.audioElement.volume = value;
+    }
   }
 
   private tryPlay(): void {
@@ -154,15 +202,27 @@ export class PeerConnection {
   }
 
   setVolume(volume: number): void {
-    this.audioElement.volume = Math.max(0, Math.min(1, volume));
+    const clamped = Math.max(0, Math.min(1, volume));
+    this.targetVolume = clamped;
+    if (!this.muted) this.applyGain(clamped);
   }
 
   mute(): void {
-    this.audioElement.muted = true;
+    this.muted = true;
+    if (this.gainNode) {
+      this.applyGain(0);
+    } else {
+      this.audioElement.muted = true;
+    }
   }
 
   unmute(): void {
-    this.audioElement.muted = false;
+    this.muted = false;
+    if (this.gainNode) {
+      this.applyGain(this.targetVolume);
+    } else {
+      this.audioElement.muted = false;
+    }
   }
 
   close(): void {
@@ -171,5 +231,11 @@ export class PeerConnection {
     this.pc.close();
     this.audioElement.pause();
     this.audioElement.srcObject = null;
+    try {
+      this.sourceNode?.disconnect();
+      this.gainNode?.disconnect();
+    } catch { /* ignore */ }
+    this.sourceNode = null;
+    this.gainNode = null;
   }
 }

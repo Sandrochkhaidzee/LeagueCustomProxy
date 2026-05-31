@@ -225,8 +225,11 @@ export class Orchestrator {
       this.dataChannels = new DataChannelService();
       this.volumeClient = new VolumeClient();
 
-      // Start volume computation tick (~4Hz)
-      this.volumeTickId = window.setInterval(() => this.positionTick(), 250) as unknown as number;
+      // Start volume computation tick (~10 Hz). GainNode setTargetAtTime
+      // smoothing on the peer connections turns the discrete steps into a
+      // continuous ramp; the tick rate just sets how often we refresh the
+      // *target*, not how often the audio gain actually moves.
+      this.volumeTickId = window.setInterval(() => this.positionTick(), 100) as unknown as number;
 
       // Poll game.cfg every 5 seconds for minimap scale changes
       this.configPollId = window.setInterval(() => this.pollMinimapScale(), 5000) as unknown as number;

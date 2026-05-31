@@ -140,7 +140,7 @@ export class AudioService {
     console.log('[Audio] Connecting to peer:', remoteName);
     let peer: PeerConnection;
     try {
-      peer = await PeerConnection.create(remoteName);
+      peer = await PeerConnection.create(remoteName, this.audioContext);
     } catch (e) {
       this.connectingPeers.delete(remoteName);
       throw e;
@@ -201,7 +201,7 @@ export class AudioService {
 
       if (signal.type === 'offer') {
         if (!peer) {
-          peer = await PeerConnection.create(signal.from);
+          peer = await PeerConnection.create(signal.from, this.audioContext);
           this.peers.set(signal.from, peer);
           if (this.outputStream) peer.addLocalStream(this.outputStream);
 
