@@ -1,3 +1,5 @@
+import { setLoggingEnabled } from '../core/logging';
+
 interface NearbyPeer {
   summonerName: string;
   championName: string;
@@ -15,6 +17,8 @@ interface OverlayState {
   lastPosition?: { x: number; y: number } | null;
   filteredImageUrl?: string | null;
   detectedMinimapBounds?: { screenX: number; screenY: number; screenWidth: number; screenHeight: number } | null;
+  localTeam?: 'ORDER' | 'CHAOS' | null;
+  lifecycleStatus?: string;
 }
 
 const playerList = document.getElementById('player-list')!;
@@ -80,6 +84,7 @@ btnDebug.addEventListener('click', () => {
   btnDebug.textContent = debugEnabled ? 'ON' : 'OFF';
   btnDebug.classList.toggle('active', debugEnabled);
   scanRateRow.classList.toggle('hidden', !debugEnabled);
+  setLoggingEnabled(debugEnabled);
   // Immediately hide debug elements when toggled off
   if (!debugEnabled) {
     trackingDot.style.display = 'none';
@@ -152,13 +157,15 @@ const playerRows: Map<string, {
 // Track whether a player slider is being actively dragged
 let activeSliderPlayer: string | null = null;
 
-function createPlayerRow(peer: NearbyPeer): HTMLElement {
+function createPlayerRow(peer: NearbyPeer, localTeam: 'ORDER' | 'CHAOS' | null | undefined): HTMLElement {
   const row = document.createElement('div');
-  row.className = 'player-row ' + (peer.team === 'ORDER' ? 'ally' : 'enemy');
+  const isAlly = localTeam ? peer.team === localTeam : peer.team === 'ORDER';
+  row.className = 'player-row ' + (isAlly ? 'ally' : 'enemy');
 
   const nameSpan = document.createElement('span');
   nameSpan.className = 'player-name';
   nameSpan.textContent = peer.championName;
+  nameSpan.title = peer.summonerName;
   row.appendChild(nameSpan);
 
   const indicator = document.createElement('span');
@@ -235,8 +242,19 @@ function renderState(state: OverlayState): void {
   btnMuteAll.classList.toggle('active', state.muteAll);
   btnMuteAll.textContent = state.muteAll ? 'ALL OFF' : 'VOL';
 
+  // Sort: allies first, then by champion name
+  const localTeam = state.localTeam ?? null;
+  const sortedPeers = [...state.nearbyPeers].sort((a, b) => {
+    if (localTeam) {
+      const aAlly = a.team === localTeam;
+      const bAlly = b.team === localTeam;
+      if (aAlly !== bAlly) return aAlly ? -1 : 1;
+    }
+    return a.championName.localeCompare(b.championName);
+  });
+
   // Build set of current peer names for diffing
-  const currentNames = new Set(state.nearbyPeers.map(p => p.summonerName));
+  const currentNames = new Set(sortedPeers.map(p => p.summonerName));
 
   // Remove rows for peers that left
   for (const [name, entry] of playerRows) {
@@ -246,23 +264,33 @@ function renderState(state: OverlayState): void {
     }
   }
 
-  // Update existing rows or create new ones
-  for (const peer of state.nearbyPeers) {
-    if (playerRows.has(peer.summonerName)) {
+  // Update existing rows or create new ones, in sorted order
+  for (const peer of sortedPeers) {
+    let entry = playerRows.get(peer.summonerName);
+    if (entry) {
       updatePlayerRow(peer);
     } else {
-      playerList.appendChild(createPlayerRow(peer));
+      const row = createPlayerRow(peer, localTeam);
+      playerList.appendChild(row);
+      entry = playerRows.get(peer.summonerName);
+    }
+    // Reorder DOM to match sorted order
+    if (entry && entry.row.parentElement === playerList) {
+      playerList.appendChild(entry.row);
     }
   }
 
-  // Show/hide empty state
+  // Show/hide empty state with lifecycle-aware text
+  const emptyText = state.lifecycleStatus || 'Waiting for nearby players...';
   const emptyState = playerList.querySelector('.empty-state');
-  if (state.nearbyPeers.length === 0) {
+  if (sortedPeers.length === 0) {
     if (!emptyState) {
       const emptyDiv = document.createElement('div');
       emptyDiv.className = 'empty-state';
-      emptyDiv.textContent = 'Waiting for nearby players...';
+      emptyDiv.textContent = emptyText;
       playerList.appendChild(emptyDiv);
+    } else if (emptyState.textContent !== emptyText) {
+      emptyState.textContent = emptyText;
     }
   } else if (emptyState) {
     emptyState.remove();

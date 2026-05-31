@@ -50,11 +50,43 @@ fn get_screen_size() -> (u32, u32) {
 }
 
 fn main() {
+    use tauri::Emitter;
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
     tauri::Builder::default()
         .manage(CaptureState {
             bounds: Mutex::new(None),
         })
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    // Rebuild shortcuts each call to avoid closure-capture/move issues.
+                    // Comparison is cheap (struct of bitset + enum).
+                    let toggle_mute = Shortcut::new(
+                        Some(Modifiers::CONTROL | Modifiers::SHIFT),
+                        Code::KeyM,
+                    );
+                    let ptt = Shortcut::new(None, Code::F8);
+                    let payload: Option<&'static str> = if shortcut == &toggle_mute {
+                        if event.state() == ShortcutState::Pressed { Some("toggleMute") } else { None }
+                    } else if shortcut == &ptt {
+                        Some(if event.state() == ShortcutState::Pressed { "pttDown" } else { "pttUp" })
+                    } else {
+                        None
+                    };
+                    if let Some(p) = payload {
+                        let _ = app.emit("global_shortcut", p);
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
+            // Register the global shortcuts now that the plugin is initialized.
+            // F8 (PTT) and Ctrl+Shift+M (toggle self-mute).
+            let gs = app.global_shortcut();
+            let _ = gs.register(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyM));
+            let _ = gs.register(Shortcut::new(None, Code::F8));
+
             let Some(window) = app.get_webview_window("overlay") else {
                 return Ok(());
             };

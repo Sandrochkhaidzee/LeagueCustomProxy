@@ -27,11 +27,11 @@ export class Orchestrator {
   private positionTickRunning = false;
   private sessionActive = false;
   private lastOverlayRepositionTime = 0;
-  private lastOverlayPositionKey = '';
+  private lastOverlayBounds: { x: number; y: number; w: number; h: number } | null = null;
   private leagueConfigPath: string | null = null;
   private lastMinimapScale: number | null = null;
   private dpiScale = 1;
-  private overlayPositioned = false;
+  private lastGameState: TauriGameState | null = null;
 
 
   constructor() {
@@ -52,12 +52,15 @@ export class Orchestrator {
   private async pollGameState(): Promise<void> {
     try {
       const state: TauriGameState = await this.gameState.pollGameState();
+      this.lastGameState = state;
 
       if (!state.isLeagueRunning) {
         if (this.session) {
           console.log('[ProxChat] LoL closed, ending session');
           this.endSession();
         }
+        // Fire an overlay refresh so the empty-state text reflects "Waiting for LoL"
+        this.broadcastOverlayState();
         return;
       }
 
@@ -80,6 +83,11 @@ export class Orchestrator {
       if (!state.isInGame && this.session) {
         console.log('[ProxChat] Game ended (phase: ' + state.gameFlowPhase + ')');
         this.endSession();
+      }
+
+      // Refresh overlay even between sessions so lifecycle text stays current
+      if (!this.session) {
+        this.broadcastOverlayState();
       }
     } catch (e) {
       console.error('[ProxChat] pollGameState failed:', e);
@@ -362,11 +370,34 @@ export class Orchestrator {
     this.broadcastOverlayState();
   }
 
+  private computeLifecycleStatus(): string {
+    const gs = this.lastGameState;
+    if (!gs || !gs.isLeagueRunning) return 'Waiting for League of Legends';
+    if (this.session) {
+      const ts = this.tracking?.getState();
+      if (ts === 'scanning') return 'Searching for your champion on the minimap';
+      // LOCKED with no peers in the room — empty waiting state handled elsewhere
+      return '';
+    }
+    const phase = gs.gameFlowPhase || 'None';
+    switch (phase) {
+      case 'None':         return 'In client';
+      case 'Lobby':        return 'In lobby';
+      case 'Matchmaking':  return 'Searching for match';
+      case 'ReadyCheck':   return 'Ready check';
+      case 'ChampSelect':  return 'In champion select';
+      case 'GameStart':
+      case 'InProgress':   return 'Joining game...';
+      case 'WaitingForStats': return 'Game complete';
+      case 'PreEndOfGame':
+      case 'EndOfGame':    return 'End of game';
+      default:             return phase;
+    }
+  }
+
   private broadcastOverlayState(): void {
     const audio = this.audio;
-    if (!audio) return;
-
-    const nearbyPeers = Array.from(this.peerStates.values())
+    const nearbyPeers = audio ? Array.from(this.peerStates.values())
       .map((p) => ({
         summonerName: p.summonerName,
         championName: p.championName,
@@ -374,30 +405,45 @@ export class Orchestrator {
         isMuted: p.isMuted,
         isMutedByLocal: audio.isPlayerMuted(p.summonerName),
         isDead: p.isDead,
-      }));
+      })) : [];
 
     const data = {
-      selfMuted: audio.isSelfMuted(),
-      muteAll: audio.isMuteAll(),
+      selfMuted: audio?.isSelfMuted() ?? false,
+      muteAll: audio?.isMuteAll() ?? false,
       nearbyPeers,
       trackingState: this.tracking?.getState() ?? 'none',
       lastPosition: this.tracking?.getLastPosition() ?? null,
       filteredImageUrl: this.tracking?.getFilteredImageUrl() ?? null,
       detectedMinimapBounds: this.tracking?.getDetectedMinimapScreenBounds() ?? null,
+      localTeam: this.session?.localPlayer.team ?? null,
+      lifecycleStatus: this.computeLifecycleStatus(),
     };
 
-    // Auto-position overlay above the minimap when bounds are detected
-    if (data.detectedMinimapBounds && !this.overlayPositioned) {
+    // Auto-position overlay above the minimap when bounds are detected.
+    // Re-positions if the minimap moved/resized by more than 4px in any
+    // dimension, with a 1s debounce so we don't fight HUD-scale animations.
+    if (data.detectedMinimapBounds) {
       const mb = data.detectedMinimapBounds;
-      invoke('position_overlay', {
-        x: mb.screenX,
-        y: mb.screenY,
-        width: mb.screenWidth,
-        height: mb.screenHeight,
-      }).then(() => {
-        console.log('[ProxChat] Overlay positioned above minimap');
-        this.overlayPositioned = true;
-      }).catch((e) => console.warn('[ProxChat] position_overlay failed:', e));
+      const next = { x: mb.screenX, y: mb.screenY, w: mb.screenWidth, h: mb.screenHeight };
+      const last = this.lastOverlayBounds;
+      const changed = !last
+        || Math.abs(next.x - last.x) > 4
+        || Math.abs(next.y - last.y) > 4
+        || Math.abs(next.w - last.w) > 4
+        || Math.abs(next.h - last.h) > 4;
+      const now = performance.now();
+      if (changed && now - this.lastOverlayRepositionTime > 1000) {
+        this.lastOverlayRepositionTime = now;
+        this.lastOverlayBounds = next;
+        invoke('position_overlay', {
+          x: mb.screenX,
+          y: mb.screenY,
+          width: mb.screenWidth,
+          height: mb.screenHeight,
+        }).then(() => {
+          console.log('[ProxChat] Overlay positioned above minimap');
+        }).catch((e) => console.warn('[ProxChat] position_overlay failed:', e));
+      }
     }
 
     // Broadcast to overlay via custom event (both windows share the same WebView in Tauri)
@@ -560,6 +606,9 @@ export class Orchestrator {
     this.session = null;
     this.peerStates.clear();
     this.localSummonerName = '';
+    // Allow re-positioning on the next session
+    this.lastOverlayBounds = null;
+    this.lastOverlayRepositionTime = 0;
 
     // Notify overlay that session ended
     window.dispatchEvent(new CustomEvent('sessionEnded'));

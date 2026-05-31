@@ -1,4 +1,9 @@
+import { setLoggingEnabled } from '../core/logging';
+// Silence verbose logs by default — the overlay's Debug toggle flips this on.
+setLoggingEnabled(false);
+
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Orchestrator } from '../services/orchestrator';
 
 console.log('[ProxChat] Background script loading...');
@@ -45,6 +50,19 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
   }
 }) as EventListener);
 
-// TODO: Add global shortcuts via @tauri-apps/plugin-global-shortcut for PTT and toggle mute
+// Global shortcuts: Ctrl+Shift+M toggles self-mute, F8 is push-to-talk.
+listen<string>('global_shortcut', (event) => {
+  switch (event.payload) {
+    case 'toggleMute':
+      orchestrator.toggleSelfMute();
+      break;
+    case 'pttDown':
+      orchestrator.setPTTState(true);
+      break;
+    case 'pttUp':
+      orchestrator.setPTTState(false);
+      break;
+  }
+}).catch((e) => console.warn('[ProxChat] global_shortcut listen failed:', e));
 
 console.log('LoLProxChat background service started');
