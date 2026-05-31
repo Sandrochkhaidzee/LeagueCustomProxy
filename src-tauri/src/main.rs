@@ -41,6 +41,25 @@ fn main() {
         .manage(CaptureState {
             bounds: Mutex::new(None),
         })
+        .setup(|app| {
+            // Hide overlay from desktop capture so our own debug paint
+            // doesn't feed back into the next BitBlt frame.
+            if let Some(window) = app.get_webview_window("overlay") {
+                if let Ok(hwnd) = window.hwnd() {
+                    use windows::Win32::Foundation::HWND;
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+                    };
+                    unsafe {
+                        let _ = SetWindowDisplayAffinity(
+                            HWND(hwnd.0 as _),
+                            WDA_EXCLUDEFROMCAPTURE,
+                        );
+                    }
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             capture::set_capture_bounds,
             capture::capture_minimap,
