@@ -77,11 +77,15 @@ export class SignalingService {
         }
 
         case 'signal': {
+          // Envelope: { type: 'offer' | 'answer' | 'ice-candidate', payload: <whatever> }
+          // Older builds sent the raw SDP/candidate without an envelope; SDPs have a
+          // `.type` field of their own so offers/answers happened to work, but ICE
+          // candidates had no type and were silently dropped.
           onSignal({
             type: msg.payload?.type,
             from: msg.from,
             to: this.localName,
-            payload: msg.payload,
+            payload: msg.payload?.payload,
           });
           break;
         }
@@ -128,7 +132,9 @@ export class SignalingService {
       this.ws.send(JSON.stringify({
         type: 'signal',
         to: signal.to,
-        payload: signal.payload,
+        // Envelope so the receiver can identify ice-candidates (which carry
+        // no `.type` field of their own, unlike RTCSessionDescriptionInit).
+        payload: { type: signal.type, payload: signal.payload },
       }));
     }
   }

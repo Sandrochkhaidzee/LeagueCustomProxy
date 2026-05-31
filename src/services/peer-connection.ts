@@ -120,6 +120,12 @@ export class PeerConnection {
 
   private setupDataChannel(): void {
     if (!this.dataChannel) return;
+    this.dataChannel.onopen = () => {
+      console.log('[WebRTC] Data channel OPEN with', this.remoteName);
+    };
+    this.dataChannel.onclose = () => {
+      console.log('[WebRTC] Data channel CLOSED with', this.remoteName);
+    };
     this.dataChannel.onmessage = (event) => {
       if (this.onDataMessage) this.onDataMessage(event.data);
     };
