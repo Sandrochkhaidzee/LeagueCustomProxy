@@ -22,8 +22,10 @@ export interface RnnoiseNode {
 }
 
 export async function createRnnoiseNode(audioContext: AudioContext): Promise<RnnoiseNode> {
-  // Load the Emscripten module (fetches + compiles WASM)
-  const wasmModule = await createRNNWasmModule();
+  // locateFile pins the .wasm lookup to /background/ regardless of which page loaded us
+  const wasmModule = await createRNNWasmModule({
+    locateFile: (file: string) => `/background/${file}`,
+  });
 
   // Create rnnoise context
   const context = wasmModule._rnnoise_create(0);

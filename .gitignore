@@ -23,3 +23,6 @@ src-tauri/target/
 # Temp/logs
 logs.txt
 supabase/.temp/
+
+# Claude Code session-local settings
+.claude/

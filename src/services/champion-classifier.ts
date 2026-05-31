@@ -1,9 +1,7 @@
 import * as ort from 'onnxruntime-web';
 
-// Use WASM backend (no WebGL needed, works in Overwolf)
 ort.env.wasm.numThreads = 1;
-// WASM files are copied to the background/ dir by webpack CopyPlugin
-ort.env.wasm.wasmPaths = './';
+ort.env.wasm.wasmPaths = '/background/';
 ort.env.wasm.proxy = false;
 
 export class ChampionClassifier {
