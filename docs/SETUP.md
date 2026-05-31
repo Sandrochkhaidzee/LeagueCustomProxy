@@ -7,7 +7,7 @@ This is the deeper guide. For a quick start, see the top-level [README](../READM
 1. Download `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxyChat/releases/latest).
 2. Run it. On first launch you'll see a small panel; it stays empty until you're in a League match.
 3. The panel auto-positions left of the minimap once CV locks on. The transparent region over the minimap is the calibration overlay (purely visual right now — manual drag/resize handles aren't wired up yet).
-4. Toggle **Settings → Debug** to visualize the HSV-filtered minimap and tracking dot.
+4. Toggle **Settings → Debug** to visualize the HSV-filtered minimap and tracking dot. Debug mode also exposes a **Scan Rate** slider — default 50 ≈ 30 FPS, max 100 = 60 FPS. Smoothing constants are scan-rate invariant, so the slider trades CPU for tracking responsiveness without retuning behavior.
 
 By default the client talks to `https://proxchat.dant123.com`. To point at a different server, build from source (see below) with `PROXCHAT_SERVER=https://your-server.example.com` in `.env`.
 
