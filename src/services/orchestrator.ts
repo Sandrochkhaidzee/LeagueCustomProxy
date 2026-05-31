@@ -331,6 +331,11 @@ export class Orchestrator {
     if (player && isStreamerMode(player)) return;
 
     const existing = this.peerStates.get(peer.summonerName);
+    if (!existing) {
+      const sameTeam = peer.team === this.session.localPlayer.team;
+      console.log('[ProxChat] Peer joined: ' + peer.summonerName +
+        ' (' + (sameTeam ? 'ALLY' : 'ENEMY') + ', ' + peer.championName + ')');
+    }
     const peerState: PeerState = {
       summonerName: peer.summonerName,
       championName: peer.championName,

@@ -134,11 +134,14 @@ function sendToBackground(action: string, payload: any): void {
 }
 
 // Report the panel's current size to Rust so the click-through hit-test
-// follows collapse/expand/settings open.
+// follows collapse/expand/settings open. Multiply by devicePixelRatio
+// because offsetWidth/Height are CSS pixels but the Rust side compares
+// against physical-pixel cursor coords from GetCursorPos.
 const reportPanelSize = () => {
+  const dpr = window.devicePixelRatio || 1;
   sendToBackground('panelResize', {
-    width: panel.offsetWidth,
-    height: panel.offsetHeight,
+    width: Math.round(panel.offsetWidth * dpr),
+    height: Math.round(panel.offsetHeight * dpr),
   });
 };
 new ResizeObserver(reportPanelSize).observe(panel);

@@ -6,7 +6,12 @@ export class DataChannelService {
 
   registerPeer(name: string, peer: PeerConnection): void {
     this.peers.set(name, peer);
+    let firstBlob = true;
     peer.onDataMessage = (data: string) => {
+      if (firstBlob) {
+        firstBlob = false;
+        console.log('[DataChannel] First blob from ' + name + ' (' + data.length + ' chars)');
+      }
       this.peerBlobs.set(name, data);
     };
   }

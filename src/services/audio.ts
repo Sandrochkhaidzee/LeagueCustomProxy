@@ -11,6 +11,8 @@ export class AudioService {
   private selfMuted = false;
   private muteAll = false;
   private mutedPlayers: Set<string> = new Set();
+  // Track last reported volume state per peer so we only log transitions
+  private lastAppliedVolume: Map<string, string> = new Map();
   private settings: AudioSettings = {
     inputMode: 'vad',
     inputVolume: 1.0,
@@ -253,12 +255,21 @@ export class AudioService {
       if (!peer) continue;
       const playerVolume = this.settings.playerVolumes[name] ?? 1.0;
       const finalVol = volume * playerVolume;
+      const wasState = this.lastAppliedVolume.get(name);
       // Always update volume so it's correct when unmuted
       peer.setVolume(finalVol);
-      if (this.muteAll || this.mutedPlayers.has(name) || finalVol === 0) {
+      const muteNow = this.muteAll || this.mutedPlayers.has(name) || finalVol === 0;
+      if (muteNow) {
         peer.mute();
       } else {
         peer.unmute();
+      }
+      // Log audible/silent transitions (skip steady-state to keep noise down)
+      const stateNow = muteNow ? 'silent' : finalVol.toFixed(2);
+      if (wasState !== stateNow) {
+        console.log('[Audio] peer ' + name + ' → ' + stateNow +
+          (wasState !== undefined ? ' (was ' + wasState + ')' : ''));
+        this.lastAppliedVolume.set(name, stateNow);
       }
     }
   }

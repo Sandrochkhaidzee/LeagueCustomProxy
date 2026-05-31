@@ -22,16 +22,22 @@ fn set_panel_size(width: i32, height: i32) {
 
 /// Reposition the overlay so the control panel sits immediately left of the
 /// minimap and the (transparent) calibration region overlaps the minimap itself.
-/// `x, y, width, height` describe the minimap's screen rect.
+/// `x, y, width, height` are physical screen pixels (from the BitBlt capture).
+/// The PANEL_WIDTH/GAP constants are CSS pixels, so they must be scaled by the
+/// monitor's DPI factor before being mixed with physical coordinates.
 #[tauri::command]
 fn position_overlay(app: tauri::AppHandle, x: f64, y: f64, width: f64, height: f64) {
     if let Some(window) = app.get_webview_window("overlay") {
-        // Must match .panel width + #minimap-border margin-left in overlay.css
-        const PANEL_WIDTH: f64 = 240.0;
-        const PANEL_GAP: f64 = 4.0;
+        // Must match .panel width + #minimap-border margin-left in overlay.css (CSS px).
+        const PANEL_WIDTH_CSS: f64 = 240.0;
+        const PANEL_GAP_CSS: f64 = 4.0;
 
-        let total_width = (PANEL_WIDTH + PANEL_GAP + width) as i32;
-        let new_x = (x - PANEL_WIDTH - PANEL_GAP) as i32;
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let panel_width_phys = PANEL_WIDTH_CSS * scale;
+        let panel_gap_phys = PANEL_GAP_CSS * scale;
+
+        let total_width = (panel_width_phys + panel_gap_phys + width) as i32;
+        let new_x = (x - panel_width_phys - panel_gap_phys) as i32;
 
         let _ = window.set_position(tauri::PhysicalPosition::new(new_x, y as i32));
         let _ = window.set_size(tauri::PhysicalSize::new(total_width as u32, height as u32));

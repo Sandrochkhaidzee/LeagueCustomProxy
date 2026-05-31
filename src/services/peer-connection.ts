@@ -84,6 +84,8 @@ export class PeerConnection {
       this.gainNode.gain.value = this.muted ? 0 : this.targetVolume;
       this.sourceNode.connect(this.gainNode);
       this.gainNode.connect(this.audioContext.destination);
+      console.log('[WebRTC] WebAudio route ready for ' + this.remoteName +
+        ' (gain=' + this.gainNode.gain.value.toFixed(2) + ')');
     } catch (e) {
       console.warn('[WebRTC] WebAudio routing failed for', this.remoteName, '— falling back to element volume:', e);
       this.sourceNode = null;
