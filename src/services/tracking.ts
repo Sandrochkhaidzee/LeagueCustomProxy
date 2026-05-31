@@ -56,7 +56,7 @@ export class TrackingService {
 
   // Filtered image for overlay debug display
   private filteredImageUrl: string | null = null;
-  private filteredImageTick = 0;
+  private lastDebugImageMs = 0;
 
   // Champion classifier (ONNX model)
   private classifier: ChampionClassifier | null = null;
@@ -64,12 +64,22 @@ export class TrackingService {
   private classifierScores: Map<string, number> = new Map();
   // EMA-smoothed classifier scores to dampen single-frame misclassifications
   private smoothedClassifierScores: Map<string, number> = new Map();
-  private classifierTick = 0;
+  private lastClassifierRunMs = 0;
+  private lastClassifierLogMs = 0;
   private classifierRunning = false;
 
   // Debug canvas (reused to avoid allocation per frame)
   private debugCanvas: HTMLCanvasElement | null = null;
   private debugCtx: CanvasRenderingContext2D | null = null;
+
+  // Tick guard + timing — all the per-frame constants are scaled against
+  // TUNED_FPS so behavior is invariant when scan rate changes.
+  private tickRunning = false;
+  private lastTickMs = 0;
+  private lastDtSec = 1 / 8; // seconds between this tick and the previous one
+  private scanStartMs = 0;
+  private holdStartMs = 0;
+  private static readonly TUNED_FPS = 8;
 
   // Diagnostics
   private lockedTickCount = 0;
@@ -150,6 +160,8 @@ export class TrackingService {
     this.lastPixelPos = null;
     this.lockedTickCount = 0;
     this.scanFrameCount = 0;
+    this.scanStartMs = performance.now();
+    this.holdStartMs = 0;
   }
 
   setMinimapRegion(region: { x: number; y: number; width: number; height: number } | null): void {
@@ -165,6 +177,8 @@ export class TrackingService {
     this.lastPixelPos = null;
     this.lockedTickCount = 0;
     this.scanFrameCount = 0;
+    this.scanStartMs = performance.now();
+    this.holdStartMs = 0;
   }
 
   loadChampionTemplate(_championName: string): void {
@@ -288,8 +302,10 @@ export class TrackingService {
         this.smoothedClassifierScores.set(key, val);
       }
 
-      // Diagnostic logging only every ~30s (240 frames at ~8fps)
-      if (this.classifierTick % 240 === 0) {
+      // Diagnostic log every ~30s, independent of scan rate
+      const now = performance.now();
+      if (now - this.lastClassifierLogMs >= 30000) {
+        this.lastClassifierLogMs = now;
         const details = tealBlobs.map((b, i) =>
           '(' + b.cx + ',' + b.cy + ')raw=' + rawScores[i].toFixed(3) +
           '/ema=' + (this.classifierScores.get(b.cx + ',' + b.cy) ?? 0).toFixed(2)
@@ -328,9 +344,17 @@ export class TrackingService {
     return bestScore;
   }
 
-  start(onPositionUpdate: (pos: Position) => void, fps: number = 8): void {
+  start(onPositionUpdate: (pos: Position) => void, fps: number = 30): void {
     this.onPositionUpdate = onPositionUpdate;
-    const intervalMs = Math.round(1000 / fps);
+    const intervalMs = Math.max(1, Math.round(1000 / fps));
+    const now = performance.now();
+    this.lastTickMs = now;
+    this.scanStartMs = now;
+    this.holdStartMs = 0;
+    this.lastDebugImageMs = 0;
+    this.lastClassifierRunMs = 0;
+    this.lastClassifierLogMs = 0;
+    this.tickRunning = false;
     this.intervalId = window.setInterval(() => this.tick(), intervalMs);
   }
 
@@ -354,6 +378,8 @@ export class TrackingService {
     this.deathPosition = null;
     this.lockedTickCount = 0;
     this.scanFrameCount = 0;
+    this.scanStartMs = performance.now();
+    this.holdStartMs = 0;
   }
 
   // --- Color classification ---
@@ -687,60 +713,81 @@ export class TrackingService {
       return;
     }
 
+    // Drop tick if the previous one is still in flight (capture + CV + classifier
+    // can exceed the interval at high scan rates). Better to skip than to pile up.
+    if (this.tickRunning) return;
+    this.tickRunning = true;
+
+    const tickNow = performance.now();
+    this.lastDtSec = (tickNow - this.lastTickMs) / 1000;
+    this.lastTickMs = tickNow;
+
     invoke<{ data_url: string; width: number; height: number }>('capture_minimap')
       .then((result) => {
         const img = new Image();
         img.onload = () => {
-          this.ctx.drawImage(img, 0, 0);
-          const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+          try {
+            this.ctx.drawImage(img, 0, 0);
+            const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
 
-          // Minimap region is set from game.cfg config (or manual calibration).
-          // No CV-based auto-detection needed.
-          if (!this.minimapRegion && this.userMinimapRegion) {
-            this.minimapRegion = this.userMinimapRegion;
-            this.expectedIconDiam = Math.round(this.minimapRegion.width * 0.087);
-          }
+            // Minimap region is set from game.cfg config (or manual calibration).
+            // No CV-based auto-detection needed.
+            if (!this.minimapRegion && this.userMinimapRegion) {
+              this.minimapRegion = this.userMinimapRegion;
+              this.expectedIconDiam = Math.round(this.minimapRegion.width * 0.087);
+            }
 
-          if (!this.minimapRegion) return;
+            if (!this.minimapRegion) return;
 
-          // Create filtered mask and find blobs
-          const region = this.minimapRegion;
-          let mask = this.createMask(imageData, region);
-          mask = this.dilate(mask, region.width, region.height);
-          const allBlobs = this.findBlobs(mask, region.width, region.height);
-          const iconBlobs = this.filterIconBlobs(allBlobs);
+            // Create filtered mask and find blobs
+            const region = this.minimapRegion;
+            let mask = this.createMask(imageData, region);
+            mask = this.dilate(mask, region.width, region.height);
+            const allBlobs = this.findBlobs(mask, region.width, region.height);
+            const iconBlobs = this.filterIconBlobs(allBlobs);
 
-          // Generate filtered debug image ~every 1 second (every 8 frames)
-          this.filteredImageTick++;
-          if (this.filteredImageTick % 8 === 0) {
-            this.filteredImageUrl = this.generateFilteredImage(mask, region.width, region.height, iconBlobs, imageData, region);
-          }
+            // Generate debug image at most ~1/sec (scan-rate independent)
+            const nowMs = performance.now();
+            if (nowMs - this.lastDebugImageMs >= 1000) {
+              this.lastDebugImageMs = nowMs;
+              this.filteredImageUrl = this.generateFilteredImage(mask, region.width, region.height, iconBlobs, imageData, region);
+            }
 
-          this.diagCounter++;
+            this.diagCounter++;
 
-          // Build white pixel masks (separating movement path from viewport rectangle)
-          const { whiteMask, viewportMask } = this.buildWhiteMasks(imageData, region);
+            // Build white pixel masks (separating movement path from viewport rectangle)
+            const { whiteMask, viewportMask } = this.buildWhiteMasks(imageData, region);
 
-          // Run classifier every 4th frame to amortize cost
-          this.classifierTick++;
-          const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
-          if (this.classifier && this.classifierTick % 4 === 0 && tealBlobs.length > 0 && !this.classifierRunning) {
-            this.classifierRunning = true;
-            this.updateClassifierScores(tealBlobs, imageData, region).finally(() => {
-              this.classifierRunning = false;
-            });
-          }
+            // Run classifier at most every 500ms (scan-rate independent)
+            const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
+            if (
+              this.classifier &&
+              tealBlobs.length > 0 &&
+              !this.classifierRunning &&
+              nowMs - this.lastClassifierRunMs >= 500
+            ) {
+              this.classifierRunning = true;
+              this.lastClassifierRunMs = nowMs;
+              this.updateClassifierScores(tealBlobs, imageData, region).finally(() => {
+                this.classifierRunning = false;
+              });
+            }
 
-          if (this.state === TrackingState.SCANNING) {
-            this.handleScanning(iconBlobs, whiteMask, viewportMask, region);
-          } else if (this.state === TrackingState.LOCKED) {
-            this.handleLocked(iconBlobs, whiteMask, viewportMask, region);
+            if (this.state === TrackingState.SCANNING) {
+              this.handleScanning(iconBlobs, whiteMask, viewportMask, region);
+            } else if (this.state === TrackingState.LOCKED) {
+              this.handleLocked(iconBlobs, whiteMask, viewportMask, region);
+            }
+          } finally {
+            this.tickRunning = false;
           }
         };
+        img.onerror = () => { this.tickRunning = false; };
         img.src = result.data_url;
       })
       .catch((err) => {
         console.error('[Tracking] capture_minimap failed:', err);
+        this.tickRunning = false;
       });
   }
 
@@ -763,11 +810,11 @@ export class TrackingService {
 
     this.scanFrameCount++;
 
-    // Wait ~1 second (8 frames at 8fps) for classifier EMA to stabilize.
-    // Without classifier, wait 4 frames for basic signal gathering.
+    // Wait ~1s for classifier EMA to stabilize (~0.5s without classifier),
+    // independent of scan rate.
     const hasClassifier = !!(this.classifier && this.classifier.isLoaded());
-    const warmupFrames = hasClassifier ? 8 : 4;
-    if (this.scanFrameCount < warmupFrames) {
+    const warmupMs = hasClassifier ? 1000 : 500;
+    if (performance.now() - this.scanStartMs < warmupMs) {
       if (this.onPositionUpdate && this.lastPosition) {
         this.onPositionUpdate(this.lastPosition);
       }
@@ -808,6 +855,8 @@ export class TrackingService {
     this.state = TrackingState.LOCKED;
     this.lockedTickCount = 0;
     this.scanFrameCount = 0;
+    this.scanStartMs = performance.now();
+    this.holdStartMs = 0;
     this.velocityX = 0;
     this.velocityY = 0;
 
@@ -856,12 +905,12 @@ export class TrackingService {
     const predY = lastRegY + this.velocityY;
 
     // Max jump distance: allow up to 2x icon diameter per frame for normal movement.
-    // When holding position (lockedTickCount > 0), progressively expand the search
-    // radius so we can re-acquire a separating blob that moved during the hold.
-    // Grows by ~1 icon diameter per second (every 8 frames at 8fps).
+    // While holding position, grow the search radius by ~1 icon diameter / second
+    // (scan-rate independent) so we can re-acquire a blob that moved during the hold.
     const BASE_JUMP_PX = Math.max(20, Math.round(this.expectedIconDiam * 2.0));
-    const holdExpansion = this.lockedTickCount > 0
-      ? Math.round(this.expectedIconDiam * (this.lockedTickCount / 8))
+    const holdSec = this.holdStartMs > 0 ? (performance.now() - this.holdStartMs) / 1000 : 0;
+    const holdExpansion = holdSec > 0
+      ? Math.round(this.expectedIconDiam * holdSec)
       : 0;
     const MAX_JUMP_PX = BASE_JUMP_PX + holdExpansion;
     const maxJumpSq = MAX_JUMP_PX * MAX_JUMP_PX;
@@ -906,7 +955,8 @@ export class TrackingService {
     // Jump to any teal blob with high classifier confidence regardless of distance.
     // After holding for a while (>1s), lower the threshold to recover faster.
     if (!bestBlob && hasClassifier) {
-      const CLS_REACQUIRE_THRESHOLD = this.lockedTickCount > 8 ? 0.35 : 0.5;
+      if (this.holdStartMs === 0) this.holdStartMs = performance.now();
+      const CLS_REACQUIRE_THRESHOLD = holdSec > 1.0 ? 0.35 : 0.5;
       let bestClsBlob: Blob | null = null;
       let bestClsScore = 0;
 
@@ -940,6 +990,7 @@ export class TrackingService {
     if (!bestBlob) {
       if (this.lockedTickCount === 0) {
         console.log('[Tracking] Extrapolating position (no match in range)');
+        this.holdStartMs = performance.now();
       }
       this.extrapolatePosition(region);
       return;
@@ -947,19 +998,23 @@ export class TrackingService {
 
     // Log when resuming tracking after a hold
     if (this.lockedTickCount > 0) {
-      console.log('[Tracking] Resumed tracking after hold (' + this.lockedTickCount + ' frames)');
+      console.log('[Tracking] Resumed tracking after hold (' + holdSec.toFixed(2) + 's)');
     }
 
     const cx = this.minimapRegion.x + bestBlob.cx;
     const cy = this.minimapRegion.y + bestBlob.cy;
 
-    // Update velocity (exponential moving average)
-    this.velocityX = this.velocityX * 0.5 + (bestBlob.cx - lastRegX) * 0.5;
-    this.velocityY = this.velocityY * 0.5 + (bestBlob.cy - lastRegY) * 0.5;
+    // Velocity EMA — preserve per-frame-at-8-FPS behavior across scan rates.
+    // weight_old = 0.5^(TUNED_FPS * dt); at 8 FPS dt=0.125 → weight_old = 0.5.
+    const velWeightOld = Math.pow(0.5, TrackingService.TUNED_FPS * this.lastDtSec);
+    const velWeightNew = 1 - velWeightOld;
+    this.velocityX = this.velocityX * velWeightOld + (bestBlob.cx - lastRegX) * velWeightNew;
+    this.velocityY = this.velocityY * velWeightOld + (bestBlob.cy - lastRegY) * velWeightNew;
 
     this.lastPixelPos = { x: cx, y: cy };
     this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
     this.lockedTickCount = 0;
+    this.holdStartMs = 0;
 
     if (this.onPositionUpdate && this.lastPosition) {
       this.onPositionUpdate(this.lastPosition);
@@ -968,11 +1023,12 @@ export class TrackingService {
 
   /**
    * Extrapolate position using decaying velocity when tracking is lost.
-   * Velocity decays by 30% per frame (~8fps), so movement fades out over ~1 second.
+   * Velocity fades out over ~1 second of wall-clock time, regardless of scan rate.
    * Position is clamped to minimap bounds to prevent drifting off-map.
    */
   private extrapolatePosition(region: { x: number; y: number; width: number; height: number }): void {
     this.lockedTickCount++;
+    if (this.holdStartMs === 0) this.holdStartMs = performance.now();
 
     // Only extrapolate if we have meaningful velocity
     const speed = Math.abs(this.velocityX) + Math.abs(this.velocityY);
@@ -989,9 +1045,11 @@ export class TrackingService {
       this.lastPixelPos = { x: cx, y: cy };
       this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
 
-      // Decay velocity each frame (converges to zero over ~8 frames / 1 second)
-      this.velocityX *= 0.7;
-      this.velocityY *= 0.7;
+      // Decay velocity: at 8 FPS this was 0.7/frame → 0.7^8 ≈ 0.058 per second.
+      // Preserve that wall-clock rate regardless of scan rate.
+      const decay = Math.pow(0.7, TrackingService.TUNED_FPS * this.lastDtSec);
+      this.velocityX *= decay;
+      this.velocityY *= decay;
     }
 
     if (this.onPositionUpdate && this.lastPosition) {

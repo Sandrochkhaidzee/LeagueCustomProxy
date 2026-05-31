@@ -217,7 +217,7 @@ export class Orchestrator {
       this.tracking.start((_pos) => {
         // Position callback — no longer directly updates audio
         // Position updates handled by volume tick
-      }, 15);
+      }, 30);
 
       // Initialize data channel service and volume client
       this.dataChannels = new DataChannelService();
@@ -406,7 +406,7 @@ export class Orchestrator {
   setPlayerVolume(name: string, volume: number): void { this.audio?.setPlayerVolume(name, volume); }
   setScanRate(fps: number): void {
     if (!this.tracking) return;
-    const clamped = Math.max(1, Math.min(30, Math.round(fps)));
+    const clamped = Math.max(1, Math.min(60, Math.round(fps)));
     console.log('[ProxChat] Scan rate changed to ' + clamped + ' FPS');
     this.tracking.stop();
     this.tracking.start(() => {

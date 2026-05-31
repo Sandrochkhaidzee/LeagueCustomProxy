@@ -117,8 +117,8 @@ const scanRateLabel = document.getElementById('scan-rate-label')!;
 scanRateInput.addEventListener('input', () => {
   const raw = parseInt(scanRateInput.value);
   scanRateLabel.textContent = String(raw);
-  // Map 0-100 → 1-30 FPS for backend scan rate
-  const fps = Math.max(1, Math.round(1 + (raw / 100) * 29));
+  // Map 0-100 → 1-60 FPS for backend scan rate (default 50 → 30 FPS)
+  const fps = Math.max(1, Math.round(1 + (raw / 100) * 59));
   sendToBackground('setScanRate', { fps });
 });
 
