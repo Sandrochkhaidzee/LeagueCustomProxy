@@ -72,9 +72,11 @@ LoLProxChat is built to stay within the categories Riot Games explicitly publish
 
 **Specifically the proximity audio:** the volume falloff to zero at ~1200 game units (typical LoL vision range) means by default you only hear enemies who are roughly close enough that the game would already give you visual indicators of their presence (minimap icon when they walk past warded ground, champion model when they enter your vision). The app does not reveal *where* an enemy is — only that one is somewhere within hearing range. This is strictly less information than what Discord voice chat with the same opponent already provides (which has zero distance modulation).
 
+**Riot Developer Portal status:**
+LoLProxChat is **registered and approved** on the Riot Developer Portal — **App ID 809090**. The registration documents the LCU + Live Client Data endpoints used and the architectural approach (Tauri overlay, no memory reads, no injection). This is the official sign-off that the app's design fits Riot's allowed-tools category.
+
 **Honest caveats:**
-- Riot's policy requires developers to **notify them before public release** of LCU-using tools and use only their approved endpoint list. ProxChat is currently an unregistered personal project — fine for friends-and-family use, but if it ever grows into something widely distributed, registering through the [Riot Developer Portal](https://developer.riotgames.com/) is the right move.
-- Riot has **restricted LCU-using apps in Korea** as of the LCU API policy change. Users in Korean regions should not use this app.
+- Riot has **restricted LCU-using apps in Korea** as of the LCU API policy change. The app does not enforce a region check — users in Korean regions should not run it.
 - LCU and Live Client Data are officially listed as "unsupported" — Riot can change endpoint shapes anytime, which would break the app (but won't ban users).
 - *Nothing here constitutes legal advice or a guarantee against action by Riot.* This section describes the design intent and the published rules, not a contract.
 
