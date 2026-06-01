@@ -14,9 +14,11 @@ export class AudioService {
   // Track last reported volume state per peer so we only log transitions
   private lastAppliedVolume: Map<string, string> = new Map();
   private settings: AudioSettings = {
-    inputMode: 'vad',
+    // Default to "always open" so audio just works without configuring
+    // VAD thresholds or wiring up a PTT key. Users can switch in settings.
+    inputMode: 'always',
     inputVolume: 1.0,
-    vadSensitivity: 0.25,
+    vadSensitivity: 0.10,
     pttKey: 'V',
     playerVolumes: {},
   };
@@ -107,13 +109,14 @@ export class AudioService {
     }
 
     this.outputStream = destination.stream;
-    for (const track of this.outputStream.getAudioTracks()) {
-      track.enabled = true;
-    }
+    // Apply initial transmit state through the normal path so the first
+    // [Audio] Local mic transmit log line is emitted.
+    this.updateLocalTrackState();
   }
 
   private isTransmitting(): boolean {
     if (this.selfMuted) return false;
+    if (this.settings.inputMode === 'always') return true;
     if (this.settings.inputMode === 'ptt') return this.pttHeld;
     return this.vadActive;
   }
