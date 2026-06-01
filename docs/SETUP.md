@@ -114,19 +114,60 @@ curl -i -H "Connection: Upgrade" -H "Upgrade: websocket" \
      https://proxchat.your-domain.com/ws
 ```
 
-### TURN server (optional)
+### TURN server (recommended for WAN-to-WAN)
 
-For users behind symmetric NAT, set up [coturn](https://github.com/coturn/coturn). The `docker-compose.proxchat.yml` includes a coturn sidecar — supply a `coturn/turnserver.conf` with at least:
+For users behind symmetric NAT (common on mobile networks, some corporate setups), peers need a TURN relay to talk to each other. The `docker-compose.proxchat.yml` includes a coturn sidecar.
+
+#### Minimal turnserver.conf
 
 ```
 listening-port=3478
-tls-listening-port=5349
+fingerprint
+lt-cred-mech
 use-auth-secret
-static-auth-secret=<same as TURN_SECRET env var>
+static-auth-secret=<same value as TURN_SECRET env var>
 realm=your-domain.com
+server-name=turn.your-domain.com
+external-ip=<your-public-ip>
+min-port=49152
+max-port=49252
+no-multicast-peers
+no-cli
 ```
 
-The signaling server's `/turn-credentials` endpoint issues short-lived HMAC credentials so the shared secret never leaves your infrastructure.
+Router-side: forward UDP 3478 (TURN/STUN) and the UDP relay range (49152-49252 here) to the coturn host.
+
+The signaling server's `/turn-credentials` endpoint issues short-lived HMAC credentials so the static auth secret never leaves your infrastructure.
+
+#### TURNS (TLS, optional but recommended)
+
+TURNS protects credentials in transit, looks like generic HTTPS to firewalls, and helps users on restrictive corporate networks connect. If you already run Caddy / nginx-proxy-manager / Traefik with a wildcard cert for your domain, you can mount the cert dir into coturn:
+
+1. Set `TLS_CERT_DIR=/path/to/dir/containing/wildcard.crt-and-.key` in a local `.env` next to the compose file (the compose references `${TLS_CERT_DIR}`; the `.env` is **not** committed).
+2. Append to `turnserver.conf`:
+   ```
+   tls-listening-port=5349
+   cert=/certs/wildcard_.your-domain.com.crt
+   pkey=/certs/wildcard_.your-domain.com.key
+   ```
+   Filenames must match what's in `${TLS_CERT_DIR}`.
+3. Forward TCP 5349 on your router.
+4. **Cert renewal:** TLS-terminating reverse proxies (Caddy, etc) auto-renew certs but coturn caches them at startup. Schedule a nightly restart so renewed certs get picked up:
+   ```
+   17 4 * * * /usr/bin/docker restart proxchat-coturn >/dev/null 2>&1
+   ```
+   A few seconds of TURNS downtime each night; users mid-call are very unlikely to notice.
+
+#### Verifying TURNS works
+
+```bash
+echo "" | openssl s_client -connect turn.your-domain.com:5349 \
+  -servername turn.your-domain.com 2>&1 | grep -E "subject=|issuer=|Verification"
+# Expect:
+#   subject=CN=*.your-domain.com
+#   issuer=...Let's Encrypt...
+#   Verification: OK
+```
 
 ## 4. Development Workflow
 

@@ -20,8 +20,19 @@ services:
 
   coturn:
     container_name: proxchat-coturn
-    image: coturn/coturn
+    image: coturn/coturn:latest
+    # Run as root so the container can read the wildcard cert files mounted
+    # below — Caddy/Let's Encrypt cert dirs are typically 0600 root:root.
+    # Safe under network_mode: host (no additional privilege beyond host).
+    user: "0:0"
     network_mode: host
     volumes:
       - ./coturn/turnserver.conf:/etc/turnserver.conf:ro
+      # Mount a host-side directory containing the wildcard cert (.crt and .key)
+      # used for TURNS on port 5349. Path is per-host so it lives in a local
+      # .env file rather than being committed:
+      #   echo 'TLS_CERT_DIR=/path/to/your/wildcard-cert-dir' > .env
+      # If you don't want TURNS, comment this mount and drop the TLS lines
+      # from turnserver.conf.
+      - ${TLS_CERT_DIR:-/dev/null}:/certs:ro
     restart: unless-stopped
