@@ -41,8 +41,6 @@ export class AudioService {
   // PTT state
   private pttHeld = false;
 
-  // VAD polling (reads RNNoise VAD score periodically)
-
   constructor(signaling: SignalingService, localName: string) {
     this.signaling = signaling;
     this.localName = localName;

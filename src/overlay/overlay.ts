@@ -1,4 +1,10 @@
 import { setLoggingEnabled } from '../core/logging';
+import {
+  checkForUpdate,
+  downloadAndApply,
+  isAutoUpdateEnabled,
+  setAutoUpdateEnabled,
+} from '../services/updater';
 
 interface NearbyPeer {
   summonerName: string;
@@ -80,6 +86,48 @@ btnCollapse.addEventListener('click', () => {
 });
 
 const scanRateRow = document.getElementById('scan-rate-row')!;
+const btnAutoUpdate = document.getElementById('btn-autoupdate') as HTMLButtonElement;
+const btnCheckUpdate = document.getElementById('btn-check-update') as HTMLButtonElement;
+const updateStatus = document.getElementById('update-status')!;
+
+// --- Auto-update UI ---
+function syncAutoUpdateButton(): void {
+  const on = isAutoUpdateEnabled();
+  btnAutoUpdate.textContent = on ? 'ON' : 'OFF';
+  btnAutoUpdate.classList.toggle('active', on);
+}
+queueMicrotask(syncAutoUpdateButton);
+
+btnAutoUpdate.addEventListener('click', () => {
+  setAutoUpdateEnabled(!isAutoUpdateEnabled());
+  syncAutoUpdateButton();
+});
+
+async function runUpdateCheck(triggeredByUser: boolean): Promise<void> {
+  updateStatus.textContent = 'Checking for updates…';
+  try {
+    const info = await checkForUpdate();
+    if (info.update_available && info.download_url) {
+      updateStatus.textContent = 'Update available: v' + info.latest_version + ' — applying…';
+      await downloadAndApply(info.download_url);
+      // If apply succeeds, the process exits before we reach here
+    } else {
+      updateStatus.textContent = triggeredByUser
+        ? 'Up to date (v' + info.current_version + ')'
+        : '';
+    }
+  } catch (e) {
+    updateStatus.textContent = 'Update check failed: ' + (e as Error).message;
+  }
+}
+
+btnCheckUpdate.addEventListener('click', () => {
+  runUpdateCheck(true);
+});
+
+// Expose for background.ts to trigger an auto-check on launch
+(window as any).__proxchatRunUpdateCheck = runUpdateCheck;
+
 btnDebug.addEventListener('click', () => {
   debugEnabled = !debugEnabled;
   btnDebug.textContent = debugEnabled ? 'ON' : 'OFF';

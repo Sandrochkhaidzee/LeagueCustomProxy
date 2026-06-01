@@ -2,6 +2,7 @@
 
 mod capture;
 mod lcu;
+mod updater;
 
 use capture::CaptureState;
 use std::fs::File;
@@ -92,6 +93,11 @@ fn get_screen_size() -> (u32, u32) {
 }
 
 fn main() {
+    // Handle the "--complete-update <old-path>" handoff before Tauri starts.
+    // If we were launched by an in-flight self-update, this deletes the old
+    // .exe and renames us from proxchat.exe.new → proxchat.exe.
+    updater::handle_complete_update_arg();
+
     use tauri::Emitter;
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -232,6 +238,8 @@ fn main() {
             get_screen_size,
             set_panel_size,
             append_log,
+            updater::check_for_update,
+            updater::download_and_apply_update,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");

@@ -20,7 +20,6 @@ export class Orchestrator {
 
   private localSummonerName = '';
   private peerStates: Map<string, PeerState> = new Map();
-  // VAD is now handled internally by AudioService (RNNoise polling)
   private volumeTickId: number | null = null;
   private configPollId: number | null = null;
   private gameStatePollId: number | null = null;
@@ -248,8 +247,6 @@ export class Orchestrator {
     }
 
     // Overlay is managed by Tauri window configuration — no manual window open needed
-
-    // VAD is handled internally by AudioService (RNNoise polling)
   }
 
   private async positionTick(): Promise<void> {

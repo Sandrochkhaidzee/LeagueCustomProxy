@@ -5,6 +5,7 @@ setLoggingEnabled(false);
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Orchestrator } from '../services/orchestrator';
+import { isAutoUpdateEnabled } from '../services/updater';
 
 console.log('[ProxChat] Background script loading...');
 
@@ -67,3 +68,14 @@ listen<string>('global_shortcut', (event) => {
 }).catch((e) => console.warn('[ProxChat] global_shortcut listen failed:', e));
 
 console.log('LoLProxChat background service started');
+
+// Auto-check for updates on launch if user has opted in. Runs after a short
+// delay so the overlay's check-update handler has a chance to register.
+if (isAutoUpdateEnabled()) {
+  setTimeout(() => {
+    const runCheck = (window as any).__proxchatRunUpdateCheck;
+    if (typeof runCheck === 'function') {
+      runCheck(false);
+    }
+  }, 5000);
+}
