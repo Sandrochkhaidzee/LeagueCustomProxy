@@ -117,15 +117,6 @@ volumeInput.addEventListener('input', () => {
   sendToBackground('updateSettings', { inputVolume: raw / 100 });
 });
 
-const sensitivityInput = document.getElementById('input-sensitivity') as HTMLInputElement;
-const sensitivityLabel = document.getElementById('sensitivity-label')!;
-sensitivityInput.addEventListener('input', () => {
-  const raw = parseInt(sensitivityInput.value);
-  sensitivityLabel.textContent = String(raw);
-  // Map 0-100 → 0.0-0.5 for backend VAD threshold
-  sendToBackground('updateSettings', { vadSensitivity: raw / 200 });
-});
-
 const scanRateInput = document.getElementById('input-scan-rate') as HTMLInputElement;
 const scanRateLabel = document.getElementById('scan-rate-label')!;
 scanRateInput.addEventListener('input', () => {

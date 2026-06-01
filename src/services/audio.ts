@@ -1,7 +1,6 @@
 import { PeerConnection } from './peer-connection';
 import { SignalingService, SignalMessage } from './signaling';
 import { AudioSettings } from '../core/types';
-import { createRnnoiseNode, RnnoiseNode } from './rnnoise';
 
 function peakRms(buf: Float32Array): number {
   let sumSq = 0;
@@ -22,11 +21,9 @@ export class AudioService {
   // Track last reported volume state per peer so we only log transitions
   private lastAppliedVolume: Map<string, string> = new Map();
   private settings: AudioSettings = {
-    // Default to "always open" so audio just works without configuring
-    // VAD thresholds or wiring up a PTT key. Users can switch in settings.
+    // Always-open by default; PTT (F8 hold) available in Settings.
     inputMode: 'always',
     inputVolume: 1.0,
-    vadSensitivity: 0.10,
     pttKey: 'V',
     playerVolumes: {},
   };
@@ -35,8 +32,6 @@ export class AudioService {
   private audioContext: AudioContext | null = null;
   private gainNode: GainNode | null = null;
   private outputStream: MediaStream | null = null;
-  private rnnoiseNode: RnnoiseNode | null = null;
-  private vadActive = false;
 
   // Guard against concurrent connectToPeer calls for the same peer
   private connectingPeers: Set<string> = new Set();
@@ -47,7 +42,6 @@ export class AudioService {
   private pttHeld = false;
 
   // VAD polling (reads RNNoise VAD score periodically)
-  private vadPollId: number | null = null;
 
   constructor(signaling: SignalingService, localName: string) {
     this.signaling = signaling;
@@ -57,8 +51,11 @@ export class AudioService {
   async initMicrophone(): Promise<void> {
     this.localStream = await navigator.mediaDevices.getUserMedia({
       audio: {
+        // Native Chromium DSP runs in the audio thread — can't be starved by
+        // our main-thread CV work the way RNNoise's ScriptProcessorNode was.
+        // Quality is the WebRTC NS3 algorithm Discord used pre-Krisp.
         echoCancellation: true,
-        noiseSuppression: false, // RNNoise replaces browser noise suppression
+        noiseSuppression: true,
         autoGainControl: true,
       },
     });
@@ -72,49 +69,12 @@ export class AudioService {
     this.gainNode.gain.value = this.settings.inputVolume;
     const destination = this.audioContext.createMediaStreamDestination();
 
-    // Try to load RNNoise for noise suppression + VAD
-    try {
-      this.rnnoiseNode = await createRnnoiseNode(this.audioContext);
-      // Chain: mic → gain → rnnoise → destination
-      source.connect(this.gainNode);
-      this.gainNode.connect(this.rnnoiseNode.scriptNode);
-      this.rnnoiseNode.scriptNode.connect(destination);
-      console.log('[Audio] RNNoise loaded — noise suppression + VAD active');
-
-      // Poll RNNoise VAD score at ~20Hz with hangover timer.
-      // Hangover keeps the mic open for a short period after voice drops,
-      // preventing word endings from being clipped.
-      let vadHangoverRemaining = 0;
-      const VAD_HANGOVER_MS = 400;     // keep mic open 400ms after voice drops
-      const VAD_POLL_MS = 50;
-
-      this.vadPollId = window.setInterval(() => {
-        if (!this.rnnoiseNode || this.settings.inputMode !== 'vad') return;
-        const score = this.rnnoiseNode.getVadScore();
-        const wasActive = this.vadActive;
-
-        if (score > this.settings.vadSensitivity) {
-          // Voice detected — activate and reset hangover
-          this.vadActive = true;
-          vadHangoverRemaining = VAD_HANGOVER_MS;
-        } else if (vadHangoverRemaining > 0) {
-          // Below threshold but hangover still active — stay open
-          vadHangoverRemaining -= VAD_POLL_MS;
-        } else {
-          // Hangover expired — deactivate
-          this.vadActive = false;
-        }
-
-        if (this.vadActive !== wasActive) {
-          this.updateLocalTrackState();
-        }
-      }, VAD_POLL_MS) as unknown as number;
-    } catch (e) {
-      // Fallback: no RNNoise, use browser built-in noiseSuppression
-      console.warn('[Audio] RNNoise failed to load, falling back to browser noise suppression:', e);
-      source.connect(this.gainNode);
-      this.gainNode.connect(destination);
-    }
+    // Simple straight-through chain: mic → gain → destination. Noise
+    // suppression is handled by the browser's native DSP (set via the
+    // getUserMedia constraints above) which runs off the JS main thread.
+    source.connect(this.gainNode);
+    this.gainNode.connect(destination);
+    console.log('[Audio] Using native browser noise suppression');
 
     this.outputStream = destination.stream;
     // Apply initial transmit state through the normal path so the first
@@ -168,9 +128,9 @@ export class AudioService {
 
   private isTransmitting(): boolean {
     if (this.selfMuted) return false;
-    if (this.settings.inputMode === 'always') return true;
     if (this.settings.inputMode === 'ptt') return this.pttHeld;
-    return this.vadActive;
+    // 'always' (default) — transmit unless muted
+    return true;
   }
 
   setPTTState(held: boolean): void {
@@ -192,12 +152,10 @@ export class AudioService {
         ? 'selfMuted'
         : this.settings.inputMode === 'ptt'
           ? 'ptt=' + this.pttHeld
-          : 'vad=' + this.vadActive;
+          : 'always-open';
       console.log('[Audio] Local mic transmit → ' + enabled + ' (' + reason + ')');
     }
   }
-
-  // VAD is now handled by RNNoise polling in initMicrophone (no external call needed)
 
   // Connect to a new peer
   async connectToPeer(remoteName: string, isInitiator?: boolean): Promise<void> {
@@ -416,12 +374,6 @@ export class AudioService {
       peer.close();
     }
     this.peers.clear();
-    if (this.vadPollId !== null) {
-      clearInterval(this.vadPollId);
-      this.vadPollId = null;
-    }
-    this.rnnoiseNode?.destroy();
-    this.rnnoiseNode = null;
     this.outputStream?.getTracks().forEach((t) => t.stop());
     this.outputStream = null;
     this.localStream?.getTracks().forEach((t) => t.stop());

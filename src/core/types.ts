@@ -21,9 +21,8 @@ export interface PeerState {
 }
 
 export interface AudioSettings {
-  inputMode: 'ptt' | 'vad' | 'always';
+  inputMode: 'ptt' | 'always';
   inputVolume: number;       // 0.0 - 1.0
-  vadSensitivity: number;    // 0.0 - 0.5 (VAD threshold, lower = more sensitive)
   pttKey: string;
   playerVolumes: Record<string, number>; // summonerName -> 0.0-1.0
 }
