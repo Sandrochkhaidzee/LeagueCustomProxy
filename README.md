@@ -36,6 +36,39 @@ Disabled by default. Enable in **Settings → Auto-update**. When on, the app ch
 5. **Proximity volume** — Server-side AES-GCM encrypted position blobs + volume computation, so no client learns another player's exact position. Quadratic falloff up to 1200 game units (matches typical LoL vision range — if you can't see them, you can't hear them).
 6. **Audio processing** — Chromium's native WebRTC noise suppression + echo cancellation + AGC (runs in native audio thread). Opus at 128 kbps.
 
+## Compliance with Riot's third-party policy
+
+LoLProxChat is built to stay within the categories Riot Games explicitly publishes as allowed for third-party tools. The mechanisms it uses are the same as Discord's overlay, Mobalytics, Blitz, Porofessor, and similar widely-used apps that have operated continuously alongside League of Legends for years.
+
+**What it does (all in Riot's "allowed" column):**
+- Reads the **League Client (LCU) API** for game phase and your summoner identity, and the **Live Client Data API** (`https://127.0.0.1:2999`) for the player roster. Both are interfaces Riot specifically designed for third-party use ([LCU policy](https://www.riotgames.com/en/DevRel/changes-to-the-lcu-api-policy)).
+- Captures the **minimap region only** via standard Win32 `BitBlt` (same mechanism as OBS, ShareX, the Snipping Tool). No video frames from the game render path are touched.
+- Renders an **overlay window** that paints **outside** the LoL process — never injects, never reads game memory, never hooks DirectX. Riot's own Vanguard FAQ confirms: *"Overlays and internal tools using the API, game client, and in-game APIs should continue to function"* ([Vanguard FAQ](https://www.riotgames.com/en/DevRel/vanguard-faq)).
+
+**What it explicitly does NOT do (the Riot ban triggers):**
+- ❌ No game memory reading — Vanguard blocks this, and we never attempt it
+- ❌ No process injection, DLL loading, or DirectX hooking
+- ❌ No network packet interception, modification, or replay
+- ❌ No automation, scripting, or bot behavior — the app never takes any in-game action on your behalf
+- ❌ No decision-making aids ("draw conclusions for you") — no enemy ult timers, no warned-by, no jungle timers, no skill suggestions
+- ❌ No exposure of obfuscated information — no fog-of-war reveals, no warded-by indicators, no enemy item builds, no spectator-mode data
+- ❌ No in-game advertising (banned by Riot in May 2025) — the app shows no ads at all
+- ❌ Free + open source — Riot's monetization rules require a free tier; this app has only a free tier
+
+**Specifically the proximity audio:** the volume falloff to zero at ~1200 game units (typical LoL vision range) means by default you only hear enemies who are roughly close enough that the game would already give you visual indicators of their presence (minimap icon when they walk past warded ground, champion model when they enter your vision). The app does not reveal *where* an enemy is — only that one is somewhere within hearing range. This is strictly less information than what Discord voice chat with the same opponent already provides (which has zero distance modulation).
+
+**Honest caveats:**
+- Riot's policy requires developers to **notify them before public release** of LCU-using tools and use only their approved endpoint list. ProxChat is currently an unregistered personal project — fine for friends-and-family use, but if it ever grows into something widely distributed, registering through the [Riot Developer Portal](https://developer.riotgames.com/) is the right move.
+- Riot has **restricted LCU-using apps in Korea** as of the LCU API policy change. Users in Korean regions should not use this app.
+- LCU and Live Client Data are officially listed as "unsupported" — Riot can change endpoint shapes anytime, which would break the app (but won't ban users).
+- *Nothing here constitutes legal advice or a guarantee against action by Riot.* This section describes the design intent and the published rules, not a contract.
+
+References:
+- [League of Legends Third Party Applications policy](https://support-leagueoflegends.riotgames.com/hc/en-us/articles/225266848-Third-Party-Applications)
+- [Riot Developer Portal — General Policies](https://developer.riotgames.com/policies/general)
+- [Changes to the LCU API Policy](https://www.riotgames.com/en/DevRel/changes-to-the-lcu-api-policy)
+- [Vanguard FAQ for Third Party Applications](https://www.riotgames.com/en/DevRel/vanguard-faq)
+
 ## Usage
 
 1. Make sure LoL is set to **Borderless** mode (Settings → Video → Window Mode → Borderless).
