@@ -224,6 +224,11 @@ export class AudioService {
 
       if (signal.type === 'offer') {
         if (!peer) {
+          // Peer is reaching us first via the signaling channel — orchestrator's
+          // "Peer joined" log only fires once their first position broadcast
+          // arrives, which can be seconds later (or never if they're idle in
+          // base). Log here so the join is always traceable in diagnostics.
+          console.log('[Audio] Peer created via incoming offer: ' + signal.from);
           peer = await PeerConnection.create(signal.from, this.audioContext);
           this.peers.set(signal.from, peer);
           if (this.outputStream) peer.addLocalStream(this.outputStream);

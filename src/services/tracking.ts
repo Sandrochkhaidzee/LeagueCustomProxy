@@ -40,6 +40,7 @@ export class TrackingService {
   // Tracking state
   private lastPixelPos: { x: number; y: number } | null = null;
   private lastPosition: Position | null = null;
+  private lastPositionUpdateMs = 0;
   private deathPosition: Position | null = null;
   private expectedIconDiam = 0;
 
@@ -114,6 +115,31 @@ export class TrackingService {
 
   getState(): TrackingState { return this.state; }
   getLastPosition(): Position | null { return this.lastPosition; }
+
+  // Single chokepoint for lastPosition writes so we can flag impossible
+  // jumps (recall/TP is fine; CV mis-tracking the icon to a wrong location
+  // looks identical in raw output and is a primary suspect for the
+  // "loud voice from far away" symptom). Threshold of 2000 game-units/sec
+  // sits well above any legit champion movement (~750 u/s top end) but
+  // below recall-from-fountain.
+  private setLastPosition(newPos: Position, source: string): void {
+    if (this.lastPosition && this.lastPositionUpdateMs > 0) {
+      const dx = newPos.x - this.lastPosition.x;
+      const dy = newPos.y - this.lastPosition.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const dt = Math.max(0.05, (performance.now() - this.lastPositionUpdateMs) / 1000);
+      const speed = dist / dt;
+      if (speed > 2000) {
+        console.warn('[Tracking] WARN: position jumped ' + Math.round(dist) +
+          ' units in ' + dt.toFixed(2) + 's (' + Math.round(speed) + ' u/s) via ' + source +
+          ' — recall/TP or CV mis-tracking. (' +
+          Math.round(this.lastPosition.x) + ',' + Math.round(this.lastPosition.y) + ') -> (' +
+          Math.round(newPos.x) + ',' + Math.round(newPos.y) + ')');
+      }
+    }
+    this.lastPosition = newPos;
+    this.lastPositionUpdateMs = performance.now();
+  }
   getFilteredImageUrl(): string | null { return this.filteredImageUrl; }
   /** Seconds since the last successful frame-to-frame lock, or 0 if currently tracking. */
   getHoldDurationSec(): number {
@@ -861,7 +887,7 @@ export class TrackingService {
     const cy = this.minimapRegion.y + blob.cy;
 
     this.lastPixelPos = { x: cx, y: cy };
-    this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
+    this.setLastPosition(this.pixelToGamePosition(cx, cy, this.minimapRegion), 'lockOnBlob');
     this.state = TrackingState.LOCKED;
     this.lockedTickCount = 0;
     this.scanFrameCount = 0;
@@ -994,13 +1020,14 @@ export class TrackingService {
         const cx = this.minimapRegion.x + bestClsBlob.cx;
         const cy = this.minimapRegion.y + bestClsBlob.cy;
         this.lastPixelPos = { x: cx, y: cy };
-        this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
+        const newPos = this.pixelToGamePosition(cx, cy, this.minimapRegion);
+        this.setLastPosition(newPos, 'classifier-reacquire');
         this.velocityX = 0;
         this.velocityY = 0;
         this.lockedTickCount++;
         console.log('[Tracking] Re-acquired via classifier (cls=' + bestClsScore.toFixed(2) +
           '): pixel(' + cx + ',' + cy + ')' +
-          ' game(' + Math.round(this.lastPosition.x) + ',' + Math.round(this.lastPosition.y) + ')');
+          ' game(' + Math.round(newPos.x) + ',' + Math.round(newPos.y) + ')');
         if (this.onPositionUpdate && this.lastPosition) {
           this.onPositionUpdate(this.lastPosition);
         }
@@ -1041,7 +1068,7 @@ export class TrackingService {
     }
 
     this.lastPixelPos = { x: cx, y: cy };
-    this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
+    this.setLastPosition(this.pixelToGamePosition(cx, cy, this.minimapRegion), 'locked-track');
     this.lockedTickCount = 0;
     this.holdStartMs = 0;
 
@@ -1072,7 +1099,7 @@ export class TrackingService {
       const cx = this.minimapRegion.x + newRegX;
       const cy = this.minimapRegion.y + newRegY;
       this.lastPixelPos = { x: cx, y: cy };
-      this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);
+      this.setLastPosition(this.pixelToGamePosition(cx, cy, this.minimapRegion), 'extrapolate');
 
       // Decay velocity: at 8 FPS this was 0.7/frame → 0.7^8 ≈ 0.058 per second.
       // Preserve that wall-clock rate regardless of scan rate.

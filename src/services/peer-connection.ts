@@ -248,8 +248,12 @@ export class PeerConnection {
       this.smoothedVolume = clamped;
     } else {
       // Time-based EMA with ~300ms half-life. Damps spikes from CV jitter.
+      // Cap alpha so even a long gap (e.g. friend was out of range and
+      // suddenly re-enters) ramps in over multiple ticks instead of snapping
+      // to a loud value. 0.3 → at the existing ~3 FPS volume update cadence,
+      // the smoother reaches ~95% of target in about a second.
       const dt = (now - this.lastSetVolumeMs) / 1000;
-      const alpha = Math.min(1, 1 - Math.exp(-dt / 0.3));
+      const alpha = Math.min(0.3, 1 - Math.exp(-dt / 0.3));
       this.smoothedVolume = this.smoothedVolume * (1 - alpha) + clamped * alpha;
     }
     this.lastSetVolumeMs = now;
