@@ -15,6 +15,10 @@ Download the latest `proxchat.exe` from [Releases](https://github.com/danthi123/
 
 Launch the exe before or during a League match. The overlay auto-attaches beside the minimap once a game is detected.
 
+### Independent malware scan
+
+Every release exe is auto-submitted to [VirusTotal](https://www.virustotal.com/) via a GitHub Action (`.github/workflows/virustotal.yml`) the moment the release is published. A scan permalink for each `.exe` asset gets appended to the release body within ~30 seconds, so you can verify the binary against 70+ antivirus engines before downloading. Look for the **"Virus Total"** section near the bottom of any release page.
+
 ### First-run on Windows: SmartScreen warning
 
 The exe isn't code-signed (signing certs are paid + tied to a legal entity, not worth it for a personal open-source project), so the first time you run it Windows will show one of:
@@ -266,8 +270,12 @@ gh release create v0.1.X src-tauri/target/release/proxchat.exe \
 
 Users can always grab the most recent via:
 ```
-https://github.com/danthi123/LoLProxyChat/releases/latest/download/proxchat.exe
+https://github.com/danthi123/LoLProxyChat/releases/latest/download/lolproxchat.exe
 ```
+
+(Legacy URL `proxchat.exe` is also published in releases for backward compatibility with auto-update on clients ≤ v0.1.17.)
+
+**Maintainer one-time setup for VirusTotal scan workflow:** grab a free API key from [virustotal.com](https://www.virustotal.com/gui/my-apikey), then **Settings → Secrets and variables → Actions → New repository secret** named `VT_API_KEY`. The workflow at `.github/workflows/virustotal.yml` will then auto-scan every published release's exe assets and append permalinks to the release body.
 
 ## Acknowledgements
 

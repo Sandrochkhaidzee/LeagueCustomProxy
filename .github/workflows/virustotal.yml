@@ -1,0 +1,42 @@
+name: VirusTotal scan release assets
+
+# Submits every .exe attached to a GitHub Release to VirusTotal's public API
+# and appends the scan permalinks to the release body. Lets users see an
+# independent malware scan before downloading.
+#
+# Setup (one-time, per repo):
+#   1. Get a free API key from https://www.virustotal.com/gui/my-apikey
+#   2. Settings → Secrets and variables → Actions → New repository secret
+#      Name:  VT_API_KEY
+#      Value: <your key>
+#
+# Limits of the free VirusTotal public API:
+#   - 4 requests/minute, 500/day (a single release submission uses ~2 requests)
+#   - 32 MB per file max (our exe is ~28 MB, fits)
+
+on:
+  # Fires whenever a release is published *or edited*. Editing is useful for
+  # retroactively scanning older releases — bump the body text once and the
+  # workflow re-runs against the same assets.
+  release:
+    types: [published, edited]
+
+permissions:
+  contents: write  # required so the action can update the release body
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Submit release assets to VirusTotal
+        uses: crazy-max/ghaction-virustotal@v4
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          # When triggered by a release event, the action auto-discovers
+          # the release's assets and uploads them. The glob below is
+          # advisory/fallback.
+          files: |
+            *.exe
+          # Append a "Virus Total" section to the release body with one
+          # permalink per scanned asset.
+          update_release_body: true
