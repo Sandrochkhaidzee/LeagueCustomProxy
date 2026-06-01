@@ -37,8 +37,16 @@ const minimapBorder = document.getElementById('minimap-border')!;
 const MAP_WIDTH = 14820;
 const MAP_HEIGHT = 14881;
 
-// Debug overlay state (off by default)
-let debugEnabled = false;
+// Debug overlay state — persisted so users don't lose early-startup logs
+// each launch. Applied to the live logger before any other code runs.
+let debugEnabled = localStorage.getItem('proxchat.debug') === '1';
+setLoggingEnabled(debugEnabled);
+// Sync button + scan-rate row to persisted state once the DOM listeners below are wired
+queueMicrotask(() => {
+  btnDebug.textContent = debugEnabled ? 'ON' : 'OFF';
+  btnDebug.classList.toggle('active', debugEnabled);
+  scanRateRow.classList.toggle('hidden', !debugEnabled);
+});
 
 // Per-player volume cache (so sliders don't reset on re-render)
 const playerVolumes: Map<string, number> = new Map();
@@ -85,6 +93,7 @@ btnDebug.addEventListener('click', () => {
   btnDebug.classList.toggle('active', debugEnabled);
   scanRateRow.classList.toggle('hidden', !debugEnabled);
   setLoggingEnabled(debugEnabled);
+  localStorage.setItem('proxchat.debug', debugEnabled ? '1' : '0');
   // Immediately hide debug elements when toggled off
   if (!debugEnabled) {
     trackingDot.style.display = 'none';

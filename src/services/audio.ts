@@ -3,6 +3,14 @@ import { SignalingService, SignalMessage } from './signaling';
 import { AudioSettings } from '../core/types';
 import { createRnnoiseNode, RnnoiseNode } from './rnnoise';
 
+function peakRms(buf: Float32Array): number {
+  let sumSq = 0;
+  for (let i = 0; i < buf.length; i++) {
+    sumSq += buf[i] * buf[i];
+  }
+  return Math.sqrt(sumSq / buf.length);
+}
+
 export class AudioService {
   private localStream: MediaStream | null = null;
   private peers: Map<string, PeerConnection> = new Map();
@@ -112,6 +120,50 @@ export class AudioService {
     // Apply initial transmit state through the normal path so the first
     // [Audio] Local mic transmit log line is emitted.
     this.updateLocalTrackState();
+
+    // Attach analysers to monitor whether the mic is actually producing audio
+    // and whether the WebRTC-output stream contains audio. Reported every 2s.
+    this.startAudioLevelMonitor(source, destination);
+  }
+
+  private micLevelAnalyser: AnalyserNode | null = null;
+  private outputLevelAnalyser: AnalyserNode | null = null;
+  private levelMonitorId: number | null = null;
+
+  private startAudioLevelMonitor(
+    micSource: MediaStreamAudioSourceNode,
+    outputDest: MediaStreamAudioDestinationNode,
+  ): void {
+    if (!this.audioContext) return;
+    this.micLevelAnalyser = this.audioContext.createAnalyser();
+    this.micLevelAnalyser.fftSize = 1024;
+    micSource.connect(this.micLevelAnalyser);
+
+    // The destination node is a sink — to monitor its output we need to
+    // re-source from its stream via a second source node.
+    const outSource = this.audioContext.createMediaStreamSource(outputDest.stream);
+    this.outputLevelAnalyser = this.audioContext.createAnalyser();
+    this.outputLevelAnalyser.fftSize = 1024;
+    outSource.connect(this.outputLevelAnalyser);
+
+    const micBuf = new Float32Array(this.micLevelAnalyser.fftSize);
+    const outBuf = new Float32Array(this.outputLevelAnalyser.fftSize);
+
+    this.levelMonitorId = window.setInterval(() => {
+      if (!this.micLevelAnalyser || !this.outputLevelAnalyser) return;
+      this.micLevelAnalyser.getFloatTimeDomainData(micBuf);
+      this.outputLevelAnalyser.getFloatTimeDomainData(outBuf);
+      const micPeak = peakRms(micBuf);
+      const outPeak = peakRms(outBuf);
+      const transmitting = !this.selfMuted && this.isTransmitting();
+      console.log(
+        '[Audio] mic=' + micPeak.toFixed(3) +
+        ' out=' + outPeak.toFixed(3) +
+        ' transmit=' + transmitting +
+        ' inputMode=' + this.settings.inputMode +
+        ' selfMuted=' + this.selfMuted,
+      );
+    }, 2000) as unknown as number;
   }
 
   private isTransmitting(): boolean {
