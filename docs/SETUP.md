@@ -5,11 +5,12 @@ This is the deeper guide. For a quick start, see the top-level [README](../READM
 ## 1. Run the Client (Most Users)
 
 1. **Set League of Legends to Borderless mode** (Settings → Video → Window Mode → Borderless). This is required — DX9 true fullscreen takes exclusive GPU output and no overlay can render over it.
-2. Download `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxChat/releases/latest).
+2. Download `lolproxchat.exe` from [Releases](https://github.com/danthi123/LoLProxChat/releases/latest).
 3. Run it. The panel appears in the middle of the screen until a game starts, showing the current lifecycle status (e.g. "Waiting for League of Legends", "In champion select", "Joining game...").
-4. Once you load into a match the panel jumps to the left edge of the minimap. The transparent region over the minimap is the calibration overlay (purely visual right now — manual drag/resize handles aren't wired up).
+4. Once you load into a match the panel jumps to the left edge of the minimap. You can drag it anywhere by grabbing the title bar. A second, separately-positioned scanner window snaps over the minimap itself (transparent + click-through, normally invisible — it only paints when Debug is on).
 5. **Input mode** defaults to **Always Open** (mic always live unless self-muted). Switch to **Push to Talk (F8 hold)** in Settings if preferred. Per-player MUTE buttons mute that specific player for you only.
-6. Toggle **Settings → Debug** to visualize the HSV-filtered minimap and tracking dot. Debug mode also exposes a **Scan Rate** slider — default 50 ≈ 30 FPS, max 100 = 60 FPS. Smoothing constants are scan-rate invariant. Debug also writes a log file at `%LOCALAPPDATA%\com.proxchat.app\proxchat.log` (truncated each session) so you can inspect issues without dev tools.
+6. **Pick a specific input/output device** under **Settings → Input Device / Output Device**. Defaults to whatever Windows has set as the communications device for each. Selections persist in localStorage. Changing the mic mid-game swaps the source in place without dropping any WebRTC peer connections; changing the output calls `AudioContext.setSinkId` on the existing context.
+7. Toggle **Settings → Debug** to visualize the HSV-filtered minimap and tracking dot (drawn into the scanner window). Debug mode also exposes a **Scan Rate** slider — default 50 ≈ 30 FPS, max 100 = 60 FPS. Smoothing constants are scan-rate invariant. Debug also starts writing a log file at `%LOCALAPPDATA%\com.proxchat.app\lolproxchat.log` (truncated each session). The fastest way to grab it: **Settings → Debug Logs → OPEN** pops Explorer at that folder so you can drag `lolproxchat.log` straight into a GitHub issue.
 
 ### Global shortcuts (work over LoL when in Borderless)
 - `Ctrl+Shift+M` — toggle self-mute
@@ -19,15 +20,15 @@ This is the deeper guide. For a quick start, see the top-level [README](../READM
 
 Off by default. Toggle in **Settings → Auto-update**. When on:
 1. App checks the GitHub Releases API ~5 s after launch.
-2. If `tag_name` is newer than the running version, downloads `proxchat.exe` from the release to `<exe-dir>/proxchat.exe.new`.
+2. If `tag_name` is newer than the running version, downloads `lolproxchat.exe` from the release to `<exe-dir>/lolproxchat.exe.new`.
 3. Spawns the new binary with `--complete-update <old-path>` and exits.
 4. The new process waits ~800 ms (so the old process releases its file lock), deletes the old `.exe` with up to 5 retries, then renames itself from `.exe.new` → `.exe` (renaming a running `.exe` is allowed on Windows; deleting one isn't).
 
 Manual `CHECK` button in Settings works regardless of the toggle. The setting persists via localStorage in the WebView2 user data directory.
 
 ### Removal
-1. Delete the `proxchat.exe` you downloaded.
-2. Delete `%LOCALAPPDATA%\com.proxchat.app\` — contains the WebView2 cache (cookies, localStorage, IndexedDB) and `proxchat.log` if Debug was ever enabled. That's the entire footprint.
+1. Delete the `lolproxchat.exe` you downloaded.
+2. Delete `%LOCALAPPDATA%\com.proxchat.app\` — contains the WebView2 cache (cookies, localStorage, IndexedDB) and `lolproxchat.log` if Debug was ever enabled. That's the entire footprint.
 
 By default the client talks to `https://proxchat.dant123.com`. To point at a different server, build from source (see below) with `PROXCHAT_SERVER=https://your-server.example.com` in `.env`.
 
@@ -48,11 +49,11 @@ cp .env.example .env       # optional — edit PROXCHAT_SERVER if self-hosting
 npx tauri build
 ```
 
-Output: `src-tauri/target/release/proxchat.exe` (~27 MB).
+Output: `src-tauri/target/release/lolproxchat.exe` (~27 MB).
 
 For iterative dev, rebuild and relaunch — there's no `tauri dev` flow because no webpack dev server is configured:
 ```bash
-npx tauri build && src-tauri/target/release/proxchat.exe
+npx tauri build && src-tauri/target/release/lolproxchat.exe
 ```
 
 ## 3. Self-Host the Signaling Server
@@ -191,7 +192,7 @@ cd server && npm test     # vitest — server room/volume/turn logic
 ```bash
 # Bump src-tauri/Cargo.toml:  version = "0.1.X"
 npx tauri build
-gh release create v0.1.X src-tauri/target/release/proxchat.exe \
+gh release create v0.1.X src-tauri/target/release/lolproxchat.exe \
   --title "v0.1.X — summary" \
   --notes "what changed"
 ```
@@ -212,7 +213,8 @@ python scripts/train_champion_classifier.py
 |---|---|
 | Overlay invisible during gameplay | LoL is in true fullscreen — switch to **Borderless** mode in Video Settings. |
 | Overlay sits in middle of screen forever | No game detected, OR CV hasn't locked on yet. Lifecycle text in the panel tells you which phase you're in. |
-| Overlay sits above the minimap instead of beside it | `position_overlay` got minimap bounds with wrong dimensions — toggle Debug on and check the tracking-state log line. |
+| Overlay sits above the minimap instead of beside it | `position_scanner` got minimap bounds with wrong dimensions — toggle Debug on and check the tracking-state log line. (The panel window itself never auto-positions; only the scanner does.) |
+| Can't drag the panel via the title bar | `src-tauri/capabilities/default.json` is missing or doesn't grant `core:window:allow-start-dragging` — Tauri 2 silently denies built-in IPC without a capability grant. Pre-v0.1.21 builds had this bug. |
 | Overlay is offset slightly from the minimap on a laptop | DPI scaling — should be handled in v0.1.5+. If you're on an older build, update. |
 | Per-player MUTE button doesn't visibly react | Should be fixed in v0.1.16+. If still broken, check the panel hit-rect via Debug logs. |
 | Audio cuts out / crackles | Almost always main-thread contention from CV at high scan rates. Drop **Scan Rate** to ~50 (30 FPS). v0.1.15+ uses Chromium's native NS which is much more robust than the old RNNoise path. |

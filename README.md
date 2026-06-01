@@ -90,7 +90,7 @@ References:
 
 1. Make sure LoL is set to **Borderless** mode (Settings → Video → Window Mode → Borderless).
 2. Launch `lolproxchat.exe`. The panel appears in the middle of the screen until a game starts (it'll show the current lifecycle phase — "Waiting for League of Legends", "In champion select", etc).
-3. Once you load into a match the panel jumps to the left edge of the minimap. Other players also running ProxChat in the same match will appear in the list within a few seconds.
+3. Once you load into a match the panel jumps to the left edge of the minimap (you can drag it anywhere from the title bar). Other players also running LoLProxChat in the same match will appear in the list within a few seconds.
 4. **Always Open** mic is the default — just talk and they'll hear you, scaled by in-game distance. Switch to **Push to Talk (F8)** in Settings if you'd prefer.
 5. Click **MIC** to self-mute, **VOL** to mute everyone, or the per-row **MUTE** button to silence a specific player.
 6. Pick a specific mic / speaker under **Settings → Input Device / Output Device** if Windows' default isn't what you want.
@@ -114,21 +114,26 @@ Because it's a portable exe with no installer, removing it is a two-step process
 1. **Delete the exe** wherever you put it (probably Downloads or a folder you chose).
 2. **Delete WebView2 / app data:** `%LOCALAPPDATA%\com.proxchat.app\` — contains the WebView2 cache (cookies, localStorage, IndexedDB) and `lolproxchat.log` if you ever enabled Debug. Open `Run` (Win+R) and paste `%LOCALAPPDATA%\com.proxchat.app\` to find it.
 
-That's the full footprint. No registry entries owned by ProxChat itself, no entries under `Programs and Features`, no startup tasks, no services.
+That's the full footprint. No registry entries owned by LoLProxChat itself, no entries under `Programs and Features`, no startup tasks, no services.
 
 ## Architecture
 
 ```
 lolproxchat.exe (Tauri 2)
-├── Rust backend       — Win32 screen capture, LCU/Live Client polling, window positioning, global shortcuts
-└── WebView2 frontend  — orchestrator, signaling, WebRTC, CV, ONNX champion classifier
+├── Rust backend          — Win32 screen capture, LCU/Live Client polling, window positioning, global shortcuts
+└── WebView2 frontend
+    ├── overlay window    — draggable panel UI (player list, settings)
+    └── scanner window    — transparent, click-through, auto-pinned over the minimap;
+                            renders the CV-filtered debug image and tracking dot when Debug is on
 
-server/                — Node WebSocket + HTTP signaling server
-├── /ws                — WebSocket upgrade for room join, signaling, presence
-├── /compute-volumes   — POST: encrypted position blobs → per-peer volumes
-├── /turn-credentials  — GET: ephemeral HMAC TURN credentials
-└── /health            — health check
+server/                   — Node WebSocket + HTTP signaling server
+├── /ws                   — WebSocket upgrade for room join, signaling, presence
+├── /compute-volumes      — POST: encrypted position blobs → per-peer volumes
+├── /turn-credentials     — GET: ephemeral HMAC TURN credentials
+└── /health               — health check
 ```
+
+The panel and scanner are two separate Tauri windows so the panel can stay free of `WDA_EXCLUDEFROMCAPTURE` (which would otherwise break ShadowPlay / Game Bar capture). The scanner gets that flag only while Debug is on, just long enough to break the HSV-filter capture feedback loop.
 
 **Key client services** (under `src/services/`):
 - `Orchestrator` — wires game state → tracking → signaling → audio
@@ -140,13 +145,16 @@ server/                — Node WebSocket + HTTP signaling server
 - `VolumeClient` — calls `/compute-volumes` with encrypted blobs
 - `DataChannelService` — WebRTC data channels for encrypted blob exchange
 - `GameStateService` — wraps Tauri commands for LCU + Live Client Data
+- `Devices` — localStorage-backed input/output audio device pick, used by `AudioService` when (re-)initializing the mic stream and the shared `AudioContext` output sink
 - `Updater` — thin wrapper over the Rust update commands, persists the opt-in toggle in localStorage
 
 **Rust commands** (under `src-tauri/src/`):
 - `capture.rs` — `set_capture_bounds`, `capture_minimap` (Win32 GDI BitBlt)
 - `lcu.rs` — `check_league_running`, `get_game_state`, `get_live_client_data`, `read_text_file`
 - `updater.rs` — `check_for_update` (GitHub Releases API), `download_and_apply_update` (download + spawn-handoff + exit). Handles the `--complete-update <old-path>` startup arg that finishes the in-place binary swap.
-- `main.rs` — `position_overlay`, `get_screen_size`, `set_panel_size`, `append_log`. Also sets `WDA_EXCLUDEFROMCAPTURE` on the overlay window (so its own debug paint doesn't feed back into the next capture), polls cursor position to dynamically toggle click-through over non-panel regions, registers global shortcuts (`Ctrl+Shift+M` toggle self-mute, `F8` push-to-talk), opens the optional log file, and calls into `updater::handle_complete_update_arg` before Tauri starts.
+- `main.rs` — `position_scanner` / `hide_scanner` (auto-pin the scanner window over the detected minimap region), `set_excluded_from_capture` (toggles `WDA_EXCLUDEFROMCAPTURE` on the scanner when Debug flips), `get_screen_size`, `set_panel_size`, `append_log`, `open_log_folder`. Also runs the cursor-position polling loop that dynamically toggles click-through over non-panel regions (skipped while LMB is held so Windows' native window-drag doesn't tear down mid-move), registers global shortcuts (`Ctrl+Shift+M` toggle self-mute, `F8` push-to-talk), opens the rolling log file at `%LOCALAPPDATA%\com.proxchat.app\lolproxchat.log`, and calls into `updater::handle_complete_update_arg` before Tauri starts.
+
+**Tauri 2 capabilities:** `src-tauri/capabilities/default.json` grants both windows `core:window:allow-start-dragging` plus event emit/listen. Without this file, Tauri 2 silently denies all built-in plugin IPC (drag, etc) even though custom invoke commands keep working — so don't delete it.
 
 ## Build From Source
 
@@ -223,7 +231,8 @@ npm test                  # jest — core logic (room hashing, proximity, etc)
 ```
 src/
 ├── background/          — orchestrator entry point (loaded into the overlay window)
-├── overlay/             — overlay window (HTML/CSS/TS)
+├── overlay/             — panel window (HTML/CSS/TS) — player list, settings, drag handle
+├── scanner/             — scanner window (HTML/CSS/TS) — click-through overlay over the minimap
 ├── core/                — pure logic modules (tested)
 │   ├── config.ts        — server URL, ICE servers
 │   ├── types.ts
@@ -240,6 +249,8 @@ src-tauri/               — Tauri 2 Rust backend
 │   ├── capture.rs       — Win32 BitBlt screen capture
 │   ├── lcu.rs           — League Client + Live Client Data APIs
 │   └── updater.rs       — GitHub Releases check + in-place exe swap
+├── capabilities/
+│   └── default.json     — Tauri 2 ACL grant (drag, event emit/listen) for overlay + scanner
 ├── Cargo.toml
 └── tauri.conf.json
 
