@@ -77,11 +77,13 @@ server/                — Node WebSocket + HTTP signaling server
 - `VolumeClient` — calls `/compute-volumes` with encrypted blobs
 - `DataChannelService` — WebRTC data channels for encrypted blob exchange
 - `GameStateService` — wraps Tauri commands for LCU + Live Client Data
+- `Updater` — thin wrapper over the Rust update commands, persists the opt-in toggle in localStorage
 
 **Rust commands** (under `src-tauri/src/`):
 - `capture.rs` — `set_capture_bounds`, `capture_minimap` (Win32 GDI BitBlt)
 - `lcu.rs` — `check_league_running`, `get_game_state`, `get_live_client_data`, `read_text_file`
-- `main.rs` — `position_overlay`, `get_screen_size`, `set_panel_size`, `append_log`. Also sets `WDA_EXCLUDEFROMCAPTURE` on the overlay window (so its own debug paint doesn't feed back into the next capture), polls cursor position to dynamically toggle click-through over non-panel regions, and registers global shortcuts (`Ctrl+Shift+M` toggle self-mute, `F8` push-to-talk).
+- `updater.rs` — `check_for_update` (GitHub Releases API), `download_and_apply_update` (download + spawn-handoff + exit). Handles the `--complete-update <old-path>` startup arg that finishes the in-place binary swap.
+- `main.rs` — `position_overlay`, `get_screen_size`, `set_panel_size`, `append_log`. Also sets `WDA_EXCLUDEFROMCAPTURE` on the overlay window (so its own debug paint doesn't feed back into the next capture), polls cursor position to dynamically toggle click-through over non-panel regions, registers global shortcuts (`Ctrl+Shift+M` toggle self-mute, `F8` push-to-talk), opens the optional log file, and calls into `updater::handle_complete_update_arg` before Tauri starts.
 
 ## Build From Source
 
@@ -140,9 +142,11 @@ npm run build && npm start
 | `TURN_SERVER` | optional | TURN/STUN server hostname (returned to clients) |
 | `TURN_SECRET` | optional | coturn shared secret for HMAC credential generation |
 
-If `TURN_SERVER`/`TURN_SECRET` are unset, clients fall back to Google STUN only — fine for most NAT setups, may fail behind symmetric NAT.
+If `TURN_SERVER`/`TURN_SECRET` are unset, clients fall back to Google STUN only — fine for most home NAT setups, may fail behind symmetric NAT (corporate, some mobile networks).
 
-A working `docker-compose.proxchat.yml` is included at the repo root with the server + coturn sidecar. Front it with a TLS-terminating reverse proxy (Caddy, nginx, Traefik) that proxies `/` to `:3100` and supports WebSocket upgrades.
+`docker-compose.proxchat.yml` at the repo root includes both `server` and a `coturn` sidecar. Front the server with a TLS-terminating reverse proxy (Caddy, nginx, Traefik) that proxies `/` to `:3100` and supports WebSocket upgrades.
+
+**TURN/TURNS:** The coturn entry in the compose is configured to run as root and mount a wildcard cert directory via `${TLS_CERT_DIR}` (per-host env var, never committed). With that set up, TURNS (TLS) on port 5349 works alongside plain TURN on 3478. See `docs/SETUP.md` for the cert mount details, router port-forwarding requirements, and the cron pattern for picking up renewed certs.
 
 ### Tests
 
@@ -170,8 +174,9 @@ src/
 src-tauri/               — Tauri 2 Rust backend
 ├── src/
 │   ├── main.rs
-│   ├── capture.rs
-│   └── lcu.rs
+│   ├── capture.rs       — Win32 BitBlt screen capture
+│   ├── lcu.rs           — League Client + Live Client Data APIs
+│   └── updater.rs       — GitHub Releases check + in-place exe swap
 ├── Cargo.toml
 └── tauri.conf.json
 
@@ -186,12 +191,17 @@ server/                  — Node signaling server
 ├── tests/
 └── Dockerfile
 
+docker-compose.proxchat.yml  — server + coturn reference compose
+
 models/
 ├── champion_classifier.onnx
 └── champion_labels.json
 
-scripts/
-└── train_champion_classifier.py
+scripts/                 — training + CV testing utilities
+├── train_champion_classifier.py
+├── update-champion-icons.js
+├── test-cv-pipeline.js
+└── ...
 
 docs/
 ├── SETUP.md             — deeper deployment + self-host guide
