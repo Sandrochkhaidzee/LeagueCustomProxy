@@ -195,22 +195,23 @@ export class PeerConnection {
   }
 
   /**
-   * Modify SDP to set Opus bitrate to 128kbps and enable DTX.
-   * DTX (Discontinuous Transmission) stops sending packets during silence,
-   * saving bandwidth without affecting audio quality.
+   * Modify SDP to set Opus bitrate to 128kbps and disable DTX.
+   * DTX (Discontinuous Transmission) stops sending packets during silence
+   * to save bandwidth, but the ramp out of silence-mode at speech onset
+   * clips the first packet or two — audible as missing word starts. The
+   * bandwidth cost of always-on transmission is trivial for voice.
    */
   private enhanceOpusSdp(sdp: string): string {
     return sdp.replace(
       /a=fmtp:111 (.*)/g,
       (match, params) => {
         let enhanced = params;
-        // Set max bitrate to 128kbps
         if (!enhanced.includes('maxaveragebitrate')) {
           enhanced += ';maxaveragebitrate=128000';
         }
-        // Enable DTX (silence suppression)
+        // Explicitly disable DTX so word starts/ends aren't clipped.
         if (!enhanced.includes('usedtx')) {
-          enhanced += ';usedtx=1';
+          enhanced += ';usedtx=0';
         }
         return 'a=fmtp:111 ' + enhanced;
       }
