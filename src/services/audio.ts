@@ -299,13 +299,24 @@ export class AudioService {
 
   // Mute controls
   toggleSelfMute(): boolean {
-    this.selfMuted = !this.selfMuted;
-    this.updateLocalTrackState();
+    this.setSelfMuted(!this.selfMuted);
     return this.selfMuted;
   }
 
+  setSelfMuted(value: boolean): void {
+    if (this.selfMuted === value) return;
+    this.selfMuted = value;
+    this.updateLocalTrackState();
+  }
+
   toggleMuteAll(): boolean {
-    this.muteAll = !this.muteAll;
+    this.setMuteAll(!this.muteAll);
+    return this.muteAll;
+  }
+
+  setMuteAll(value: boolean): void {
+    if (this.muteAll === value) return;
+    this.muteAll = value;
     for (const [name, peer] of this.peers) {
       if (this.muteAll || this.mutedPlayers.has(name)) {
         peer.mute();
@@ -313,7 +324,6 @@ export class AudioService {
         peer.unmute();
       }
     }
-    return this.muteAll;
   }
 
   toggleMutePlayer(name: string): boolean {

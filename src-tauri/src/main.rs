@@ -45,50 +45,44 @@ fn rust_log<S: AsRef<str>>(app: &tauri::AppHandle, msg: S) {
     let _ = f.flush();
 }
 
-// Hit-test box (in window-local px) for which clicks the overlay should
-// actually receive — everything else passes through to the game.
-// Width includes the 4px gap to the calibration region so the panel border
-// isn't a pixel-thin edge to land on.
-static PANEL_HIT_RECT: Mutex<(i32, i32)> = Mutex::new((244, 400));
+// Hit-test box (in window-local px) for which clicks the overlay (panel)
+// should actually receive — everything else passes through to the game.
+static PANEL_HIT_RECT: Mutex<(i32, i32)> = Mutex::new((240, 400));
 
 /// JS calls this whenever the panel resizes (settings expand, collapse, etc).
 #[tauri::command]
 fn set_panel_size(width: i32, height: i32) {
-    *PANEL_HIT_RECT.lock().unwrap() = (width + 4, height);
+    *PANEL_HIT_RECT.lock().unwrap() = (width, height);
 }
 
-/// Reposition the overlay so the control panel sits immediately left of the
-/// minimap and the (transparent) calibration region overlaps the minimap itself.
+/// Position the scanner window directly over the minimap region.
 /// `x, y, width, height` are physical screen pixels (from the BitBlt capture).
-/// The PANEL_WIDTH/GAP constants are CSS pixels, so they must be scaled by the
-/// monitor's DPI factor before being mixed with physical coordinates.
+/// Also makes the scanner visible on the first call (it starts hidden).
 #[tauri::command]
-fn position_overlay(app: tauri::AppHandle, x: f64, y: f64, width: f64, height: f64) {
-    if let Some(window) = app.get_webview_window("overlay") {
-        // Must match .panel width + #minimap-border margin-left in overlay.css (CSS px).
-        const PANEL_WIDTH_CSS: f64 = 240.0;
-        const PANEL_GAP_CSS: f64 = 4.0;
+fn position_scanner(app: tauri::AppHandle, x: f64, y: f64, width: f64, height: f64) {
+    let Some(window) = app.get_webview_window("scanner") else { return };
+    let _ = window.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
+    let _ = window.set_size(tauri::PhysicalSize::new(width as u32, height as u32));
+    let _ = window.show();
+}
 
-        let scale = window.scale_factor().unwrap_or(1.0);
-        let panel_width_phys = PANEL_WIDTH_CSS * scale;
-        let panel_gap_phys = PANEL_GAP_CSS * scale;
-
-        let total_width = (panel_width_phys + panel_gap_phys + width) as i32;
-        let new_x = (x - panel_width_phys - panel_gap_phys) as i32;
-
-        let _ = window.set_position(tauri::PhysicalPosition::new(new_x, y as i32));
-        let _ = window.set_size(tauri::PhysicalSize::new(total_width as u32, height as u32));
+/// Hide the scanner window. Called when a session ends so the scanner isn't
+/// floating mid-screen between games.
+#[tauri::command]
+fn hide_scanner(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("scanner") {
+        let _ = window.hide();
     }
 }
 
-/// Toggle WDA_EXCLUDEFROMCAPTURE on the overlay window. When `excluded` is
-/// true the overlay becomes invisible to GDI BitBlt and most screen capture
-/// software — which prevents the debug-paint feedback loop but also disables
-/// recording in Nvidia ShadowPlay / Win11 Game Bar. Called from the frontend
-/// when the user toggles Debug, so non-debug users keep ShadowPlay working.
+/// Toggle WDA_EXCLUDEFROMCAPTURE on the **scanner** window. Set true only
+/// when Debug is on — that's the only case where the scanner paints into the
+/// minimap region (HSV-filtered debug image) and would feed back into the next
+/// BitBlt frame. The panel never carries this flag so ShadowPlay / Game Bar
+/// always record normally.
 #[tauri::command]
 fn set_excluded_from_capture(app: tauri::AppHandle, excluded: bool) -> Result<(), String> {
-    let window = app.get_webview_window("overlay").ok_or("no overlay window")?;
+    let window = app.get_webview_window("scanner").ok_or("no scanner window")?;
     let hwnd = window.hwnd().map_err(|e| e.to_string())?;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -188,17 +182,16 @@ fn main() {
                 return Ok(());
             };
 
-            // NOTE: WDA_EXCLUDEFROMCAPTURE is intentionally NOT set at startup.
-            // Setting it permanently causes Nvidia ShadowPlay / Win11 Game Bar
-            // to treat the overlay as protected content and disable game
-            // recording entirely (issue #2). It's only needed when Debug paints
-            // the HSV-filtered image into the calibration region, which would
-            // otherwise feed back into the next BitBlt frame. The overlay
-            // toggles this flag via `set_excluded_from_capture` when the user
-            // flips Debug on/off.
+            // Scanner is always click-through (never receives input).
+            // WDA_EXCLUDEFROMCAPTURE is only applied to the scanner when Debug
+            // turns on — keeping the panel free of that flag means ShadowPlay
+            // and Win11 Game Bar record normally regardless of Debug state.
+            if let Some(scanner) = app.get_webview_window("scanner") {
+                let _ = scanner.set_ignore_cursor_events(true);
+            }
 
-            // Start globally click-through. The polling loop below flips it
-            // off only when the cursor is over the panel region.
+            // Panel starts globally click-through too. The polling loop below
+            // flips it off only when the cursor is over the panel hit-rect.
             let _ = window.set_ignore_cursor_events(true);
 
             // Stash the HWND as an integer — the windows::HWND type wraps a raw
@@ -210,10 +203,22 @@ fn main() {
             let window_for_loop = window.clone();
             tauri::async_runtime::spawn(async move {
                 use windows::Win32::Foundation::{HWND, POINT, RECT};
+                use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
                 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
 
                 let mut last_ignore = true;
                 loop {
+                    // Skip the hit-test entirely while LMB is held: the user
+                    // is mid-drag (or mid-click on a control), and toggling
+                    // WS_EX_TRANSPARENT during Windows' native move loop
+                    // kills the drag because hit-test returns HTTRANSPARENT
+                    // on the next frame before GetWindowRect catches up.
+                    let lmb_down = unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 };
+                    if lmb_down {
+                        tokio::time::sleep(Duration::from_millis(33)).await;
+                        continue;
+                    }
+
                     let mut cursor = POINT::default();
                     let mut win_rect = RECT::default();
                     let ok = unsafe {
@@ -250,7 +255,8 @@ fn main() {
             lcu::get_live_client_data,
             lcu::read_text_file,
             lcu::get_league_install_dir,
-            position_overlay,
+            position_scanner,
+            hide_scanner,
             get_screen_size,
             set_panel_size,
             set_excluded_from_capture,

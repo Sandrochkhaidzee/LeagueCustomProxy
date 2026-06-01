@@ -14,14 +14,29 @@
       {
         "label": "overlay",
         "title": "LoLProxChat",
-        "width": 300,
+        "width": 260,
         "height": 400,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
-        "resizable": true,
+        "resizable": false,
         "shadow": false,
         "url": "overlay/overlay.html"
+      },
+      {
+        "label": "scanner",
+        "title": "LoLProxChat Scanner",
+        "width": 250,
+        "height": 250,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "skipTaskbar": true,
+        "focus": false,
+        "url": "scanner/scanner.html"
       }
     ],
     "security": {

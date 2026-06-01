@@ -10,13 +10,6 @@ html, body {
   height: 100%;
 }
 
-#proxchat-root {
-  display: flex;
-  width: 100%;
-  height: 100%;
-}
-
-/* --- Left panel (fixed width) --- */
 .panel {
   width: 240px;
   min-width: 240px;
@@ -26,17 +19,15 @@ html, body {
   backdrop-filter: blur(4px);
   display: flex;
   flex-direction: column;
-  align-self: flex-start;
   transition: width 0.15s, min-width 0.15s, max-width 0.15s;
 }
 
-/* --- Collapsed state --- */
+/* --- Collapsed state — shrinks to a thin button column --- */
 .panel.collapsed {
-  /* Keep 240px allocation so minimap-border stays aligned */
   background: transparent;
   border-color: transparent;
   backdrop-filter: none;
-  align-items: flex-end; /* push thin bar to right edge, next to minimap */
+  align-items: flex-end;
 }
 .panel.collapsed .widget-header {
   width: 36px;
@@ -217,44 +208,3 @@ html, body {
 .player-list::-webkit-scrollbar { width: 4px; }
 .player-list::-webkit-scrollbar-track { background: transparent; }
 .player-list::-webkit-scrollbar-thumb { background: rgba(100, 120, 160, 0.3); border-radius: 2px; }
-
-/* --- Right: Minimap calibration border --- */
-#minimap-border {
-  flex: 1;
-  position: relative;
-  margin-left: 4px;
-  /* Debug border hidden by default, toggled via JS */
-}
-
-/* Tracking dot (shows detected position) */
-#tracking-dot {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  background: rgba(255, 40, 40, 0.9);
-  border: 1px solid #fff;
-  border-radius: 50%;
-  z-index: 15;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-  display: none;
-}
-
-/* Corner resize handles */
-.corner {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  z-index: 10;
-}
-#corner-tr { top: -2px; right: -2px; cursor: ne-resize; }
-#corner-br { bottom: -2px; right: -2px; cursor: se-resize; }
-
-/* Edge handles for resize (right/bottom extend the minimap section) */
-.edge {
-  position: absolute;
-  z-index: 5;
-}
-#edge-top { top: 0; left: 0; right: 18px; height: 10px; cursor: n-resize; }
-#edge-right { right: 0; top: 18px; bottom: 18px; width: 10px; cursor: e-resize; }
-#edge-bottom { bottom: 0; left: 0; right: 18px; height: 10px; cursor: s-resize; }

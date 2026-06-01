@@ -50,9 +50,8 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
 
     let current = env!("CARGO_PKG_VERSION").to_string();
 
-    // Prefer "lolproxchat.exe" (canonical name as of v0.1.18). Fall back to
-    // "proxchat.exe" (legacy) or any .exe asset, so we stay compatible across
-    // the v0.1.17→v0.1.18 rename and any future asset-name tweaks.
+    // Prefer the canonical "lolproxchat.exe" asset; fall back to any .exe in
+    // case the asset name ever changes again.
     let assets = json["assets"].as_array();
     let pick_named = |target: &str| -> Option<String> {
         assets.and_then(|arr| {
@@ -70,9 +69,7 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
                 .map(String::from)
         })
     };
-    let download_url = pick_named("lolproxchat.exe")
-        .or_else(|| pick_named("proxchat.exe"))
-        .or_else(pick_any_exe);
+    let download_url = pick_named("lolproxchat.exe").or_else(pick_any_exe);
 
     let notes = json["body"].as_str().map(String::from);
 

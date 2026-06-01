@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 import { GameStateService, GameSession, TauriGameState } from './game-state';
 import { SignalingService, SignalMessage, PositionBroadcast } from './signaling';
 import { AudioService } from './audio';
@@ -33,6 +34,11 @@ export class Orchestrator {
   private dpiScale = 1;
   private lastGameState: TauriGameState | null = null;
 
+  // User mute prefs survive across session start/end so the panel's MIC / VOL
+  // buttons stay sticky when toggled outside a game (audio is null between
+  // games). On session start these get pushed into the new AudioService.
+  private selfMutedPref = false;
+  private muteAllPref = false;
 
   constructor() {
     this.gameState = new GameStateService();
@@ -161,6 +167,9 @@ export class Orchestrator {
       this.audio = null;
       return;
     }
+    // Carry over any mute toggles the user set before/between sessions.
+    this.audio.setSelfMuted(this.selfMutedPref);
+    this.audio.setMuteAll(this.muteAllPref);
 
     // Join signaling room
     this.signaling.joinRoom(
@@ -437,8 +446,8 @@ export class Orchestrator {
       })) : [];
 
     const data = {
-      selfMuted: audio?.isSelfMuted() ?? false,
-      muteAll: audio?.isMuteAll() ?? false,
+      selfMuted: this.selfMutedPref,
+      muteAll: this.muteAllPref,
       nearbyPeers,
       trackingState: this.tracking?.getState() ?? 'none',
       lastPosition: this.tracking?.getLastPosition() ?? null,
@@ -448,9 +457,9 @@ export class Orchestrator {
       lifecycleStatus: this.computeLifecycleStatus(),
     };
 
-    // Auto-position overlay above the minimap when bounds are detected.
-    // Re-positions if the minimap moved/resized by more than 4px in any
-    // dimension, with a 1s debounce so we don't fight HUD-scale animations.
+    // Auto-position the SCANNER window over the minimap whenever bounds
+    // change (HUD scale, resolution swap, etc). The panel window is never
+    // auto-moved — the user owns its position via drag.
     if (data.detectedMinimapBounds) {
       const mb = data.detectedMinimapBounds;
       const next = { x: mb.screenX, y: mb.screenY, w: mb.screenWidth, h: mb.screenHeight };
@@ -464,24 +473,42 @@ export class Orchestrator {
       if (changed && now - this.lastOverlayRepositionTime > 1000) {
         this.lastOverlayRepositionTime = now;
         this.lastOverlayBounds = next;
-        invoke('position_overlay', {
+        invoke('position_scanner', {
           x: mb.screenX,
           y: mb.screenY,
           width: mb.screenWidth,
           height: mb.screenHeight,
-        }).then(() => {
-          console.log('[LoLProxChat] Overlay positioned above minimap');
-        }).catch((e) => console.warn('[LoLProxChat] position_overlay failed:', e));
+        }).catch((e) => console.warn('[LoLProxChat] position_scanner failed:', e));
       }
     }
 
-    // Broadcast to overlay via custom event (both windows share the same WebView in Tauri)
+    // Push the scanner-specific scene (tracking dot + debug image + debug-on)
+    // to the scanner window via Tauri events. We rely on the panel window
+    // having access to a tauri-emit; reuse the existing invoke pattern so
+    // background.ts doesn't need to know about scanner internals.
+    emit('scanner:scene', {
+      filteredImageUrl: data.filteredImageUrl,
+      lastPosition: data.lastPosition,
+      debugEnabled: (window as any).__lolproxchat_debug_enabled === true,
+    }).catch(() => { /* scanner may not be ready yet — non-fatal */ });
+
+    // Broadcast panel-relevant state to the overlay UI
     window.dispatchEvent(new CustomEvent('overlayUpdate', { detail: data }));
   }
 
   // Public controls (called from overlay via messaging)
-  toggleSelfMute(): boolean { return this.audio?.toggleSelfMute() ?? false; }
-  toggleMuteAll(): boolean { return this.audio?.toggleMuteAll() ?? false; }
+  toggleSelfMute(): boolean {
+    this.selfMutedPref = !this.selfMutedPref;
+    this.audio?.setSelfMuted(this.selfMutedPref);
+    this.broadcastOverlayState();
+    return this.selfMutedPref;
+  }
+  toggleMuteAll(): boolean {
+    this.muteAllPref = !this.muteAllPref;
+    this.audio?.setMuteAll(this.muteAllPref);
+    this.broadcastOverlayState();
+    return this.muteAllPref;
+  }
   toggleMutePlayer(name: string): boolean { return this.audio?.toggleMutePlayer(name) ?? false; }
   setPlayerVolume(name: string, volume: number): void { this.audio?.setPlayerVolume(name, volume); }
   setScanRate(fps: number): void {
@@ -638,6 +665,9 @@ export class Orchestrator {
     // Allow re-positioning on the next session
     this.lastOverlayBounds = null;
     this.lastOverlayRepositionTime = 0;
+
+    // Hide the scanner window so it doesn't float wherever the minimap last was
+    invoke('hide_scanner').catch(() => { /* non-fatal */ });
 
     // Notify overlay that session ended
     window.dispatchEvent(new CustomEvent('sessionEnded'));

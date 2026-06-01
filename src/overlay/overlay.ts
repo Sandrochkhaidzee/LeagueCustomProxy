@@ -36,12 +36,6 @@ const btnCollapse = document.getElementById('btn-collapse')!;
 const panel = document.getElementById('panel')!;
 const settingsPanel = document.getElementById('settings-panel')!;
 const dragHandle = document.getElementById('drag-handle')!;
-const trackingDot = document.getElementById('tracking-dot')!;
-const minimapBorder = document.getElementById('minimap-border')!;
-
-// Map dimensions for Summoner's Rift (for tracking dot position)
-const MAP_WIDTH = 14820;
-const MAP_HEIGHT = 14881;
 
 // Debug overlay state — always starts off; user toggles per session.
 let debugEnabled = false;
@@ -134,18 +128,13 @@ btnDebug.addEventListener('click', () => {
   btnDebug.classList.toggle('active', debugEnabled);
   scanRateRow.classList.toggle('hidden', !debugEnabled);
   setLoggingEnabled(debugEnabled);
-  // Toggle WDA_EXCLUDEFROMCAPTURE on the overlay window. Only needed when
+  // Read by orchestrator when emitting scanner:scene events so the scanner
+  // window only renders the filtered image + tracking dot while Debug is on.
+  (window as any).__lolproxchat_debug_enabled = debugEnabled;
+  // Toggle WDA_EXCLUDEFROMCAPTURE on the scanner window. Only needed when
   // Debug is on (to break the HSV-filter capture feedback loop) — leaving it
   // off by default lets Nvidia ShadowPlay / Win11 Game Bar record normally.
   sendToBackground('setExcludedFromCapture', { excluded: debugEnabled });
-  // Immediately hide debug elements when toggled off
-  if (!debugEnabled) {
-    trackingDot.style.display = 'none';
-    minimapBorder.style.backgroundImage = '';
-    minimapBorder.style.boxShadow = '';
-  } else {
-    minimapBorder.style.boxShadow = 'inset 0 0 0 3px rgba(255, 0, 0, 0.85)';
-  }
 });
 
 document.getElementById('input-mode')!.addEventListener('change', (e) => {
@@ -361,26 +350,6 @@ function renderState(state: OverlayState): void {
     dbgEl.classList.remove('hidden');
   } else {
     dbgEl.classList.add('hidden');
-  }
-
-  // Update tracking dot position on minimap border (only when debug enabled)
-  if (debugEnabled && state.lastPosition && state.lastPosition.x > 0 && state.lastPosition.y > 0) {
-    const relX = state.lastPosition.x / MAP_WIDTH;
-    const relY = 1 - state.lastPosition.y / MAP_HEIGHT;
-    trackingDot.style.left = (relX * 100) + '%';
-    trackingDot.style.top = (relY * 100) + '%';
-    trackingDot.style.display = 'block';
-  } else {
-    trackingDot.style.display = 'none';
-  }
-
-  // Update filtered debug image on minimap border (only when debug enabled)
-  if (debugEnabled && state.filteredImageUrl) {
-    minimapBorder.style.backgroundImage = 'url(' + state.filteredImageUrl + ')';
-    minimapBorder.style.backgroundSize = '100% 100%';
-    minimapBorder.style.backgroundRepeat = 'no-repeat';
-  } else if (!debugEnabled) {
-    minimapBorder.style.backgroundImage = '';
   }
 }
 
