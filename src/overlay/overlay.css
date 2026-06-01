@@ -184,6 +184,7 @@ html, body {
   border-radius: 3px;
   padding: 2px 4px;
   font-size: 11px;
+  max-width: 140px;
 }
 .setting-row input[type="range"] {
   -webkit-appearance: none;

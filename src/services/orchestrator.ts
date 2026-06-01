@@ -522,6 +522,8 @@ export class Orchestrator {
   }
   setPTTState(held: boolean): void { this.audio?.setPTTState(held); }
   updateSettings(settings: any): void { this.audio?.updateSettings(settings); }
+  applyInputDevice(id: string | null): Promise<void> | void { return this.audio?.applyInputDevice(id); }
+  applyOutputDevice(id: string | null): Promise<void> | void { return this.audio?.applyOutputDevice(id); }
 
   getSessionPlayers(): { summonerName: string; championName: string; team: string }[] {
     if (!this.session) return [];

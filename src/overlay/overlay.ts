@@ -5,6 +5,14 @@ import {
   isAutoUpdateEnabled,
   setAutoUpdateEnabled,
 } from '../services/updater';
+import {
+  getStoredInputDeviceId,
+  setStoredInputDeviceId,
+  getStoredOutputDeviceId,
+  setStoredOutputDeviceId,
+  listAudioDevices,
+  probeMicPermission,
+} from '../services/devices';
 
 interface NearbyPeer {
   summonerName: string;
@@ -65,6 +73,71 @@ btnMuteAll.addEventListener('click', () => {
 
 btnSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('hidden');
+  if (!settingsPanel.classList.contains('hidden')) {
+    refreshDeviceLists();
+  }
+});
+
+// --- Audio device pickers ---
+const inputDeviceSelect = document.getElementById('input-device') as HTMLSelectElement;
+const outputDeviceSelect = document.getElementById('output-device') as HTMLSelectElement;
+
+async function refreshDeviceLists(): Promise<void> {
+  try {
+    let { inputs, outputs } = await listAudioDevices();
+    // Empty labels mean the user hasn't granted mic permission yet. Trigger
+    // a one-shot probe so labels populate; then re-enumerate.
+    if (inputs.some((d) => !d.label) || outputs.some((d) => !d.label)) {
+      try {
+        await probeMicPermission();
+        ({ inputs, outputs } = await listAudioDevices());
+      } catch {
+        // User denied or no mic present — fall through with whatever labels we have
+      }
+    }
+    populateDeviceSelect(inputDeviceSelect, inputs, getStoredInputDeviceId());
+    populateDeviceSelect(outputDeviceSelect, outputs, getStoredOutputDeviceId());
+  } catch (e) {
+    console.warn('[Overlay] device enumeration failed:', e);
+  }
+}
+
+function populateDeviceSelect(
+  select: HTMLSelectElement,
+  devices: MediaDeviceInfo[],
+  selectedId: string | null,
+): void {
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'Default';
+  const opts: HTMLOptionElement[] = [defaultOpt];
+  for (const d of devices) {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `(unnamed ${d.kind})`;
+    opts.push(opt);
+  }
+  select.replaceChildren(...opts);
+  select.value = selectedId && devices.some((d) => d.deviceId === selectedId) ? selectedId : '';
+}
+
+inputDeviceSelect.addEventListener('change', () => {
+  const id = inputDeviceSelect.value || null;
+  setStoredInputDeviceId(id);
+  sendToBackground('setInputDevice', { id });
+});
+
+outputDeviceSelect.addEventListener('change', () => {
+  const id = outputDeviceSelect.value || null;
+  setStoredOutputDeviceId(id);
+  sendToBackground('setOutputDevice', { id });
+});
+
+// Refresh if user plugs / unplugs a device while the panel is open
+navigator.mediaDevices.addEventListener('devicechange', () => {
+  if (!settingsPanel.classList.contains('hidden')) {
+    refreshDeviceLists();
+  }
 });
 
 let collapsed = false;
@@ -117,6 +190,11 @@ async function runUpdateCheck(triggeredByUser: boolean): Promise<void> {
 
 btnCheckUpdate.addEventListener('click', () => {
   runUpdateCheck(true);
+});
+
+const btnOpenLogs = document.getElementById('btn-open-logs') as HTMLButtonElement;
+btnOpenLogs.addEventListener('click', () => {
+  sendToBackground('openLogFolder', {});
 });
 
 // Expose for background.ts to trigger an auto-check on launch

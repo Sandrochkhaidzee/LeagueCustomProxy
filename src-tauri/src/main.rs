@@ -22,6 +22,22 @@ fn append_log(state: tauri::State<LogFile>, line: String) {
     write_log_line(&state, line);
 }
 
+/// Open the directory that holds the rolling debug log in Explorer so the
+/// user can grab the file and attach it to a GitHub issue.
+#[tauri::command]
+fn open_log_folder(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?;
+    let _ = std::fs::create_dir_all(&dir);
+    std::process::Command::new("explorer")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn write_log_line(state: &tauri::State<LogFile>, line: String) {
     if let Ok(mut guard) = state.file.lock() {
         if let Some(f) = guard.as_mut() {
@@ -153,7 +169,7 @@ fn main() {
             // The TS layer only writes to it while Debug is on.
             if let Ok(dir) = app.path().app_local_data_dir() {
                 let _ = std::fs::create_dir_all(&dir);
-                let path = dir.join("proxchat.log");
+                let path = dir.join("lolproxchat.log");
                 if let Ok(file) = std::fs::OpenOptions::new()
                     .create(true)
                     .write(true)
@@ -261,6 +277,7 @@ fn main() {
             set_panel_size,
             set_excluded_from_capture,
             append_log,
+            open_log_folder,
             updater::check_for_update,
             updater::download_and_apply_update,
         ])

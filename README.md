@@ -6,7 +6,7 @@ Standalone Windows desktop app built with Tauri 2 + WebView2. No Overwolf, no th
 
 ## Install
 
-Download the latest `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxChat/releases/latest). It's a single portable executable — no installer.
+Download the latest `lolproxchat.exe` from [Releases](https://github.com/danthi123/LoLProxChat/releases/latest). It's a single portable executable — no installer.
 
 **Requirements:**
 - Windows 10 1809+ or Windows 11
@@ -89,24 +89,37 @@ References:
 ## Usage
 
 1. Make sure LoL is set to **Borderless** mode (Settings → Video → Window Mode → Borderless).
-2. Launch `proxchat.exe`. The panel appears in the middle of the screen until a game starts (it'll show the current lifecycle phase — "Waiting for League of Legends", "In champion select", etc).
+2. Launch `lolproxchat.exe`. The panel appears in the middle of the screen until a game starts (it'll show the current lifecycle phase — "Waiting for League of Legends", "In champion select", etc).
 3. Once you load into a match the panel jumps to the left edge of the minimap. Other players also running ProxChat in the same match will appear in the list within a few seconds.
 4. **Always Open** mic is the default — just talk and they'll hear you, scaled by in-game distance. Switch to **Push to Talk (F8)** in Settings if you'd prefer.
 5. Click **MIC** to self-mute, **VOL** to mute everyone, or the per-row **MUTE** button to silence a specific player.
+6. Pick a specific mic / speaker under **Settings → Input Device / Output Device** if Windows' default isn't what you want.
+
+## Reporting bugs
+
+If you hit a bug — voice not working, weird volume, players not appearing, crashes — please open an issue at <https://github.com/danthi123/LoLProxChat/issues> with the debug log attached. The log captures everything the app sees (WebRTC connection state, ICE negotiation, CV tracking, etc) and is by far the fastest way for us to figure out what went wrong.
+
+To grab the log:
+
+1. Open **Settings → Debug**, click **OFF** to flip it to **ON**. (This starts writing diagnostics to disk; it has near-zero overhead.)
+2. **Reproduce the bug** — start a game, repeat whatever triggered the issue, etc.
+3. Open **Settings → Debug Logs**, click **OPEN**. Explorer pops up at `%LOCALAPPDATA%\com.proxchat.app\` — drag `lolproxchat.log` into your GitHub issue.
+
+The log is plain text. It contains your summoner name and the summoner names of nearby players (gameplay-public), plus technical IP info from WebRTC ICE candidates. If any of that is sensitive in your situation, skim through and redact before posting.
 
 ## Uninstall
 
 Because it's a portable exe with no installer, removing it is a two-step process:
 
 1. **Delete the exe** wherever you put it (probably Downloads or a folder you chose).
-2. **Delete WebView2 / app data:** `%LOCALAPPDATA%\com.proxchat.app\` — contains the WebView2 cache (cookies, localStorage, IndexedDB) and `proxchat.log` if you ever enabled Debug. Open `Run` (Win+R) and paste `%LOCALAPPDATA%\com.proxchat.app\` to find it.
+2. **Delete WebView2 / app data:** `%LOCALAPPDATA%\com.proxchat.app\` — contains the WebView2 cache (cookies, localStorage, IndexedDB) and `lolproxchat.log` if you ever enabled Debug. Open `Run` (Win+R) and paste `%LOCALAPPDATA%\com.proxchat.app\` to find it.
 
 That's the full footprint. No registry entries owned by ProxChat itself, no entries under `Programs and Features`, no startup tasks, no services.
 
 ## Architecture
 
 ```
-proxchat.exe (Tauri 2)
+lolproxchat.exe (Tauri 2)
 ├── Rust backend       — Win32 screen capture, LCU/Live Client polling, window positioning, global shortcuts
 └── WebView2 frontend  — orchestrator, signaling, WebRTC, CV, ONNX champion classifier
 
@@ -150,11 +163,11 @@ cp .env.example .env       # optional — defaults to https://proxchat.dant123.c
 npx tauri build
 ```
 
-The portable exe lands at `src-tauri/target/release/proxchat.exe`.
+The portable exe lands at `src-tauri/target/release/lolproxchat.exe`.
 
 For iterative dev, rebuild and relaunch:
 ```bash
-npx tauri build && src-tauri/target/release/proxchat.exe
+npx tauri build && src-tauri/target/release/lolproxchat.exe
 ```
 (No `tauri dev` workflow yet — there's no webpack dev server configured.)
 
@@ -265,7 +278,7 @@ New builds are published to [GitHub Releases](https://github.com/danthi123/LoLPr
 ```bash
 # bump src-tauri/Cargo.toml version
 npx tauri build
-gh release create v0.1.X src-tauri/target/release/proxchat.exe \
+gh release create v0.1.X src-tauri/target/release/lolproxchat.exe \
   --title "v0.1.X — short summary" \
   --notes "release notes here"
 ```
@@ -275,7 +288,7 @@ Users can always grab the most recent via:
 https://github.com/danthi123/LoLProxChat/releases/latest/download/lolproxchat.exe
 ```
 
-(Legacy URL `proxchat.exe` is also published in releases for backward compatibility with auto-update on clients ≤ v0.1.17.)
+(Releases ≤ v0.1.20 also published a `proxchat.exe` asset under the same URL for legacy compatibility — the auto-updater's fallback for that name was removed in v0.1.21, so new releases only ship `lolproxchat.exe`.)
 
 **Maintainer one-time setup for VirusTotal scan workflow:** grab a free API key from [virustotal.com](https://www.virustotal.com/gui/my-apikey), then **Settings → Secrets and variables → Actions → New repository secret** named `VT_API_KEY`. The workflow at `.github/workflows/virustotal.yml` will then auto-scan every published release's exe assets and append permalinks to the release body.
 

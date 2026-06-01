@@ -22,6 +22,18 @@
     </div>
     <div id="settings-panel" class="settings-panel hidden">
       <div class="setting-row">
+        <label>Input Device</label>
+        <select id="input-device">
+          <option value="">Default</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>Output Device</label>
+        <select id="output-device">
+          <option value="">Default</option>
+        </select>
+      </div>
+      <div class="setting-row">
         <label>Input Mode</label>
         <select id="input-mode">
           <option value="always">Always Open</option>
@@ -38,6 +50,10 @@
       <div class="setting-row">
         <label>Debug</label>
         <button id="btn-debug" class="icon-btn">OFF</button>
+      </div>
+      <div class="setting-row">
+        <label>Debug Logs</label>
+        <button id="btn-open-logs" class="icon-btn" title="Open log folder to attach to a GitHub issue">OPEN</button>
       </div>
       <div class="setting-row">
         <label>Auto-update</label>

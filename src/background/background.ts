@@ -54,6 +54,16 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
       invoke('set_excluded_from_capture', { excluded: payload.excluded })
         .catch((e) => console.warn('[LoLProxChat] set_excluded_from_capture failed:', e));
       break;
+    case 'setInputDevice':
+      orchestrator.applyInputDevice(payload.id);
+      break;
+    case 'setOutputDevice':
+      orchestrator.applyOutputDevice(payload.id);
+      break;
+    case 'openLogFolder':
+      invoke('open_log_folder')
+        .catch((e) => console.warn('[LoLProxChat] open_log_folder failed:', e));
+      break;
   }
 }) as EventListener);
 

@@ -1,6 +1,7 @@
 import { PeerConnection } from './peer-connection';
 import { SignalingService, SignalMessage } from './signaling';
 import { AudioSettings } from '../core/types';
+import { getStoredInputDeviceId, getStoredOutputDeviceId } from './devices';
 
 function peakRms(buf: Float32Array): number {
   let sumSq = 0;
@@ -32,6 +33,10 @@ export class AudioService {
   private audioContext: AudioContext | null = null;
   private gainNode: GainNode | null = null;
   private outputStream: MediaStream | null = null;
+  // Held so we can swap it when the user picks a different input device at
+  // runtime without renegotiating WebRTC (the destination MediaStream that
+  // PeerConnections received stays the same).
+  private micSource: MediaStreamAudioSourceNode | null = null;
 
   // Guard against concurrent connectToPeer calls for the same peer
   private connectingPeers: Set<string> = new Set();
@@ -47,22 +52,17 @@ export class AudioService {
   }
 
   async initMicrophone(): Promise<void> {
-    this.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        // Native Chromium DSP runs in the audio thread — can't be starved by
-        // our main-thread CV work the way RNNoise's ScriptProcessorNode was.
-        // Quality is the WebRTC NS3 algorithm Discord used pre-Krisp.
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    this.localStream = await this.acquireMicStream();
 
     this.audioContext = new AudioContext();
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume();
     }
-    const source = this.audioContext.createMediaStreamSource(this.localStream);
+    // Honor stored output-device pick if AudioContext.setSinkId is available
+    // (Chromium 110+, which WebView2 evergreen ships).
+    await this.applyStoredOutputDevice();
+
+    this.micSource = this.audioContext.createMediaStreamSource(this.localStream);
     this.gainNode = this.audioContext.createGain();
     this.gainNode.gain.value = this.settings.inputVolume;
     const destination = this.audioContext.createMediaStreamDestination();
@@ -70,7 +70,7 @@ export class AudioService {
     // Simple straight-through chain: mic → gain → destination. Noise
     // suppression is handled by the browser's native DSP (set via the
     // getUserMedia constraints above) which runs off the JS main thread.
-    source.connect(this.gainNode);
+    this.micSource.connect(this.gainNode);
     this.gainNode.connect(destination);
     console.log('[Audio] Using native browser noise suppression');
 
@@ -81,7 +81,7 @@ export class AudioService {
 
     // Attach analysers to monitor whether the mic is actually producing audio
     // and whether the WebRTC-output stream contains audio. Reported every 2s.
-    this.startAudioLevelMonitor(source, destination);
+    this.startAudioLevelMonitor(this.micSource, destination);
   }
 
   private micLevelAnalyser: AnalyserNode | null = null;
@@ -375,6 +375,68 @@ export class AudioService {
     if (this.gainNode) {
       this.gainNode.gain.value = this.settings.inputVolume;
     }
+  }
+
+  private async acquireMicStream(): Promise<MediaStream> {
+    const inputId = getStoredInputDeviceId();
+    const constraints: MediaTrackConstraints = {
+      // Native Chromium DSP runs in the audio thread — can't be starved by
+      // our main-thread CV work the way RNNoise's ScriptProcessorNode was.
+      // Quality is the WebRTC NS3 algorithm Discord used pre-Krisp.
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+    if (inputId) constraints.deviceId = { exact: inputId };
+    return navigator.mediaDevices.getUserMedia({ audio: constraints });
+  }
+
+  private async applyStoredOutputDevice(): Promise<void> {
+    const outputId = getStoredOutputDeviceId();
+    if (!outputId || !this.audioContext) return;
+    // AudioContext.setSinkId exists in Chromium 110+ but TS DOM types
+    // haven't caught up everywhere, so type-narrow via any.
+    const ctx = this.audioContext as unknown as { setSinkId?: (id: string) => Promise<void> };
+    if (typeof ctx.setSinkId !== 'function') {
+      console.warn('[Audio] AudioContext.setSinkId not supported — output device pick ignored');
+      return;
+    }
+    try {
+      await ctx.setSinkId(outputId);
+      console.log('[Audio] Output device set:', outputId);
+    } catch (e) {
+      console.warn('[Audio] setSinkId failed:', e);
+    }
+  }
+
+  // Re-acquire mic from the new device, swap the source node in place.
+  // outputStream / destination stay the same so peer connections keep
+  // working without renegotiation.
+  async applyInputDevice(_id: string | null): Promise<void> {
+    if (!this.audioContext || !this.gainNode) {
+      console.log('[Audio] applyInputDevice: not initialized yet, will pick up on next session');
+      return;
+    }
+    try {
+      const newStream = await this.acquireMicStream();
+      this.micSource?.disconnect();
+      this.localStream?.getTracks().forEach((t) => t.stop());
+      this.localStream = newStream;
+      this.micSource = this.audioContext.createMediaStreamSource(newStream);
+      this.micSource.connect(this.gainNode);
+      this.updateLocalTrackState();
+      console.log('[Audio] Input device switched');
+    } catch (e) {
+      console.warn('[Audio] applyInputDevice failed:', e);
+    }
+  }
+
+  async applyOutputDevice(_id: string | null): Promise<void> {
+    if (!this.audioContext) {
+      console.log('[Audio] applyOutputDevice: not initialized yet, will pick up on next session');
+      return;
+    }
+    await this.applyStoredOutputDevice();
   }
 
   cleanup(): void {
