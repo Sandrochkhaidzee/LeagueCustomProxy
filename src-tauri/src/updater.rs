@@ -50,18 +50,29 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
 
     let current = env!("CARGO_PKG_VERSION").to_string();
 
-    let download_url = json["assets"]
-        .as_array()
-        .and_then(|arr| {
-            arr.iter().find(|a| {
-                a["name"]
-                    .as_str()
-                    .map(|n| n.eq_ignore_ascii_case("proxchat.exe"))
-                    .unwrap_or(false)
-            })
+    // Prefer "lolproxchat.exe" (canonical name as of v0.1.18). Fall back to
+    // "proxchat.exe" (legacy) or any .exe asset, so we stay compatible across
+    // the v0.1.17→v0.1.18 rename and any future asset-name tweaks.
+    let assets = json["assets"].as_array();
+    let pick_named = |target: &str| -> Option<String> {
+        assets.and_then(|arr| {
+            arr.iter()
+                .find(|a| a["name"].as_str().map(|n| n.eq_ignore_ascii_case(target)).unwrap_or(false))
+                .and_then(|asset| asset["browser_download_url"].as_str())
+                .map(String::from)
         })
-        .and_then(|asset| asset["browser_download_url"].as_str())
-        .map(String::from);
+    };
+    let pick_any_exe = || -> Option<String> {
+        assets.and_then(|arr| {
+            arr.iter()
+                .find(|a| a["name"].as_str().map(|n| n.to_lowercase().ends_with(".exe")).unwrap_or(false))
+                .and_then(|asset| asset["browser_download_url"].as_str())
+                .map(String::from)
+        })
+    };
+    let download_url = pick_named("lolproxchat.exe")
+        .or_else(|| pick_named("proxchat.exe"))
+        .or_else(pick_any_exe);
 
     let notes = json["body"].as_str().map(String::from);
 
@@ -83,7 +94,15 @@ pub async fn download_and_apply_update(url: String) -> Result<(), String> {
     let parent = current_exe
         .parent()
         .ok_or("current exe has no parent directory")?;
-    let new_path = parent.join("proxchat.exe.new");
+    // Preserve whatever the user named the .exe locally — if their file is
+    // proxchat.exe (legacy) we want to keep that; if it's lolproxchat.exe we
+    // keep that. The new build behind the .new suffix is the same regardless.
+    let current_name = current_exe
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("lolproxchat.exe")
+        .to_string();
+    let new_path = parent.join(format!("{}.new", current_name));
 
     // Wipe any stale .new from a previous failed attempt
     let _ = std::fs::remove_file(&new_path);

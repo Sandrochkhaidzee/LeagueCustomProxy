@@ -40,7 +40,7 @@ export class Orchestrator {
   }
 
   start(): void {
-    console.log('[ProxChat] Orchestrator.start() called');
+    console.log('[LoLProxChat] Orchestrator.start() called');
 
     // Poll Tauri backend for game state every 3 seconds
     this.gameStatePollId = window.setInterval(() => this.pollGameState(), 3000) as unknown as number;
@@ -56,7 +56,7 @@ export class Orchestrator {
 
       if (!state.isLeagueRunning) {
         if (this.session) {
-          console.log('[ProxChat] LoL closed, ending session');
+          console.log('[LoLProxChat] LoL closed, ending session');
           this.endSession();
         }
         // Fire an overlay refresh so the empty-state text reflects "Waiting for LoL"
@@ -81,7 +81,7 @@ export class Orchestrator {
       }
 
       if (!state.isInGame && this.session) {
-        console.log('[ProxChat] Game ended (phase: ' + state.gameFlowPhase + ')');
+        console.log('[LoLProxChat] Game ended (phase: ' + state.gameFlowPhase + ')');
         this.endSession();
       }
 
@@ -90,7 +90,7 @@ export class Orchestrator {
         this.broadcastOverlayState();
       }
     } catch (e) {
-      console.error('[ProxChat] pollGameState failed:', e);
+      console.error('[LoLProxChat] pollGameState failed:', e);
     }
   }
 
@@ -104,7 +104,7 @@ export class Orchestrator {
         this.processLiveClientData(lcd);
       }
     } catch (e) {
-      console.error('[ProxChat] pollForLiveClientData failed:', e);
+      console.error('[LoLProxChat] pollForLiveClientData failed:', e);
     }
   }
 
@@ -117,7 +117,7 @@ export class Orchestrator {
           ? JSON.parse(lcd.activePlayer)
           : lcd.activePlayer;
         this.localSummonerName = active.riotId || active.summonerName || '';
-        console.log('[ProxChat] Local summoner:', this.localSummonerName);
+        console.log('[LoLProxChat] Local summoner:', this.localSummonerName);
       }
 
       if (lcd.allPlayers && this.localSummonerName) {
@@ -125,7 +125,7 @@ export class Orchestrator {
           ? JSON.parse(lcd.allPlayers)
           : lcd.allPlayers;
         const players = this.gameState.parsePlayerList({ players: playersData });
-        console.log('[ProxChat] Parsed players:', players.length);
+        console.log('[LoLProxChat] Parsed players:', players.length);
 
         const gameMode = lcd.gameData
           ? (typeof lcd.gameData === 'string' ? JSON.parse(lcd.gameData) : lcd.gameData).gameMode || 'CLASSIC'
@@ -139,25 +139,25 @@ export class Orchestrator {
 
         if (session) {
           this.session = session;
-          console.log('[ProxChat] Session created! Room:', session.roomId);
+          console.log('[LoLProxChat] Session created! Room:', session.roomId);
           this.startSession(session);
         }
       }
     } catch (e) {
-      console.error('[ProxChat] Failed to process live client data:', e);
+      console.error('[LoLProxChat] Failed to process live client data:', e);
     }
   }
 
   private async startSession(session: GameSession): Promise<void> {
-    console.log('[ProxChat] Starting session: room=' + session.roomId);
+    console.log('[LoLProxChat] Starting session: room=' + session.roomId);
 
     // Initialize audio (mic + WebRTC)
     this.audio = new AudioService(this.signaling, this.localSummonerName);
     try {
       await this.audio.initMicrophone();
-      console.log('[ProxChat] Microphone initialized');
+      console.log('[LoLProxChat] Microphone initialized');
     } catch (e) {
-      console.error('[ProxChat] Mic init failed — aborting session:', e);
+      console.error('[LoLProxChat] Mic init failed — aborting session:', e);
       this.audio = null;
       return;
     }
@@ -183,15 +183,15 @@ export class Orchestrator {
         gameW = w;
         gameH = h;
       } catch (e) {
-        console.warn('[ProxChat] get_screen_size failed, using window.screen:', e);
+        console.warn('[LoLProxChat] get_screen_size failed, using window.screen:', e);
       }
       this.dpiScale = window.devicePixelRatio || 1;
-      console.log('[ProxChat] Resolution: game=' + gameW + 'x' + gameH +
+      console.log('[LoLProxChat] Resolution: game=' + gameW + 'x' + gameH +
         ' dpiScale=' + this.dpiScale);
 
       // Auto-detect League config path (use default since Tauri doesn't provide exe path)
       this.leagueConfigPath = 'C:/Riot Games/League of Legends/Config/game.cfg';
-      console.log('[ProxChat] League config path:', this.leagueConfigPath);
+      console.log('[LoLProxChat] League config path:', this.leagueConfigPath);
 
       this.tracking = new TrackingService(gameW, gameH, session.mapType);
       this.tracking.loadChampionTemplate(session.localPlayer.championName);
@@ -208,10 +208,10 @@ export class Orchestrator {
       ).then(() => {
         if (this.tracking) {
           this.tracking.setClassifier(classifier);
-          console.log('[ProxChat] Champion classifier loaded');
+          console.log('[LoLProxChat] Champion classifier loaded');
         }
       }).catch(err => {
-        console.warn('[ProxChat] Champion classifier failed to load (tracking continues without it):', err);
+        console.warn('[LoLProxChat] Champion classifier failed to load (tracking continues without it):', err);
       });
 
       // Read minimap scale from League config and apply before starting tracking
@@ -243,7 +243,7 @@ export class Orchestrator {
       this.configPollId = window.setInterval(() => this.pollMinimapScale(), 5000) as unknown as number;
 
     } catch (e) {
-      console.error('[ProxChat] Tracking initialization failed:', e);
+      console.error('[LoLProxChat] Tracking initialization failed:', e);
     }
 
     // Overlay is managed by Tauri window configuration — no manual window open needed
@@ -317,7 +317,7 @@ export class Orchestrator {
         || Math.abs(position.y - this.lastLoggedPosition.y) > 500;
       if (moved) {
         this.lastLoggedPosition = { x: position.x, y: position.y };
-        console.log('[ProxChat] My position: (' + Math.round(position.x) + ', ' + Math.round(position.y) + '), sending to ' + Object.keys(peerBlobs).length + ' peers');
+        console.log('[LoLProxChat] My position: (' + Math.round(position.x) + ', ' + Math.round(position.y) + '), sending to ' + Object.keys(peerBlobs).length + ' peers');
       }
 
       // Call Edge Function: encrypt our position + compute volumes
@@ -331,7 +331,7 @@ export class Orchestrator {
       // Apply volume levels to audio streams
       this.audio.applyPeerVolumes(result.peerVolumes);
     } catch (e) {
-      console.error('[ProxChat] Volume computation failed:', e);
+      console.error('[LoLProxChat] Volume computation failed:', e);
     }
 
     this.broadcastOverlayState();
@@ -349,7 +349,7 @@ export class Orchestrator {
     const existing = this.peerStates.get(peer.summonerName);
     if (!existing) {
       const sameTeam = peer.team === this.session.localPlayer.team;
-      console.log('[ProxChat] Peer joined: ' + peer.summonerName +
+      console.log('[LoLProxChat] Peer joined: ' + peer.summonerName +
         ' (' + (sameTeam ? 'ALLY' : 'ENEMY') + ', ' + peer.championName + ')');
     }
     const peerState: PeerState = {
@@ -375,7 +375,7 @@ export class Orchestrator {
         this.dataChannels.registerPeer(peer.summonerName, peerConn);
       }
     } catch (e) {
-      console.error('[ProxChat] Failed to connect to peer:', peer.summonerName, e);
+      console.error('[LoLProxChat] Failed to connect to peer:', peer.summonerName, e);
       this.peerStates.delete(peer.summonerName);
     }
   }
@@ -462,8 +462,8 @@ export class Orchestrator {
           width: mb.screenWidth,
           height: mb.screenHeight,
         }).then(() => {
-          console.log('[ProxChat] Overlay positioned above minimap');
-        }).catch((e) => console.warn('[ProxChat] position_overlay failed:', e));
+          console.log('[LoLProxChat] Overlay positioned above minimap');
+        }).catch((e) => console.warn('[LoLProxChat] position_overlay failed:', e));
       }
     }
 
@@ -479,7 +479,7 @@ export class Orchestrator {
   setScanRate(fps: number): void {
     if (!this.tracking) return;
     const clamped = Math.max(1, Math.min(60, Math.round(fps)));
-    console.log('[ProxChat] Scan rate changed to ' + clamped + ' FPS');
+    console.log('[LoLProxChat] Scan rate changed to ' + clamped + ' FPS');
     this.tracking.stop();
     this.tracking.start(() => {
       // Position updates handled by volume tick
@@ -504,15 +504,15 @@ export class Orchestrator {
     const idx = String(this.calibrationIndex).padStart(3, '0');
 
     // TODO: Implement calibration data saving via Tauri file system commands
-    console.log('[ProxChat] Calibration capture #' + idx, JSON.stringify(data).substring(0, 200));
+    console.log('[LoLProxChat] Calibration capture #' + idx, JSON.stringify(data).substring(0, 200));
 
     // Capture minimap screenshot via Tauri
     invoke<{ data_url: string; width: number; height: number }>('capture_minimap')
       .then((result) => {
-        console.log('[ProxChat] Calibration minimap captured:', idx, 'size:', result.data_url.length);
+        console.log('[LoLProxChat] Calibration minimap captured:', idx, 'size:', result.data_url.length);
       })
       .catch((err) => {
-        console.error('[ProxChat] Calibration capture failed:', err);
+        console.error('[LoLProxChat] Calibration capture failed:', err);
       });
   }
 
@@ -522,7 +522,7 @@ export class Orchestrator {
    */
   setMinimapCalibration(bounds: { screenX: number; screenY: number; screenWidth: number; screenHeight: number }): void {
     if (!this.tracking) {
-      console.warn('[ProxChat] setMinimapCalibration called but no tracking service');
+      console.warn('[LoLProxChat] setMinimapCalibration called but no tracking service');
       return;
     }
     const capture = this.tracking.captureBounds;
@@ -533,8 +533,8 @@ export class Orchestrator {
       width: bounds.screenWidth,
       height: bounds.screenHeight,
     };
-    console.log('[ProxChat] Calibration bounds (screen):', JSON.stringify(bounds));
-    console.log('[ProxChat] Calibration region (capture-relative):', JSON.stringify(region));
+    console.log('[LoLProxChat] Calibration bounds (screen):', JSON.stringify(bounds));
+    console.log('[LoLProxChat] Calibration region (capture-relative):', JSON.stringify(region));
     this.tracking.setMinimapRegion(region);
   }
 
@@ -553,7 +553,7 @@ export class Orchestrator {
    */
   private readMinimapScale(callback: (scale: number | null) => void): void {
     if (!this.leagueConfigPath) {
-      console.warn('[ProxChat] readMinimapScale: no config path');
+      console.warn('[LoLProxChat] readMinimapScale: no config path');
       callback(null);
       return;
     }
@@ -562,7 +562,7 @@ export class Orchestrator {
     invoke<string>('read_text_file', { path: this.leagueConfigPath })
       .then(text => this.parseMinimapScale(text, callback))
       .catch(err => {
-        console.warn('[ProxChat] Failed to read game.cfg:', err);
+        console.warn('[LoLProxChat] Failed to read game.cfg:', err);
         callback(null);
       });
   }
@@ -580,13 +580,13 @@ export class Orchestrator {
         const rawVal = trimmed.split('=')[1].trim();
         const val = parseFloat(rawVal);
         if (!isNaN(val)) {
-          console.log('[ProxChat] MinimapScale raw="' + rawVal + '" parsed=' + val);
+          console.log('[LoLProxChat] MinimapScale raw="' + rawVal + '" parsed=' + val);
           callback(val);
           return;
         }
       }
     }
-    console.warn('[ProxChat] MinimapScale not found in game.cfg, text length=' + text.length);
+    console.warn('[LoLProxChat] MinimapScale not found in game.cfg, text length=' + text.length);
     callback(null);
   }
 
@@ -597,7 +597,7 @@ export class Orchestrator {
     this.readMinimapScale((scale) => {
       if (scale === null || !this.tracking) return;
       if (scale !== this.lastMinimapScale) {
-        console.log('[ProxChat] MinimapScale changed:', this.lastMinimapScale, '->', scale);
+        console.log('[LoLProxChat] MinimapScale changed:', this.lastMinimapScale, '->', scale);
         this.lastMinimapScale = scale;
         this.tracking.setMinimapScaleFromConfig(scale);
       }

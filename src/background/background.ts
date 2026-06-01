@@ -7,17 +7,17 @@ import { listen } from '@tauri-apps/api/event';
 import { Orchestrator } from '../services/orchestrator';
 import { isAutoUpdateEnabled } from '../services/updater';
 
-console.log('[ProxChat] Background script loading...');
+console.log('[LoLProxChat] Background script loading...');
 
 const orchestrator = new Orchestrator();
 orchestrator.start();
 
-console.log('[ProxChat] Orchestrator started');
+console.log('[LoLProxChat] Orchestrator started');
 
 // Listen for messages from overlay (Tauri uses window events instead of Overwolf messaging)
 window.addEventListener('overlayAction', ((event: CustomEvent) => {
   const { action, payload } = event.detail;
-  console.log('[ProxChat] Received action from overlay:', action);
+  console.log('[LoLProxChat] Received action from overlay:', action);
   switch (action) {
     case 'toggleSelfMute':
       orchestrator.toggleSelfMute();
@@ -65,7 +65,7 @@ listen<string>('global_shortcut', (event) => {
       orchestrator.setPTTState(false);
       break;
   }
-}).catch((e) => console.warn('[ProxChat] global_shortcut listen failed:', e));
+}).catch((e) => console.warn('[LoLProxChat] global_shortcut listen failed:', e));
 
 console.log('LoLProxChat background service started');
 

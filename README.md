@@ -15,6 +15,17 @@ Download the latest `proxchat.exe` from [Releases](https://github.com/danthi123/
 
 Launch the exe before or during a League match. The overlay auto-attaches beside the minimap once a game is detected.
 
+### First-run on Windows: SmartScreen warning
+
+The exe isn't code-signed (signing certs are paid + tied to a legal entity, not worth it for a personal open-source project), so the first time you run it Windows will show one of:
+
+- **"Windows protected your PC"** (SmartScreen blue dialog) → click **More info** → **Run anyway**.
+- **"This app has been blocked for your protection"** (Mark of the Web from downloaded files) → right-click `lolproxchat.exe` → **Properties** → check **Unblock** at the bottom → **OK** → launch again.
+
+Both prompts are Windows' standard treatment for any unsigned exe downloaded from the internet (Discord standalone, OBS portable, many indie tools all get the same warning the first time). Subsequent launches don't prompt.
+
+If you'd rather audit before running: source is in this repo, build it yourself from `npx tauri build` to skip the warning entirely (locally-built exes don't carry the Mark of the Web).
+
 ## Controls
 
 - **Panel buttons:** MIC (self-mute toggle), VOL (mute everyone), SET (settings panel), » (collapse panel)
