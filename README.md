@@ -23,6 +23,10 @@ Launch the exe before or during a League match. The overlay auto-attaches beside
   - `Ctrl+Shift+M` — toggle self-mute
   - `F8` (hold) — push-to-talk (only effective when Input Mode is set to "Push to Talk" in Settings; default is "Always Open")
 
+## Auto-update
+
+Disabled by default. Enable in **Settings → Auto-update**. When on, the app checks GitHub Releases ~5 seconds after launch and, if a newer version is published, downloads and applies it automatically (process exits, new binary takes over, old one is cleaned up). You can also force a manual check anytime via **Settings → Updates → CHECK**. The setting persists across launches.
+
 ## How It Works
 
 1. **Game detection** — Polls the League Client (LCU) for game phase, then the Live Client Data API for player roster and your summoner identity. No memory reading.

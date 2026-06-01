@@ -15,6 +15,16 @@ This is the deeper guide. For a quick start, see the top-level [README](../READM
 - `Ctrl+Shift+M` — toggle self-mute
 - `F8` (hold) — push-to-talk
 
+### Auto-update
+
+Off by default. Toggle in **Settings → Auto-update**. When on:
+1. App checks the GitHub Releases API ~5 s after launch.
+2. If `tag_name` is newer than the running version, downloads `proxchat.exe` from the release to `<exe-dir>/proxchat.exe.new`.
+3. Spawns the new binary with `--complete-update <old-path>` and exits.
+4. The new process waits ~800 ms (so the old process releases its file lock), deletes the old `.exe` with up to 5 retries, then renames itself from `.exe.new` → `.exe` (renaming a running `.exe` is allowed on Windows; deleting one isn't).
+
+Manual `CHECK` button in Settings works regardless of the toggle. The setting persists via localStorage in the WebView2 user data directory.
+
 ### Removal
 1. Delete the `proxchat.exe` you downloaded.
 2. Delete `%LOCALAPPDATA%\com.proxchat.app\` — contains the WebView2 cache (cookies, localStorage, IndexedDB) and `proxchat.log` if Debug was ever enabled. That's the entire footprint.
