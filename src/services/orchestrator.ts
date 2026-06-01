@@ -189,8 +189,16 @@ export class Orchestrator {
       console.log('[LoLProxChat] Resolution: game=' + gameW + 'x' + gameH +
         ' dpiScale=' + this.dpiScale);
 
-      // Auto-detect League config path (use default since Tauri doesn't provide exe path)
-      this.leagueConfigPath = 'C:/Riot Games/League of Legends/Config/game.cfg';
+      // Derive League's install dir from the running LeagueClient process
+      // (so users with custom install paths still get minimap-scale calibration).
+      try {
+        const installDir = await invoke<string | null>('get_league_install_dir');
+        this.leagueConfigPath = installDir
+          ? installDir.replace(/\\/g, '/') + '/Config/game.cfg'
+          : 'C:/Riot Games/League of Legends/Config/game.cfg';
+      } catch {
+        this.leagueConfigPath = 'C:/Riot Games/League of Legends/Config/game.cfg';
+      }
       console.log('[LoLProxChat] League config path:', this.leagueConfigPath);
 
       this.tracking = new TrackingService(gameW, gameH, session.mapType);

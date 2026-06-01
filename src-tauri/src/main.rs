@@ -81,6 +81,27 @@ fn position_overlay(app: tauri::AppHandle, x: f64, y: f64, width: f64, height: f
     }
 }
 
+/// Toggle WDA_EXCLUDEFROMCAPTURE on the overlay window. When `excluded` is
+/// true the overlay becomes invisible to GDI BitBlt and most screen capture
+/// software — which prevents the debug-paint feedback loop but also disables
+/// recording in Nvidia ShadowPlay / Win11 Game Bar. Called from the frontend
+/// when the user toggles Debug, so non-debug users keep ShadowPlay working.
+#[tauri::command]
+fn set_excluded_from_capture(app: tauri::AppHandle, excluded: bool) -> Result<(), String> {
+    let window = app.get_webview_window("overlay").ok_or("no overlay window")?;
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
+    };
+    let affinity = if excluded { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+    unsafe {
+        SetWindowDisplayAffinity(HWND(hwnd.0 as _), affinity)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Get screen dimensions for the primary monitor.
 #[tauri::command]
 fn get_screen_size() -> (u32, u32) {
@@ -167,20 +188,14 @@ fn main() {
                 return Ok(());
             };
 
-            // Hide overlay from desktop capture so our own debug paint
-            // doesn't feed back into the next BitBlt frame.
-            if let Ok(hwnd) = window.hwnd() {
-                use windows::Win32::Foundation::HWND;
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
-                };
-                unsafe {
-                    let _ = SetWindowDisplayAffinity(
-                        HWND(hwnd.0 as _),
-                        WDA_EXCLUDEFROMCAPTURE,
-                    );
-                }
-            }
+            // NOTE: WDA_EXCLUDEFROMCAPTURE is intentionally NOT set at startup.
+            // Setting it permanently causes Nvidia ShadowPlay / Win11 Game Bar
+            // to treat the overlay as protected content and disable game
+            // recording entirely (issue #2). It's only needed when Debug paints
+            // the HSV-filtered image into the calibration region, which would
+            // otherwise feed back into the next BitBlt frame. The overlay
+            // toggles this flag via `set_excluded_from_capture` when the user
+            // flips Debug on/off.
 
             // Start globally click-through. The polling loop below flips it
             // off only when the cursor is over the panel region.
@@ -234,9 +249,11 @@ fn main() {
             lcu::get_game_state,
             lcu::get_live_client_data,
             lcu::read_text_file,
+            lcu::get_league_install_dir,
             position_overlay,
             get_screen_size,
             set_panel_size,
+            set_excluded_from_capture,
             append_log,
             updater::check_for_update,
             updater::download_and_apply_update,

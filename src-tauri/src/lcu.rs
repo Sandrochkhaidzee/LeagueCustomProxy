@@ -12,37 +12,59 @@ pub struct GameState {
     pub game_flow_phase: String,
 }
 
-/// Find LeagueClient.exe process and parse its lockfile for API credentials.
-fn find_lockfile() -> Option<(u16, String)> {
+/// Locate the LeagueClient.exe install directory by querying the running
+/// process. Falls back to a few common default install paths if the process
+/// query fails (permissions / sysinfo platform quirks).
+fn find_league_install_dir() -> Option<PathBuf> {
     let sys = System::new_all();
-
-    // Check if LeagueClient.exe is running
-    let has_league = sys
-        .processes()
-        .values()
-        .any(|p| p.name().to_string_lossy().contains("LeagueClient"));
-
-    if !has_league {
-        return None;
-    }
-
-    // Try standard lockfile locations
-    let paths = [
-        PathBuf::from(r"C:\Riot Games\League of Legends\lockfile"),
-        PathBuf::from(r"D:\Riot Games\League of Legends\lockfile"),
-    ];
-
-    for path in &paths {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            let parts: Vec<&str> = content.split(':').collect();
-            if parts.len() >= 4 {
-                if let Ok(port) = parts[2].parse::<u16>() {
-                    return Some((port, parts[3].to_string()));
+    for proc in sys.processes().values() {
+        let name = proc.name().to_string_lossy();
+        if name.contains("LeagueClient") {
+            if let Some(exe_path) = proc.exe() {
+                if let Some(parent) = exe_path.parent() {
+                    return Some(parent.to_path_buf());
                 }
+            }
+            if let Some(cwd) = proc.cwd() {
+                return Some(cwd.to_path_buf());
             }
         }
     }
+    // No running process — try common defaults. Used during transient process
+    // states or when sysinfo can't read the exe path due to permissions.
+    let defaults = [
+        r"C:\Riot Games\League of Legends",
+        r"D:\Riot Games\League of Legends",
+        r"C:\Program Files\Riot Games\League of Legends",
+        r"C:\Program Files (x86)\Riot Games\League of Legends",
+    ];
+    for d in &defaults {
+        let p = PathBuf::from(d);
+        if p.join("lockfile").exists() || p.join("LeagueClient.exe").exists() {
+            return Some(p);
+        }
+    }
     None
+}
+
+/// Find and parse the LeagueClient lockfile. Returns (port, password).
+fn find_lockfile() -> Option<(u16, String)> {
+    let dir = find_league_install_dir()?;
+    let content = std::fs::read_to_string(dir.join("lockfile")).ok()?;
+    let parts: Vec<&str> = content.split(':').collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let port = parts[2].parse::<u16>().ok()?;
+    Some((port, parts[3].to_string()))
+}
+
+/// Returns the absolute path to the League of Legends install directory if
+/// detected, so the frontend can read other files in the install (e.g.
+/// `Config/game.cfg` for minimap-scale calibration) regardless of install path.
+#[tauri::command]
+pub fn get_league_install_dir() -> Option<String> {
+    find_league_install_dir().map(|p| p.to_string_lossy().to_string())
 }
 
 #[tauri::command]

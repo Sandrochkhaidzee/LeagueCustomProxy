@@ -134,6 +134,10 @@ btnDebug.addEventListener('click', () => {
   btnDebug.classList.toggle('active', debugEnabled);
   scanRateRow.classList.toggle('hidden', !debugEnabled);
   setLoggingEnabled(debugEnabled);
+  // Toggle WDA_EXCLUDEFROMCAPTURE on the overlay window. Only needed when
+  // Debug is on (to break the HSV-filter capture feedback loop) — leaving it
+  // off by default lets Nvidia ShadowPlay / Win11 Game Bar record normally.
+  sendToBackground('setExcludedFromCapture', { excluded: debugEnabled });
   // Immediately hide debug elements when toggled off
   if (!debugEnabled) {
     trackingDot.style.display = 'none';
