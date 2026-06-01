@@ -8,9 +8,20 @@ Standalone Windows desktop app built with Tauri 2 + WebView2. No Overwolf, no th
 
 Download the latest `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxyChat/releases/latest). It's a single portable executable — no installer.
 
-**Requirements:** Windows 10 1809+ or Windows 11. WebView2 Runtime (ships with Windows 11; pushed via Edge on Windows 10).
+**Requirements:**
+- Windows 10 1809+ or Windows 11
+- WebView2 Runtime (ships with Windows 11; pushed via Edge on Windows 10)
+- **League of Legends must be set to Borderless mode** (Settings → Video → Window Mode → Borderless). True fullscreen takes exclusive GPU output and no transparent overlay — including this one — can render over it. Borderless is functionally identical performance-wise.
 
 Launch the exe before or during a League match. The overlay auto-attaches beside the minimap once a game is detected.
+
+## Controls
+
+- **Panel buttons:** MIC (self-mute toggle), VOL (mute everyone), SET (settings panel), » (collapse panel)
+- **Per-player MUTE button** in each row mutes that specific player for you
+- **Global shortcuts** (work even when the game has focus, provided LoL is in borderless):
+  - `Ctrl+Shift+M` — toggle self-mute
+  - `F8` (hold) — push-to-talk (only effective when Input Mode is set to "Push to Talk" in Settings; default is "Always Open")
 
 ## How It Works
 
@@ -18,15 +29,32 @@ Launch the exe before or during a League match. The overlay auto-attaches beside
 2. **Position detection** — Win32 BitBlt captures the minimap region, HSV color filtering + blob detection finds champion icons, and an ONNX champion classifier identifies which blob is your own champion.
 3. **Signaling** — Players in the same game join a deterministic WebSocket room (room ID = hash of sorted player names) on a self-hosted Node server.
 4. **Voice** — WebRTC peer-to-peer audio between players; no audio touches any server.
-5. **Proximity volume** — Server-side AES-GCM encrypted position blobs + volume computation, so no client learns another player's exact position. Logarithmic falloff up to 1200 game units.
-6. **Audio processing** — RNNoise WASM for noise suppression + voice activity detection; Opus at 128 kbps with DTX for bandwidth efficiency.
+5. **Proximity volume** — Server-side AES-GCM encrypted position blobs + volume computation, so no client learns another player's exact position. Quadratic falloff up to 1200 game units (matches typical LoL vision range — if you can't see them, you can't hear them).
+6. **Audio processing** — Chromium's native WebRTC noise suppression + echo cancellation + AGC (runs in native audio thread). Opus at 128 kbps.
+
+## Usage
+
+1. Make sure LoL is set to **Borderless** mode (Settings → Video → Window Mode → Borderless).
+2. Launch `proxchat.exe`. The panel appears in the middle of the screen until a game starts (it'll show the current lifecycle phase — "Waiting for League of Legends", "In champion select", etc).
+3. Once you load into a match the panel jumps to the left edge of the minimap. Other players also running ProxChat in the same match will appear in the list within a few seconds.
+4. **Always Open** mic is the default — just talk and they'll hear you, scaled by in-game distance. Switch to **Push to Talk (F8)** in Settings if you'd prefer.
+5. Click **MIC** to self-mute, **VOL** to mute everyone, or the per-row **MUTE** button to silence a specific player.
+
+## Uninstall
+
+Because it's a portable exe with no installer, removing it is a two-step process:
+
+1. **Delete the exe** wherever you put it (probably Downloads or a folder you chose).
+2. **Delete WebView2 / app data:** `%LOCALAPPDATA%\com.proxchat.app\` — contains the WebView2 cache (cookies, localStorage, IndexedDB) and `proxchat.log` if you ever enabled Debug. Open `Run` (Win+R) and paste `%LOCALAPPDATA%\com.proxchat.app\` to find it.
+
+That's the full footprint. No registry entries owned by ProxChat itself, no entries under `Programs and Features`, no startup tasks, no services.
 
 ## Architecture
 
 ```
 proxchat.exe (Tauri 2)
-├── Rust backend       — Win32 screen capture, LCU/Live Client polling, window positioning
-└── WebView2 frontend  — orchestrator, signaling, WebRTC, CV, ONNX, RNNoise
+├── Rust backend       — Win32 screen capture, LCU/Live Client polling, window positioning, global shortcuts
+└── WebView2 frontend  — orchestrator, signaling, WebRTC, CV, ONNX champion classifier
 
 server/                — Node WebSocket + HTTP signaling server
 ├── /ws                — WebSocket upgrade for room join, signaling, presence
@@ -39,9 +67,9 @@ server/                — Node WebSocket + HTTP signaling server
 - `Orchestrator` — wires game state → tracking → signaling → audio
 - `TrackingService` — minimap CV pipeline (capture → HSV mask → blob detect → classifier)
 - `ChampionClassifier` — ONNX Runtime Web (WASM backend) inference
-- `AudioService` — WebRTC audio + RNNoise VAD/PTT + per-peer volume control
-- `SignalingService` — WebSocket presence and signal relay
-- `PeerConnection` — WebRTC with Opus 128 kbps DTX
+- `AudioService` — WebRTC audio + per-peer volume control. Input mode: Always Open or Push to Talk (F8 global shortcut). Noise suppression handled natively by Chromium.
+- `SignalingService` — WebSocket presence and signal relay with auto-reconnect (exponential backoff)
+- `PeerConnection` — WebRTC with Opus 128 kbps, EMA-smoothed per-peer gain via WebAudio
 - `VolumeClient` — calls `/compute-volumes` with encrypted blobs
 - `DataChannelService` — WebRTC data channels for encrypted blob exchange
 - `GameStateService` — wraps Tauri commands for LCU + Live Client Data
@@ -49,7 +77,7 @@ server/                — Node WebSocket + HTTP signaling server
 **Rust commands** (under `src-tauri/src/`):
 - `capture.rs` — `set_capture_bounds`, `capture_minimap` (Win32 GDI BitBlt)
 - `lcu.rs` — `check_league_running`, `get_game_state`, `get_live_client_data`, `read_text_file`
-- `main.rs` — `position_overlay`, `get_screen_size`; sets `WDA_EXCLUDEFROMCAPTURE` on the overlay window so its debug paint doesn't feed back into the next capture
+- `main.rs` — `position_overlay`, `get_screen_size`, `set_panel_size`, `append_log`. Also sets `WDA_EXCLUDEFROMCAPTURE` on the overlay window (so its own debug paint doesn't feed back into the next capture), polls cursor position to dynamically toggle click-through over non-panel regions, and registers global shortcuts (`Ctrl+Shift+M` toggle self-mute, `F8` push-to-talk).
 
 ## Build From Source
 
@@ -187,7 +215,6 @@ https://github.com/danthi123/LoLProxyChat/releases/latest/download/proxchat.exe
 
 - [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) — reference code for minimap detection
 - [League of Legends Wiki](https://wiki.leagueoflegends.com) — champion circle icon assets used for classifier training
-- [RNNoise](https://jmvalin.ca/demo/rnnoise/) — noise suppression via [@jitsi/rnnoise-wasm](https://github.com/nicknisi/rnnoise-wasm)
 - [Tauri](https://tauri.app) — desktop app framework
 
 ## License

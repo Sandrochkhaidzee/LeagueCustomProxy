@@ -4,10 +4,20 @@ This is the deeper guide. For a quick start, see the top-level [README](../READM
 
 ## 1. Run the Client (Most Users)
 
-1. Download `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxyChat/releases/latest).
-2. Run it. On first launch you'll see a small panel; it stays empty until you're in a League match.
-3. The panel auto-positions left of the minimap once CV locks on. The transparent region over the minimap is the calibration overlay (purely visual right now — manual drag/resize handles aren't wired up yet).
-4. Toggle **Settings → Debug** to visualize the HSV-filtered minimap and tracking dot. Debug mode also exposes a **Scan Rate** slider — default 50 ≈ 30 FPS, max 100 = 60 FPS. Smoothing constants are scan-rate invariant, so the slider trades CPU for tracking responsiveness without retuning behavior.
+1. **Set League of Legends to Borderless mode** (Settings → Video → Window Mode → Borderless). This is required — DX9 true fullscreen takes exclusive GPU output and no overlay can render over it.
+2. Download `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxyChat/releases/latest).
+3. Run it. The panel appears in the middle of the screen until a game starts, showing the current lifecycle status (e.g. "Waiting for League of Legends", "In champion select", "Joining game...").
+4. Once you load into a match the panel jumps to the left edge of the minimap. The transparent region over the minimap is the calibration overlay (purely visual right now — manual drag/resize handles aren't wired up).
+5. **Input mode** defaults to **Always Open** (mic always live unless self-muted). Switch to **Push to Talk (F8 hold)** in Settings if preferred. Per-player MUTE buttons mute that specific player for you only.
+6. Toggle **Settings → Debug** to visualize the HSV-filtered minimap and tracking dot. Debug mode also exposes a **Scan Rate** slider — default 50 ≈ 30 FPS, max 100 = 60 FPS. Smoothing constants are scan-rate invariant. Debug also writes a log file at `%LOCALAPPDATA%\com.proxchat.app\proxchat.log` (truncated each session) so you can inspect issues without dev tools.
+
+### Global shortcuts (work over LoL when in Borderless)
+- `Ctrl+Shift+M` — toggle self-mute
+- `F8` (hold) — push-to-talk
+
+### Removal
+1. Delete the `proxchat.exe` you downloaded.
+2. Delete `%LOCALAPPDATA%\com.proxchat.app\` — contains the WebView2 cache (cookies, localStorage, IndexedDB) and `proxchat.log` if Debug was ever enabled. That's the entire footprint.
 
 By default the client talks to `https://proxchat.dant123.com`. To point at a different server, build from source (see below) with `PROXCHAT_SERVER=https://your-server.example.com` in `.env`.
 
@@ -149,8 +159,12 @@ python scripts/train_champion_classifier.py
 
 | Symptom | Likely cause |
 |---|---|
-| Overlay opens in the middle of the screen and never moves | The orchestrator didn't load — check the WebView2 dev console (right-click → Inspect on the overlay) for JS errors |
-| Overlay sits above the minimap, doesn't overlap it | `position_overlay` got minimap bounds with wrong dimensions — toggle Debug on and look at the tracking-state line |
-| Debug overlay icons stack/smear each frame | The overlay HWND isn't being excluded from capture (Windows < 10 2004) |
-| `curl /health` from outside works, but the client times out connecting | Reverse proxy isn't upgrading WebSockets — check proxy config |
-| No audio between peers in the same game | Both peers reach signaling but WebRTC ICE fails — check `/turn-credentials` and verify the coturn container is healthy |
+| Overlay invisible during gameplay | LoL is in true fullscreen — switch to **Borderless** mode in Video Settings. |
+| Overlay sits in middle of screen forever | No game detected, OR CV hasn't locked on yet. Lifecycle text in the panel tells you which phase you're in. |
+| Overlay sits above the minimap instead of beside it | `position_overlay` got minimap bounds with wrong dimensions — toggle Debug on and check the tracking-state log line. |
+| Overlay is offset slightly from the minimap on a laptop | DPI scaling — should be handled in v0.1.5+. If you're on an older build, update. |
+| Per-player MUTE button doesn't visibly react | Should be fixed in v0.1.16+. If still broken, check the panel hit-rect via Debug logs. |
+| Audio cuts out / crackles | Almost always main-thread contention from CV at high scan rates. Drop **Scan Rate** to ~50 (30 FPS). v0.1.15+ uses Chromium's native NS which is much more robust than the old RNNoise path. |
+| Word starts/ends clipped | DTX issue — fixed in v0.1.14+. If you're on an older build, update. |
+| `curl /health` from outside works, but the client times out connecting | Reverse proxy isn't upgrading WebSockets — check proxy config. |
+| Peers connect but hear nothing | Confirm both clients are v0.1.7+ (wire-protocol fix). Then check that ICE is connecting — toggle Debug, look for `[WebRTC] ICE state ... : connected`. If it goes to `failed`, peers are behind restrictive NAT and need a working TURN server. |
