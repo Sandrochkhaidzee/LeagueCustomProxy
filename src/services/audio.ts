@@ -321,9 +321,11 @@ export class AudioService {
       const playerVolume = this.settings.playerVolumes[name] ?? 1.0;
       const finalVol = volume * playerVolume;
       const wasState = this.lastAppliedVolume.get(name);
-      // Always update volume so it's correct when unmuted
+      // Always update volume so it's correct when unmuted. Don't hard-mute on
+      // finalVol === 0 — the smoothed gain ramp handles it without a click,
+      // and it lets brief proximity zeros (CV tracking glitches) fade gracefully.
       peer.setVolume(finalVol);
-      const muteNow = this.muteAll || this.mutedPlayers.has(name) || finalVol === 0;
+      const muteNow = this.muteAll || this.mutedPlayers.has(name);
       if (muteNow) {
         peer.mute();
       } else {

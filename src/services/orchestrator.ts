@@ -301,6 +301,14 @@ export class Orchestrator {
       return;
     }
 
+    // Stop broadcasting if our position is stale (CV has been extrapolating
+    // for >2s). Better to let peers' last-known blob from us expire on the
+    // server than to pollute their proximity math with phantom positions.
+    if (this.tracking.getHoldDurationSec() > 2) {
+      this.broadcastOverlayState();
+      return;
+    }
+
     try {
       // Collect encrypted blobs received from peers
       const peerBlobs = this.dataChannels.getPeerBlobs();

@@ -79,6 +79,10 @@ export class TrackingService {
   private lastDtSec = 1 / 8; // seconds between this tick and the previous one
   private scanStartMs = 0;
   private holdStartMs = 0;
+  // When we successfully tracked a blob that moved >3px from last tick.
+  // Used to make Phase 2 re-acquisition stricter when stationary, so we don't
+  // teleport the tracking dot onto a minion wave / turret if the icon flickers.
+  private lastMovementMs = 0;
   private static readonly TUNED_FPS = 8;
 
   // Diagnostics
@@ -111,6 +115,10 @@ export class TrackingService {
   getState(): TrackingState { return this.state; }
   getLastPosition(): Position | null { return this.lastPosition; }
   getFilteredImageUrl(): string | null { return this.filteredImageUrl; }
+  /** Seconds since the last successful frame-to-frame lock, or 0 if currently tracking. */
+  getHoldDurationSec(): number {
+    return this.holdStartMs > 0 ? (performance.now() - this.holdStartMs) / 1000 : 0;
+  }
 
   /** Get the minimap bounds in screen coordinates */
   getDetectedMinimapScreenBounds(): { screenX: number; screenY: number; screenWidth: number; screenHeight: number } | null {
@@ -859,6 +867,9 @@ export class TrackingService {
     this.scanFrameCount = 0;
     this.scanStartMs = performance.now();
     this.holdStartMs = 0;
+    // Treat the moment of lock as a "movement" so Phase 2 doesn't start in
+    // stationary-stickiness mode before we've seen any real movement.
+    this.lastMovementMs = performance.now();
     this.velocityX = 0;
     this.velocityY = 0;
 
@@ -958,7 +969,16 @@ export class TrackingService {
     // After holding for a while (>1s), lower the threshold to recover faster.
     if (!bestBlob && hasClassifier) {
       if (this.holdStartMs === 0) this.holdStartMs = performance.now();
-      const CLS_REACQUIRE_THRESHOLD = holdSec > 1.0 ? 0.35 : 0.5;
+      // If we've been stationary for a while and lost the icon, it's far
+      // more likely to be a transient render glitch than the user teleporting
+      // — require very high classifier confidence before snapping to a blob
+      // elsewhere on the minimap (otherwise we lock onto a minion wave or turret).
+      const stationarySec = this.lastMovementMs > 0
+        ? (performance.now() - this.lastMovementMs) / 1000
+        : 0;
+      const CLS_REACQUIRE_THRESHOLD = stationarySec > 3
+        ? 0.85
+        : holdSec > 1.0 ? 0.35 : 0.5;
       let bestClsBlob: Blob | null = null;
       let bestClsScore = 0;
 
@@ -1012,6 +1032,13 @@ export class TrackingService {
     const velWeightNew = 1 - velWeightOld;
     this.velocityX = this.velocityX * velWeightOld + (bestBlob.cx - lastRegX) * velWeightNew;
     this.velocityY = this.velocityY * velWeightOld + (bestBlob.cy - lastRegY) * velWeightNew;
+
+    // Track movement so we can prefer stationary "stickiness" in Phase 2 below.
+    const moveDx = bestBlob.cx - lastRegX;
+    const moveDy = bestBlob.cy - lastRegY;
+    if (moveDx * moveDx + moveDy * moveDy > 9 /* 3px */) {
+      this.lastMovementMs = performance.now();
+    }
 
     this.lastPixelPos = { x: cx, y: cy };
     this.lastPosition = this.pixelToGamePosition(cx, cy, this.minimapRegion);

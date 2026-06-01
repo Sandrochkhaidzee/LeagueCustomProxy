@@ -41,6 +41,10 @@ export class PeerConnection {
   private gainNode: GainNode | null = null;
   private targetVolume = 1;
   private muted = false;
+  // Outer-loop EMA on volume targets so brief CV tracking glitches don't
+  // produce audible dropouts. null = first call (snap to value, no smoothing).
+  private smoothedVolume: number | null = null;
+  private lastSetVolumeMs = 0;
 
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
   onDataMessage: ((data: string) => void) | null = null;
@@ -237,8 +241,19 @@ export class PeerConnection {
 
   setVolume(volume: number): void {
     const clamped = Math.max(0, Math.min(1, volume));
-    this.targetVolume = clamped;
-    if (!this.muted) this.applyGain(clamped);
+    const now = performance.now();
+    if (this.smoothedVolume === null) {
+      // First call — snap to the value so new peers don't start at 1.0
+      this.smoothedVolume = clamped;
+    } else {
+      // Time-based EMA with ~300ms half-life. Damps spikes from CV jitter.
+      const dt = (now - this.lastSetVolumeMs) / 1000;
+      const alpha = Math.min(1, 1 - Math.exp(-dt / 0.3));
+      this.smoothedVolume = this.smoothedVolume * (1 - alpha) + clamped * alpha;
+    }
+    this.lastSetVolumeMs = now;
+    this.targetVolume = this.smoothedVolume;
+    if (!this.muted) this.applyGain(this.smoothedVolume);
   }
 
   mute(): void {

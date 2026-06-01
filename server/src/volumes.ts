@@ -1,6 +1,6 @@
 const crypto = globalThis.crypto;
 
-const MAX_HEARING_RANGE = 1200;
+const MAX_HEARING_RANGE = 1500;
 const BLOB_MAX_AGE_MS = 10_000; // 10s to handle clock skew
 
 export interface VolumeRequest {
@@ -41,8 +41,10 @@ async function importKey(hexKey: string): Promise<CryptoKey> {
 export function calculateVolume(distance: number): number {
   if (distance >= MAX_HEARING_RANGE) return 0.0;
   if (distance <= 0) return 1.0;
+  // Quadratic falloff — more generous in the mid-range than the previous
+  // logarithmic curve. At MAX/2: log gave ~0.38, quadratic gives 0.75.
   const normalized = distance / MAX_HEARING_RANGE;
-  return Math.max(0, 1 - Math.log1p(normalized * (Math.E - 1)));
+  return Math.max(0, 1 - normalized * normalized);
 }
 
 export async function encryptPosition(

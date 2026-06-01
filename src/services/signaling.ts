@@ -25,6 +25,17 @@ type OnPeerJoined = (name: string) => void;
 export class SignalingService {
   private ws: WebSocket | null = null;
   private localName: string = '';
+  // Saved so reconnect can rejoin the same room with the same identity
+  private currentRoomId: string | null = null;
+  private currentHandlers: {
+    onPeerPosition: OnPeerPosition;
+    onSignal: OnSignal;
+    onPeerLeave: OnPeerLeave;
+    onPeerJoined?: OnPeerJoined;
+  } | null = null;
+  private reconnectAttempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private intentionallyClosed = false;
 
   joinRoom(
     roomId: string,
@@ -35,13 +46,29 @@ export class SignalingService {
     onPeerJoined?: OnPeerJoined,
   ): void {
     this.localName = localName;
-    this.leaveRoom();
+    this.currentRoomId = roomId;
+    this.currentHandlers = { onPeerPosition, onSignal, onPeerLeave, onPeerJoined };
+    this.intentionallyClosed = false;
+    this.reconnectAttempt = 0;
+    this.openSocket();
+  }
+
+  private openSocket(): void {
+    if (!this.currentRoomId || !this.currentHandlers) return;
+    if (this.ws) {
+      try { this.ws.close(); } catch { /* ignore */ }
+    }
+
+    const { onPeerPosition, onSignal, onPeerLeave, onPeerJoined } = this.currentHandlers;
+    const roomId = this.currentRoomId;
+    const localName = this.localName;
 
     const ws = new WebSocket(WS_URL);
     this.ws = ws;
 
     ws.addEventListener('open', () => {
       console.log('[Signaling] WebSocket connected');
+      this.reconnectAttempt = 0;
       ws.send(JSON.stringify({ type: 'join', room: roomId, name: localName }));
     });
 
@@ -111,6 +138,16 @@ export class SignalingService {
 
     ws.addEventListener('close', () => {
       console.log('[Signaling] WebSocket disconnected');
+      if (this.intentionallyClosed) return;
+      // Exponential backoff capped at 30s
+      this.reconnectAttempt++;
+      const delayMs = Math.min(30000, 500 * Math.pow(2, this.reconnectAttempt - 1));
+      console.log('[Signaling] Reconnecting in ' + delayMs + 'ms (attempt ' + this.reconnectAttempt + ')');
+      if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this.openSocket();
+      }, delayMs);
     });
 
     ws.addEventListener('error', (err) => {
@@ -140,8 +177,15 @@ export class SignalingService {
   }
 
   leaveRoom(): void {
+    this.intentionallyClosed = true;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.currentRoomId = null;
+    this.currentHandlers = null;
     if (this.ws) {
-      this.ws.close();
+      try { this.ws.close(); } catch { /* ignore */ }
       this.ws = null;
     }
   }
