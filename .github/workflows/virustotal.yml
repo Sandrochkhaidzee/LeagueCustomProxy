@@ -32,11 +32,10 @@ jobs:
         uses: crazy-max/ghaction-virustotal@v4
         with:
           vt_api_key: ${{ secrets.VT_API_KEY }}
-          # When triggered by a release event, the action auto-discovers
-          # the release's assets and uploads them. The glob below is
-          # advisory/fallback.
+          # `files` is a regex (NOT a glob) applied to release asset names.
+          # Match all .exe assets.
           files: |
-            *.exe
+            .*\.exe$
           # Append a "Virus Total" section to the release body with one
           # permalink per scanned asset.
           update_release_body: true
