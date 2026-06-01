@@ -6,7 +6,7 @@ Standalone Windows desktop app built with Tauri 2 + WebView2. No Overwolf, no th
 
 ## Install
 
-Download the latest `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxyChat/releases/latest). It's a single portable executable — no installer.
+Download the latest `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxChat/releases/latest). It's a single portable executable — no installer.
 
 **Requirements:**
 - Windows 10 1809+ or Windows 11
@@ -258,7 +258,7 @@ docs/
 
 ## Releases
 
-New builds are published to [GitHub Releases](https://github.com/danthi123/LoLProxyChat/releases). To cut a release:
+New builds are published to [GitHub Releases](https://github.com/danthi123/LoLProxChat/releases). To cut a release:
 
 ```bash
 # bump src-tauri/Cargo.toml version
@@ -270,7 +270,7 @@ gh release create v0.1.X src-tauri/target/release/proxchat.exe \
 
 Users can always grab the most recent via:
 ```
-https://github.com/danthi123/LoLProxyChat/releases/latest/download/lolproxchat.exe
+https://github.com/danthi123/LoLProxChat/releases/latest/download/lolproxchat.exe
 ```
 
 (Legacy URL `proxchat.exe` is also published in releases for backward compatibility with auto-update on clients ≤ v0.1.17.)

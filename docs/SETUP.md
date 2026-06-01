@@ -5,7 +5,7 @@ This is the deeper guide. For a quick start, see the top-level [README](../READM
 ## 1. Run the Client (Most Users)
 
 1. **Set League of Legends to Borderless mode** (Settings → Video → Window Mode → Borderless). This is required — DX9 true fullscreen takes exclusive GPU output and no overlay can render over it.
-2. Download `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxyChat/releases/latest).
+2. Download `proxchat.exe` from [Releases](https://github.com/danthi123/LoLProxChat/releases/latest).
 3. Run it. The panel appears in the middle of the screen until a game starts, showing the current lifecycle status (e.g. "Waiting for League of Legends", "In champion select", "Joining game...").
 4. Once you load into a match the panel jumps to the left edge of the minimap. The transparent region over the minimap is the calibration overlay (purely visual right now — manual drag/resize handles aren't wired up).
 5. **Input mode** defaults to **Always Open** (mic always live unless self-muted). Switch to **Push to Talk (F8 hold)** in Settings if preferred. Per-player MUTE buttons mute that specific player for you only.
@@ -41,8 +41,8 @@ By default the client talks to `https://proxchat.dant123.com`. To point at a dif
 ### Steps
 
 ```bash
-git clone https://github.com/danthi123/LoLProxyChat.git
-cd LoLProxyChat
+git clone https://github.com/danthi123/LoLProxChat.git
+cd LoLProxChat
 npm install
 cp .env.example .env       # optional — edit PROXCHAT_SERVER if self-hosting
 npx tauri build

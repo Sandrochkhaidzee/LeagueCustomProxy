@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 const GITHUB_LATEST: &str =
-    "https://api.github.com/repos/danthi123/LoLProxyChat/releases/latest";
+    "https://api.github.com/repos/danthi123/LoLProxChat/releases/latest";
 const UA: &str = "proxchat-updater";
 
 #[derive(Serialize, Clone)]
