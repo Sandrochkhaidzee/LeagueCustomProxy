@@ -147,15 +147,24 @@ html, body {
 .player-volume::-webkit-slider-thumb:hover { background: #cdcdcd; }
 
 .player-mute-btn {
-  background: none;
-  border: none;
-  color: #8892a8;
+  background: rgba(100, 120, 160, 0.10);
+  border: 1px solid rgba(100, 120, 160, 0.25);
+  color: #cdcdcd;
   cursor: pointer;
   font-size: 10px;
-  padding: 2px 4px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 3px;
   flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
 }
-.player-mute-btn.muted { color: #e74c4c; }
+.player-mute-btn:hover { background: rgba(100, 120, 160, 0.25); }
+.player-mute-btn.muted {
+  background: rgba(231, 76, 76, 0.20);
+  border-color: rgba(231, 76, 76, 0.5);
+  color: #ff7a7a;
+}
+.player-mute-btn.muted:hover { background: rgba(231, 76, 76, 0.32); }
 
 .player-muted-indicator {
   font-size: 10px;
