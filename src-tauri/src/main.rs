@@ -281,6 +281,16 @@ fn main() {
             updater::check_for_update,
             updater::download_and_apply_update,
         ])
+        // Closing the panel ("overlay") window should exit the whole app —
+        // otherwise the scanner window (which is decorationless and
+        // skip-taskbar) sits invisibly over the minimap with no way to
+        // close it. Same applies in reverse: any window-close request
+        // tears down the app cleanly.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                window.app_handle().exit(0);
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error running tauri application");
 }

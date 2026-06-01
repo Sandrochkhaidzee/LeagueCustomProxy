@@ -1086,6 +1086,22 @@ export class TrackingService {
     this.lockedTickCount++;
     if (this.holdStartMs === 0) this.holdStartMs = performance.now();
 
+    // Cap velocity to a physically-plausible magnitude before applying. The
+    // velocity-EMA in handleLocked can latch onto huge values when the tracked
+    // blob suddenly jumps (e.g. classifier re-acquisition after a long hold
+    // puts the position in a totally different spot). Without this cap, even
+    // 1-2 ticks of extrapolation can fly the position into a map corner — we
+    // saw a 12000-game-unit drift in 500ms on a real user log. Champions
+    // top out around 2 px/tick on the minimap at any normal scale; 10 leaves
+    // a generous safety margin while bounding any runaway.
+    const VEL_CAP_PX = 10;
+    const velMag = Math.hypot(this.velocityX, this.velocityY);
+    if (velMag > VEL_CAP_PX) {
+      const scale = VEL_CAP_PX / velMag;
+      this.velocityX *= scale;
+      this.velocityY *= scale;
+    }
+
     // Only extrapolate if we have meaningful velocity
     const speed = Math.abs(this.velocityX) + Math.abs(this.velocityY);
     if (speed > 0.1 && this.lastPixelPos && this.minimapRegion) {

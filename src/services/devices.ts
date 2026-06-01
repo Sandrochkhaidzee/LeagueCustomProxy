@@ -35,9 +35,15 @@ export interface AudioDevices {
 
 export async function listAudioDevices(): Promise<AudioDevices> {
   const devices = await navigator.mediaDevices.enumerateDevices();
+  // Chromium emits synthetic "default" and "communications" entries that
+  // duplicate a real device with a "Default - …" / "Communications - …"
+  // label prefix. We already offer a single "Default" entry in the UI that
+  // passes no deviceId constraint, so drop those to keep the dropdown clean.
+  const isSynthetic = (d: MediaDeviceInfo) =>
+    d.deviceId === 'default' || d.deviceId === 'communications';
   return {
-    inputs: devices.filter((d) => d.kind === 'audioinput'),
-    outputs: devices.filter((d) => d.kind === 'audiooutput'),
+    inputs: devices.filter((d) => d.kind === 'audioinput' && !isSynthetic(d)),
+    outputs: devices.filter((d) => d.kind === 'audiooutput' && !isSynthetic(d)),
   };
 }
 

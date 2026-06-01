@@ -48,6 +48,12 @@ export class PeerConnection {
 
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
   onDataMessage: ((data: string) => void) | null = null;
+  // Fired when ICE has fully failed. The audio layer is responsible for
+  // re-issuing an offer (initiator side only) so we don't restart from both
+  // ends and race. Capped retry counter lives here to avoid loops.
+  onIceFailed: (() => void) | null = null;
+  iceRestartAttempts = 0;
+  static readonly MAX_ICE_RESTARTS = 2;
 
   private constructor(remoteName: string, iceServers: RTCIceServer[], audioContext: AudioContext | null) {
     this.remoteName = remoteName;
@@ -84,11 +90,24 @@ export class PeerConnection {
 
     this.pc.onconnectionstatechange = () => {
       console.log('[WebRTC] Connection state with', remoteName, ':', this.pc.connectionState);
+      if (this.pc.connectionState === 'connected') {
+        // Successful (re)connect — reset the restart budget for any future failure.
+        this.iceRestartAttempts = 0;
+      }
+      if (this.pc.connectionState === 'failed' &&
+          this.iceRestartAttempts < PeerConnection.MAX_ICE_RESTARTS) {
+        this.iceRestartAttempts++;
+        console.warn('[WebRTC] Connection failed with', remoteName,
+          '— triggering ICE restart attempt', this.iceRestartAttempts);
+        this.onIceFailed?.();
+      }
     };
 
     this.pc.oniceconnectionstatechange = () => {
       console.log('[WebRTC] ICE state with', remoteName, ':', this.pc.iceConnectionState);
     };
+
+    this.startStatsLogging();
 
     this.pc.ondatachannel = (event) => {
       this.dataChannel = event.channel;
@@ -177,8 +196,8 @@ export class PeerConnection {
     }
   }
 
-  async createOffer(): Promise<RTCSessionDescriptionInit> {
-    const offer = await this.pc.createOffer();
+  async createOffer(options?: { iceRestart?: boolean }): Promise<RTCSessionDescriptionInit> {
+    const offer = await this.pc.createOffer(options);
     offer.sdp = this.enhanceOpusSdp(offer.sdp || '');
     await this.pc.setLocalDescription(offer);
     return offer;
@@ -280,6 +299,10 @@ export class PeerConnection {
   }
 
   close(): void {
+    if (this.statsIntervalId !== null) {
+      clearInterval(this.statsIntervalId);
+      this.statsIntervalId = null;
+    }
     this.dataChannel?.close();
     this.remoteStream.getTracks().forEach((t) => t.stop());
     this.pc.close();
@@ -291,5 +314,49 @@ export class PeerConnection {
     } catch { /* ignore */ }
     this.sourceNode = null;
     this.gainNode = null;
+  }
+
+  // Periodic getStats snapshot — selected candidate pair, RTT, bytes flowing.
+  // Logged via the standard console.log path which is gated by Debug toggle.
+  // Without these, ICE failures are opaque (we only see "failed" with no
+  // context about which pair was tried or what the RTT looked like).
+  private statsIntervalId: number | null = null;
+  private startStatsLogging(): void {
+    this.statsIntervalId = window.setInterval(() => {
+      this.logStatsSnapshot().catch(() => { /* non-fatal */ });
+    }, 10_000) as unknown as number;
+  }
+
+  private async logStatsSnapshot(): Promise<void> {
+    const stats = await this.pc.getStats();
+    let pair: any = null;
+    let outAudio: any = null;
+    let inAudio: any = null;
+    const byId = new Map<string, any>();
+    stats.forEach((r: any) => {
+      byId.set(r.id, r);
+      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r;
+      if (r.type === 'outbound-rtp' && r.kind === 'audio') outAudio = r;
+      if (r.type === 'inbound-rtp' && r.kind === 'audio') inAudio = r;
+    });
+    const parts: string[] = [
+      'conn=' + this.pc.connectionState,
+      'ice=' + this.pc.iceConnectionState,
+    ];
+    if (pair) {
+      const local = byId.get(pair.localCandidateId);
+      const remote = byId.get(pair.remoteCandidateId);
+      const fmt = (c: any) => c ? `${c.candidateType}:${c.address || c.ip || '?'}:${c.port || '?'}/${c.protocol || '?'}` : '?';
+      parts.push('pair=' + fmt(local) + '<->' + fmt(remote));
+      if (typeof pair.currentRoundTripTime === 'number') {
+        parts.push('rtt=' + Math.round(pair.currentRoundTripTime * 1000) + 'ms');
+      }
+    } else {
+      parts.push('pair=none');
+    }
+    if (outAudio) parts.push('outBytes=' + outAudio.bytesSent);
+    if (inAudio) parts.push('inBytes=' + inAudio.bytesReceived);
+    if (inAudio && typeof inAudio.packetsLost === 'number') parts.push('lost=' + inAudio.packetsLost);
+    console.log('[WebRTC stats]', this.remoteName, parts.join(' '));
   }
 }

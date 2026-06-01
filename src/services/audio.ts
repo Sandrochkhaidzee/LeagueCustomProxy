@@ -186,6 +186,26 @@ export class AudioService {
 
     // Initiator creates data channel + offer
     const shouldInitiate = isInitiator ?? (this.localName < remoteName);
+
+    // Auto-recover from ICE failure. Only the original initiator re-issues
+    // the offer (with iceRestart=true) so we don't both restart and race.
+    // The other side just handles the incoming offer via the normal flow.
+    if (shouldInitiate) {
+      peer.onIceFailed = () => {
+        peer.createOffer({ iceRestart: true })
+          .then((offer) => {
+            console.log('[Audio] Sending ICE-restart offer to:', remoteName);
+            this.signaling.sendSignal({
+              type: 'offer',
+              from: this.localName,
+              to: remoteName,
+              payload: offer,
+            });
+          })
+          .catch((e) => console.warn('[Audio] ICE-restart offer failed for', remoteName, e));
+      };
+    }
+
     if (shouldInitiate) {
       // Create data channel BEFORE offer so it's included in the SDP
       peer.createDataChannel();
@@ -276,6 +296,18 @@ export class AudioService {
   }
 
   applyPeerVolumes(volumes: Record<string, number>): void {
+    // Verbose snapshot of every server-returned per-peer volume. Lets us
+    // distinguish "server said 0 / we played 0" from "server said 0.8 /
+    // EMA stuck near 1" when debugging volume bugs. Already silent unless
+    // Debug is on (console.log is no-op'd by core/logging.ts).
+    const entries = Object.entries(volumes);
+    const summary = entries.length
+      ? entries.map(([n, v]) => `${n}=${v.toFixed(2)}`).join(' ')
+      : '(none)';
+    const skipped = entries.filter(([n]) => !this.peers.has(n)).map(([n]) => n);
+    console.log('[Audio] applyPeerVolumes:', summary,
+      skipped.length ? `(skipped no-peer: ${skipped.join(',')})` : '');
+
     for (const [name, volume] of Object.entries(volumes)) {
       const peer = this.peers.get(name);
       if (!peer) continue;
