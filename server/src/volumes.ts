@@ -1,6 +1,6 @@
 const crypto = globalThis.crypto;
 
-const MAX_HEARING_RANGE = 1300;
+const MAX_HEARING_RANGE = 1200;
 const BLOB_MAX_AGE_MS = 10_000; // 10s to handle clock skew
 
 export interface VolumeRequest {

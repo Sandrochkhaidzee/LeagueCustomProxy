@@ -14,13 +14,13 @@ describe('calculateVolume', () => {
     expect(calculateVolume(0)).toBe(1.0);
   });
 
-  it('returns 0.0 at distance >= 1300', () => {
-    expect(calculateVolume(1300)).toBe(0.0);
+  it('returns 0.0 at distance >= 1200', () => {
+    expect(calculateVolume(1200)).toBe(0.0);
     expect(calculateVolume(5000)).toBe(0.0);
   });
 
   it('is monotonically decreasing', () => {
-    const distances = [0, 100, 200, 400, 600, 800, 1000, 1200, 1300];
+    const distances = [0, 100, 200, 400, 600, 800, 1000, 1100, 1200];
     const volumes = distances.map(calculateVolume);
     for (let i = 1; i < volumes.length; i++) {
       expect(volumes[i]).toBeLessThanOrEqual(volumes[i - 1]);
