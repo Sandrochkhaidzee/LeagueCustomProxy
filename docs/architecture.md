@@ -81,8 +81,8 @@ Tracking is a state machine: **SCANNING → LOCKED → (DEAD)**. Every CV tick:
 2. **Color mask.** Build HSV-thresholded masks for each plausible champion-circle color (teal allies + various enemy hues). Tracked via `buildWhiteMasks` / `findBlobs`.
 3. **Blob detection.** Flood-fill connected components, filter by size + fill-ratio against the expected icon diameter at the current minimap scale.
 4. **Classifier.** When uncertain (multiple candidate blobs, or recovering from a hold), crop each candidate and run it through the ONNX champion classifier (`src/services/champion-classifier.ts`). The classifier is a small CNN trained on champion circle icons; runs in the WASM ONNX Runtime in the audio-thread-adjacent worker.
-5. **Track.** In LOCKED state, prefer the blob nearest to last position + velocity; rebuild velocity as an EMA on apparent motion. Allow brief "holds" (no match in range) using extrapolation with a velocity cap (10 px/tick — see `extrapolatePosition`).
-6. **Position-jump detection.** All `lastPosition` writes funnel through `setLastPosition`, which warns if the implied velocity exceeds 2000 game-units/sec — far above any legitimate champion movement, so any warning hits indicate either a real teleport (recall) or a CV mis-track.
+5. **Track.** In LOCKED state, prefer the blob nearest to last position + velocity; rebuild velocity as an EMA on apparent motion. Allow brief "holds" (no match in range) using extrapolation with a velocity cap (10 px/tick — see `extrapolatePosition`). The scoring/selection math (composite blob score, Phase-1 in-range pick, Phase-2 classifier reacquisition, adaptive thresholds) was extracted to pure functions in `src/services/tracking-helpers.ts` in v0.1.29 — testable in isolation; `handleLocked` is the orchestration layer that wires them up plus the side-effect ordering.
+6. **Position-jump detection.** All `lastPosition` writes funnel through `setLastPosition`, which warns when a jump exceeds both a distance threshold (>500 game-units) AND a speed threshold (>2000 u/s) — both gates filter out CV pixel-jitter on normal movement while still catching real teleports (recall) or mis-tracks. Thresholds live as `JUMP_WARN_MIN_UNITS` / `JUMP_WARN_MIN_SPEED` static constants on `TrackingService`.
 
 Edge cases the state machine handles: champion deaths (icon disappears), respawn at fountain (re-acquire via classifier), camera pan, overlapping icons in teamfights, minimap scale changes via `game.cfg` MinimapScale.
 
@@ -160,6 +160,16 @@ Manual checks (Settings → Updates → CHECK) skip the launch delay and the Aut
 | `Devices` | localStorage-backed input/output audio device pick. |
 | `Privacy` | localStorage-backed Force-TURN toggle. |
 | `Updater` | Thin wrapper over the Rust update commands. |
+
+### Internal helpers and shared types
+
+Not services in their own right — small support modules consumed by the services above:
+
+| Module | Used by | Purpose |
+|---|---|---|
+| `src/services/tracking-helpers.ts` | `TrackingService` | Pure scoring/selection math extracted from `handleLocked` in v0.1.29. Unit-tested in isolation. |
+| `src/services/blob-types.ts` | `tracking.ts`, `tracking-helpers.ts` | Shared `Blob` interface. Lives outside `tracking.ts` so the helpers can import it without a circular reach back. |
+| `src/core/window-globals.ts` | `overlay.ts`, `background.ts`, `orchestrator.ts` | `declare global { interface Window { … } }` for the two app-specific properties used as a cross-module bus (`__proxchatRunUpdateCheck`, `__lolproxchat_debug_enabled`). Imported side-effect-only. |
 
 ## Key Rust commands (under `src-tauri/src/`)
 

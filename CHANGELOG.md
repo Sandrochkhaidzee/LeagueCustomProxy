@@ -4,6 +4,28 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.1.30] — 2026-06-02
+
+### Changed
+- `[Tracking] WARN: position jumped …` now requires both a distance threshold (>500 game-units) AND the existing speed threshold (>2000 u/s) to fire. Previously the speed-only gate produced ~100 false-positive warnings per 5-minute session of normal play (CV pixel-jitter on a stationary champion at high scan rates registered as 2000+ u/s instantaneously). Real recall / teleport / mis-track events still warn.
+- Promoted the warn thresholds to named `JUMP_WARN_MIN_UNITS` / `JUMP_WARN_MIN_SPEED` static constants on `TrackingService` for tunability and grep-ability.
+
+### Added
+- Two new test cases in `tracking.test.ts` pin the new gating: pixel-jitter at high scan rate now correctly stays silent, and a large-but-slow movement (600 units over 1.5 s) confirms the speed gate still works.
+
+## [v0.1.29] — 2026-06-02
+
+### Changed
+- **Internal refactor — no user-visible behavior change.** `TrackingService.handleLocked` reduced from 158 lines to ~65 lines of orchestration. Pure scoring/selection math extracted to a new `src/services/tracking-helpers.ts` module (`computeMaxJumpPx`, `computeReacquireThreshold`, `computeBlobScore`, `pickBestBlobInRange`, `pickClassifierReacquisition`). The phase-2 and phase-1 success paths split into named methods (`acquireViaClassifier`, `finalizeLockedFrame`) so the side-effect ordering is explicit. State-mutation ordering preserved; the 42 pre-existing tracking/audio/devices tests still pass against the refactor.
+- Extracted the `Blob` interface to its own `src/services/blob-types.ts` so the pure helpers can import it without reaching back into `tracking.ts`.
+
+### Added
+- 19 new unit tests for the extracted helpers, covering boundary conditions the inline code never had isolated coverage for: jump-radius minimums, hold-expansion math, stationary-vs-hold threshold interaction, classifier-on-vs-off scoring symmetry, jump-range exclusion. Total client tests now 61.
+- `src/core/window-globals.ts` — typed `declare global { interface Window { … } }` for the two app-specific properties used as an ad-hoc cross-module bus. Removes the 4 `(window as any).foo` casts that existed in `overlay.ts`, `background.ts`, and `orchestrator.ts`.
+
+### Removed
+- All 7 `as any` casts in `src/` source code. Remaining 5 casts are in `tests/` only (legitimate test-environment mocks and private-method reflection). Dropped 3 vestigial `(console as any).debug` casts in `core/logging.ts` — `console.debug` has been in TS's standard `Console` interface for years.
+
 ## [v0.1.28] — 2026-06-02
 
 ### Added
@@ -113,7 +135,9 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.1.28...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.1.30...HEAD
+[v0.1.30]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.30
+[v0.1.29]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.29
 [v0.1.28]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.28
 [v0.1.27]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.27
 [v0.1.26]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.26
