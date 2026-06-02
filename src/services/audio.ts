@@ -11,6 +11,20 @@ function peakRms(buf: Float32Array): number {
   return Math.sqrt(sumSq / buf.length);
 }
 
+/**
+ * Compute the per-peer audio gain by combining the server-returned proximity
+ * volume with the user's per-player slider preference. Exported so the
+ * slider-fix logic (issue #7) can be unit-tested without spinning up
+ * AudioService + its PeerConnection / WebAudio dependencies.
+ *
+ * Both inputs are clamped to [0, 1] defensively. The output is their product.
+ */
+export function computeFinalPeerVolume(proximityVol: number, sliderVol: number): number {
+  const p = Math.max(0, Math.min(1, proximityVol));
+  const s = Math.max(0, Math.min(1, sliderVol));
+  return p * s;
+}
+
 export class AudioService {
   private localStream: MediaStream | null = null;
   private peers: Map<string, PeerConnection> = new Map();
@@ -21,6 +35,10 @@ export class AudioService {
   private mutedPlayers: Set<string> = new Set();
   // Track last reported volume state per peer so we only log transitions
   private lastAppliedVolume: Map<string, string> = new Map();
+  // Last proximity volume the server returned for each peer. Used by
+  // setPlayerVolume so the slider applies on top of real distance, not a
+  // hardcoded 1.0. Updated on every applyPeerVolumes tick.
+  private lastProximityVolumes: Map<string, number> = new Map();
   // Throttling state for the verbose applyPeerVolumes snapshot log
   private lastVolumeLogLine = '';
   private lastVolumeLogMs = 0;
@@ -320,10 +338,18 @@ export class AudioService {
     }
 
     for (const [name, volume] of Object.entries(volumes)) {
+      // Remember the proximity volume per peer so setPlayerVolume (the
+      // per-row slider in the UI) can recompute finalVol correctly without
+      // waiting for the next position tick. Was using a hardcoded 1.0 which
+      // briefly played peers at full volume regardless of real distance —
+      // caused user-reported "moved the slider and started hearing them"
+      // blip on issue #7.
+      this.lastProximityVolumes.set(name, volume);
+
       const peer = this.peers.get(name);
       if (!peer) continue;
       const playerVolume = this.settings.playerVolumes[name] ?? 1.0;
-      const finalVol = volume * playerVolume;
+      const finalVol = computeFinalPeerVolume(volume, playerVolume);
       const wasState = this.lastAppliedVolume.get(name);
       // Always update volume so it's correct when unmuted. Don't hard-mute on
       // finalVol === 0 — the smoothed gain ramp handles it without a click,
@@ -393,11 +419,14 @@ export class AudioService {
 
   setPlayerVolume(name: string, volume: number): void {
     this.settings.playerVolumes[name] = Math.max(0, Math.min(1, volume));
-    // Apply immediately if peer exists
     const peer = this.peers.get(name);
     if (peer) {
-      const proximityVol = 1.0; // will be updated next volume tick
-      peer.setVolume(this.settings.playerVolumes[name] * proximityVol);
+      // Use the last server-returned proximity volume — NOT a hardcoded 1.0.
+      // The old hardcoded path briefly played the peer at slider-value × 1.0
+      // before the next 100 ms position tick zeroed it out (issue #7
+      // "moved the slider and started hearing them" symptom).
+      const proximityVol = this.lastProximityVolumes.get(name) ?? 0;
+      peer.setVolume(computeFinalPeerVolume(proximityVol, this.settings.playerVolumes[name]));
     }
   }
 

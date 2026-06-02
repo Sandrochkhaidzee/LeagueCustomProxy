@@ -1,7 +1,15 @@
 const crypto = globalThis.crypto;
 
 const MAX_HEARING_RANGE = 1200;
-const BLOB_MAX_AGE_MS = 10_000; // 10s to handle clock skew
+// Max age of an encrypted position blob the server will accept before
+// rejecting it as stale. Tuned to absorb common Windows-clock drift
+// (NTP service can lag 10-30s in the wild — we saw this in issue #7
+// where one user's clock was ~12s behind real time and every blob was
+// being rejected, breaking proximity audio entirely on the other side).
+// Security tradeoff: this is the replay window for a captured blob.
+// 30s is fine because the volume side-channel is already coarsened by
+// quantization + jitter (see docs/threat-model.md Part 1).
+const BLOB_MAX_AGE_MS = 30_000;
 
 export interface VolumeRequest {
   myPosition: { x: number; y: number };
