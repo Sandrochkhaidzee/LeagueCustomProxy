@@ -162,6 +162,6 @@ describe('computeVolumesFromRoom (v0.2 path)', () => {
       { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
       getter,
     );
-    expect(calls).toEqual([['r1', 'Me', 60_000]]);
+    expect(calls).toEqual([['r1', 'Me', 5_000]]);
   });
 });

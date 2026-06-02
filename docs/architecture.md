@@ -4,9 +4,11 @@ How LoLProxChat actually works under the hood. Audience: contributors and curiou
 
 ## The 30-second version
 
-LoLProxChat reads your in-game position by **computer vision on the minimap**, exchanges **encrypted position blobs** peer-to-peer over WebRTC data channels, sends the encrypted blobs to a **stateless signaling server** that decrypts them just long enough to compute pairwise **proximity volumes**, and applies those volumes to **WebRTC voice streams** that flow directly between players.
+LoLProxChat reads your in-game position by **computer vision on the minimap**, reports its XY coordinates to a **stateless signaling server** over the same WebSocket used for presence/signaling, asks the server for pairwise **proximity volumes** at ~10 Hz, and applies those volumes to **WebRTC voice streams** that flow directly between players.
 
-No client ever sees a decrypted peer position. No audio touches the server.
+No client ever sees another client's raw position; the server returns only `{ peerName: volume }`. No audio touches the server.
+
+(Pre-v0.2: positions were AES-GCM encrypted and exchanged peer-to-peer over WebRTC data channels with the server decrypting them only to compute volumes. v0.2 dropped the encryption layer and the data-channel round trip — root cause of intermittent clock-skew rejections, position-lag, and per-peer divergence in real games. See [`CHANGELOG.md`](../CHANGELOG.md#v020--2026-06-02) and `docs/plans/2026-06-02-server-side-positions.md`.)
 
 ## System map
 
@@ -30,24 +32,27 @@ No client ever sees a decrypted peer position. No audio touches the server.
 │                               │                       │            │
 │                               │  SignalingService     │            │
 │                               │  PeerConnection × N   │            │
-│                               │  DataChannelService   │            │
 │                               │  VolumeClient         │            │
 │                               └───────────────────────┘            │
 └────────────┬────────────────────────────────┬──────────────────────┘
              │                                │
              │  WSS + HTTPS                   │  WebRTC P2P
-             │                                │  (DTLS-SRTP voice,
-             ▼                                │   encrypted data
-   ┌────────────────────────┐                 │   channel blobs)
+             │  (presence, signal             │  (DTLS-SRTP voice
+             │   relay, XY coords,            │   only — no data
+             │   /compute-volumes)            │   channel since v0.2)
+             ▼                                │
+   ┌────────────────────────┐                 │
    │  Signaling server      │                 │
    │  (Node, /mnt/user/      │                 │
    │   appdata/proxchat-     │                 │
    │   server on Unraid)    │                 │
    │  ───────────────────   │                 │
    │  • /ws  room presence  │                 │
+   │         + coords store │                 │
    │  • /compute-volumes    │                 │
-   │    (AES-GCM decrypt,   │                 │
-   │     dist→volume math)  │                 │
+   │    (dist→volume math   │                 │
+   │     against room       │                 │
+   │     coords state)      │                 │
    │  • /turn-credentials   │                 │
    │    (Cloudflare proxy)  │                 │
    │  • /health             │                 │
@@ -90,17 +95,17 @@ Edge cases the state machine handles: champion deaths (icon disappears), respawn
 
 This is the part that matters for both the threat model and the "what does the server see" question.
 
-1. The client encrypts its position with **AES-GCM** using a key only the server has. Includes a timestamp inside the encrypted payload so the server can age-check on decrypt.
-2. The client sends the **encrypted blob** to every peer via the WebRTC data channel. Peers can't decrypt it — they just relay it back to the server in their own next `/compute-volumes` request.
-3. On each volume tick, the client POSTs to `/compute-volumes` with its own raw position + the bag of encrypted peer blobs it received this cycle.
-4. The server decrypts each peer blob, computes the pairwise distance, applies quadratic falloff (`1 - (d/MAX_HEARING_RANGE)²`), and returns only `{ peerName: volume }` to the requesting client. The output is a continuous float in `[0, 1]` since v0.1.33 — the v0.1.26 bucket quantization + jitter was reverted because the side-channel precision gain was marginal at our user scale while the audible cliff cost was material (see [`threat-model.md`](threat-model.md) for the design-evolution rationale).
-5. The server also returns the requester's own freshly-encrypted blob (`myBlob`) for the next round of peer-to-peer broadcast.
+1. On every position tick (~10 Hz), the client sends a `coords` WebSocket message: `{ type: "coords", x, y }`. The server stamps it with the current time and stores it on the sender's room-client record.
+2. Immediately after, the client POSTs `/compute-volumes` with `{ myPosition, roomId, name }`. The server reads the latest position for every *other* client in the room (skipping any whose last `coords` is older than 5 s) and returns `{ peerVolumes: { peerName: volume } }`.
+3. Volume math: pairwise distance with quadratic falloff `1 - (d/MAX_HEARING_RANGE)²`, continuous float in `[0, 1]`. `MAX_HEARING_RANGE = 1200` game units. See `server/src/volumes.ts`.
 
-The result: **a peer client never sees another client's raw position; the volume value carries only the inherent distance-to-volume mapping noise**, no server-added obfuscation as of v0.1.33. Server-side math lives in `server/src/volumes.ts`; threat-model rationale (including why quantization+jitter was reverted) in [`threat-model.md`](threat-model.md).
+The result: **a peer client never sees another client's raw position; the server sees every client's plaintext XY for the duration the client is in the room**. That's the v0.2 trade — encryption is gone because the round-trip was the actual reliability issue (clock-skew rejections, intermittent per-peer freezes) and the encryption was only useful against a malicious *server* (we're the server). Threat-model implications in [`threat-model.md`](threat-model.md).
+
+Back-compat: server still accepts the legacy v0.1 request shape `{ myPosition, peers: { name: encryptedBlob } }` and the older WebRTC data-channel blob exchange. v0.1.33 clients keep working unchanged against a v0.2-server. Once v0.1.x clients are gone the legacy path will be removed.
 
 ## WebRTC voice flow
 
-Voice is a parallel concern from positions — runs on the same `RTCPeerConnection` but completely independent of the data channel.
+Voice is the only thing on the WebRTC connection since v0.2 — the data channel was dropped along with the blob exchange.
 
 - Each client publishes a single mic stream through a WebAudio graph: `mic → GainNode → MediaStreamDestination → RTCPeerConnection`.
 - Each peer's incoming stream goes through the inverse: `RTCPeerConnection → MediaStreamSource → GainNode → AudioContext.destination`.
@@ -114,8 +119,8 @@ A ~500-LOC Node process. Single container deployed via Docker Compose. Stateless
 
 **Endpoints:**
 
-- **`/ws`** — WebSocket upgrade. Handles room join/leave, peer presence broadcast, and relay of `offer` / `answer` / `ice-candidate` signals between named peers. Room IDs are deterministic hashes of sorted player summoner names, so any two players in the same match independently compute the same room ID.
-- **`POST /compute-volumes`** — Receives `{ myPosition, peers: { name: encryptedBlob, ... } }`, returns `{ myBlob, peerVolumes }`. Continuous quadratic-falloff volumes (v0.1.33+; was bucket-quantized + jittered in v0.1.26-v0.1.32). 30-second blob age window.
+- **`/ws`** — WebSocket upgrade. Handles room join/leave, peer presence broadcast, position coords (`coords` message), and relay of `offer` / `answer` / `ice-candidate` signals between named peers. Room IDs are deterministic hashes of sorted player summoner names, so any two players in the same match independently compute the same room ID.
+- **`POST /compute-volumes`** — v0.2 shape: `{ myPosition, roomId, name }` → `{ peerVolumes }`. Reads peer positions from room state (populated by `coords` WSS messages). Continuous quadratic-falloff volumes; 5-second staleness window for stored coords. Legacy v0.1 shape `{ myPosition, peers: { name: encryptedBlob } }` → `{ myBlob, peerVolumes }` still accepted for older clients.
 - **`GET /turn-credentials`** — Returns ICE servers for the requesting client. Calls Cloudflare's TURN API in the background (cached in-process for 24 hours with stale-grace fallback on API failure). Falls back to self-hosted coturn HMAC credentials if `TURN_KEY_ID` is unset and `TURN_SERVER`/`TURN_SECRET` are set.
 - **`GET /health`** — `{ status: "ok", rooms: N }`. Used by Docker healthcheck and the public status badge in the README.
 
@@ -126,12 +131,12 @@ Source files:
 | `src/index.ts` | HTTP/WebSocket bootstrap, route dispatch, per-IP rate limit + body cap + WS connection cap |
 | `src/ws-handler.ts` | Per-connection lifecycle, room messages, per-connection message rate limit |
 | `src/rooms.ts` | In-memory room table, presence tracking |
-| `src/volumes.ts` | AES-GCM blob encrypt/decrypt, continuous quadratic-falloff distance→volume math |
+| `src/volumes.ts` | Continuous quadratic-falloff distance→volume math. `computeVolumesFromRoom` (v0.2 path) reads coords from room state. Legacy `computeVolumes` (v0.1 path) keeps AES-GCM blob decrypt around for older clients. |
 | `src/turn.ts` | Cloudflare TURN credential fetcher + cache + coturn HMAC fallback |
 | `src/rate-limit.ts` | Token-bucket and concurrency limiters used across endpoints. No external dep. |
 | `src/types.ts` | Shared request/response types |
 
-46 tests under `server/tests/`.
+60 tests under `server/tests/`.
 
 **Rate-limit defaults** (all in `src/rate-limit.ts::LIMITS`):
 - `/turn-credentials`: 60 req/min per IP
@@ -164,8 +169,7 @@ Manual checks (Settings → Updates → CHECK) skip the launch delay and the Aut
 | `AudioService` | WebRTC audio + per-peer volume control. Input mode toggle (Always Open / PTT). Mic acquisition with selected device. Output via shared `AudioContext`. Noise suppression handled natively by Chromium. |
 | `SignalingService` | WebSocket presence + signal relay. Auto-reconnect with exponential backoff. |
 | `PeerConnection` | Single peer's `RTCPeerConnection` wrapper. EMA-smoothed gain, periodic `getStats()` logging, ICE-restart on failure, ICE-transport-policy reading from privacy settings. |
-| `VolumeClient` | Calls `/compute-volumes` with encrypted blobs. |
-| `DataChannelService` | WebRTC data-channel multiplexer for encrypted blob exchange. |
+| `VolumeClient` | Calls `/compute-volumes` with `{ myPosition, roomId, name }` and applies the returned per-peer volumes. |
 | `GameStateService` | Wraps Tauri commands for LCU + Live Client Data into a TypeScript surface. |
 | `Devices` | localStorage-backed input/output audio device pick. |
 | `Privacy` | localStorage-backed Force-TURN toggle. |

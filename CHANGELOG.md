@@ -4,6 +4,23 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.2.0] — 2026-06-02
+
+### Changed
+- **Positions now flow client → server, not peer-to-peer (wire-protocol change).** Replaces the AES-GCM-encrypted-XY-over-WebRTC-data-channel exchange with a direct `coords` WebSocket message; `/compute-volumes` reads peer positions from in-process room state. Removes the entire peer-to-peer position transport — no more blob exchange, no more clock-skew rejections, no more "blob lagging behind" symptoms (closes the root causes of #13 and the design concern raised in #15 by making the encryption layer no longer load-bearing). Server keeps the old `{myPosition, peers}` request shape working so v0.1.33-and-earlier clients keep functioning during the rollout window. See [`docs/plans/2026-06-02-server-side-positions.md`](docs/plans/2026-06-02-server-side-positions.md) for the design.
+- **Stale-position window tightened from 60 s → 5 s.** Client sends coords on every ~100 ms position tick and stops sending after CV has been holding/extrapolating for >2 s; the previous 60 s window was loose enough that a peer who hard-disconnected could still affect proximity audio for a full minute. 5 s gives ~3 s of phantom audio worst case while absorbing brief WSS stalls without flickering peers silent.
+
+### Fixed
+- **Per-player volume slider felt "clicky" / needed re-grabbing every tick (#12).** The overlay was re-appending every player row to the DOM on every `broadcastOverlayState` event (~10 Hz), which detaches the slider's host element mid-drag and breaks the pointer-event sequence in Chromium. The render loop now diffs the desired peer order against the current DOM order and only reorders when they actually differ — the common case (no change) is a no-op, the slider stays dragged.
+
+### Removed
+- `src/services/data-channel.ts` and the entire data-channel surface on `PeerConnection` (`createDataChannel`, `sendData`, `onDataMessage`, `ondatachannel` handler). The WebRTC peer connection now carries audio only.
+- `audio.ts` no longer opens a data channel before issuing the offer — the SDP has no `m=application` section in v0.2.0+.
+
+### Notes for self-hosters
+- Server is back-compat with v0.1.33 clients. Deploy the server first; clients can roll on the next release without downtime.
+- Once all clients in your community are on v0.2.0+, you can remove `ENCRYPTION_KEY` from the server env and (eventually) delete the legacy `computeVolumes` / `encryptPosition` / `decryptPosition` paths from `server/src/volumes.ts`. Not urgent.
+
 ## [v0.1.33] — 2026-06-02
 
 ### Fixed
@@ -173,7 +190,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.1.33...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.2.0...HEAD
+[v0.2.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.2.0
 [v0.1.33]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.33
 [v0.1.32]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.32
 [v0.1.31]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.31

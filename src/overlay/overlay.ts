@@ -420,7 +420,22 @@ function renderState(state: OverlayState): void {
     }
   }
 
-  // Update existing rows or create new ones, in sorted order
+  // Update existing rows or create new ones, in sorted order.
+  // Only reorder DOM when the sort order *actually* changed — re-appending
+  // a slider mid-drag detaches it from its pointer-event sequence, which
+  // is why the per-player volume slider felt "clicky" / had to be re-grabbed
+  // at every tick (issue #12). At 10 Hz position ticks the order rarely
+  // changes, so the common case is now a no-op.
+  const desiredOrder = sortedPeers.map(p => p.summonerName);
+  const currentOrder: string[] = [];
+  for (const child of Array.from(playerList.children)) {
+    for (const [name, entry] of playerRows) {
+      if (entry.row === child) { currentOrder.push(name); break; }
+    }
+  }
+  const orderChanged = currentOrder.length !== desiredOrder.length
+    || currentOrder.some((n, i) => n !== desiredOrder[i]);
+
   for (const peer of sortedPeers) {
     let entry = playerRows.get(peer.summonerName);
     if (entry) {
@@ -430,8 +445,7 @@ function renderState(state: OverlayState): void {
       playerList.appendChild(row);
       entry = playerRows.get(peer.summonerName);
     }
-    // Reorder DOM to match sorted order
-    if (entry && entry.row.parentElement === playerList) {
+    if (orderChanged && entry && entry.row.parentElement === playerList) {
       playerList.appendChild(entry.row);
     }
   }

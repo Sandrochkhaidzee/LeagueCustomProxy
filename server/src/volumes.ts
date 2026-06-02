@@ -34,11 +34,14 @@ export interface VolumeResponse {
 
 /**
  * How stale a peer's last-reported XY can be before the server skips them in
- * volume computation. 60 s gives plenty of slack for a client that briefly
- * stalls or has a network blip while still pruning ghost positions from
- * peers who hard-disconnected without a clean close.
+ * volume computation. The client sends coords on every positionTick (~10 Hz)
+ * and stops sending after CV has been holding/extrapolating for >2 s, so a
+ * 5 s window means at most ~3 s of phantom audio after a peer drops or
+ * loses tracking — short enough to avoid hearing players who are no longer
+ * where the server thinks they are, generous enough to absorb a brief WSS
+ * stall without flickering them silent.
  */
-const STALE_POSITION_MS = 60_000;
+const STALE_POSITION_MS = 5_000;
 
 // ---------- helpers ----------
 

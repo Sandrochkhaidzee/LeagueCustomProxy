@@ -15,23 +15,21 @@ A user running a modified ("cheating") client should not be able to derive enemy
 
 ## What the design protects
 
-### Raw position data is never sent in plaintext between clients
+### Raw position data is never sent between clients
 
-- Clients encrypt their own position with **AES-256-GCM** before broadcasting it.
-- The encryption key lives only on the signaling server, in the `ENCRYPTION_KEY` environment variable. Clients never see it.
-- Peer position blobs flow over WebRTC data channels client-to-client, but neither client can decrypt them.
-- The server is the only entity that can decrypt a peer's position to compute volumes.
+- Since v0.2, clients send their XY coordinates **directly to the server** over the WebSocket (`coords` message). The server stores the latest position per client per room and uses it to compute pairwise volumes.
+- Clients never see another client's raw position — only volumes come back from `/compute-volumes`.
+- The pre-v0.2 design encrypted the position with AES-GCM and round-tripped it through every peer over a WebRTC data channel; the server held the only decryption key. That design protected against a malicious *server* (which is us — we run the default deployment). In practice the round-trip caused intermittent reliability problems (clock-skew rejections, per-peer freezes) and the encryption was only meaningful for self-hosters who didn't trust their *own* server, so v0.2 dropped it in favor of direct client→server reporting. The "server operator can read positions" risk in [Part 2](#server-operator-can-decrypt-all-positions) covers the residual concern; self-hosting remains the answer for anyone who needs full control.
 
-### Blob freshness check prevents replay
+### Stale-position window prevents zombie-peer audio
 
-- Each encrypted blob includes a timestamp.
-- The server's `decryptPosition` rejects blobs older than `BLOB_MAX_AGE_MS` (10 seconds, sized to absorb client/server clock skew).
-- A modified client recording another player's blob stream and replaying it later can't generate stale-data movement traces — the server treats expired blobs as undecryptable.
+- Stored coords older than 5 seconds (`STALE_POSITION_MS` in `server/src/volumes.ts`) are skipped during volume computation.
+- A peer who disconnects without a clean close or whose CV stops reporting won't continue to affect proximity audio for more than ~5 seconds.
 
 ### Server returns volumes, not positions
 
 - The `/compute-volumes` response is `{ "PeerName": volume, ... }` where each volume is a number between 0 and 1.
-- No coordinate data leaves the server.
+- No coordinate data leaves the server in either direction of `/compute-volumes`.
 
 ### ~~Volumes are quantized + jittered before being returned~~ (reverted v0.1.33)
 
@@ -104,7 +102,7 @@ LoLProxChat collects **no analytics, no telemetry, no usage statistics, no crash
 The only data that ever leaves the user's machine is:
 
 - **Summoner name** — sent to the signaling server so peers in the same match can find each other in a room. Same name visible to anyone on the match scoreboard.
-- **Encrypted position blob** — AES-GCM-encrypted with a server-only key, sent so the server can compute proximity volumes. Decrypted server-side, never logged or persisted, dropped immediately after the volume math runs.
+- **XY position coordinates** — sent in plaintext over the WebSocket (`coords` message) so the server can compute proximity volumes against the room's other players. Held only in process memory, never logged or persisted, replaced on every ~100 ms tick, dropped on disconnect. Pre-v0.2 builds AES-GCM-encrypted these with a server-only key; the encryption was removed because the only meaningful threat it addressed was a malicious server (which is *us* in the default deployment, and self-hosters control their own server).
 - **WebRTC signaling messages** (SDP offers/answers, ICE candidates) — exchanged peer-to-peer via the signaling server as a relay. Standard WebRTC handshake; contains your public IP unless `Hide IP (Force TURN)` is enabled (see below).
 - **Voice audio** — flows peer-to-peer over DTLS-SRTP, never touches the signaling server. Goes through the TURN relay (Cloudflare) only if direct P2P fails or `Hide IP (Force TURN)` is on, and even then the relay can't decrypt it.
 
@@ -128,9 +126,9 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 
 **Server-side mitigation alternative (not chosen):** forcing all clients TURN-only by default would protect users transparently but multiply server-side bandwidth costs and add latency for everyone. Opt-in keeps the cost on the users who choose it.
 
-## Server operator can decrypt all positions
+## Server operator can read all positions
 
-**Risk:** Whoever holds the `ENCRYPTION_KEY` on the signaling server can AES-GCM-decrypt every position blob they see in transit. A malicious or compromised server operator can log every player's movement in every game using their server.
+**Risk:** The server holds every connected client's plaintext XY in process memory for as long as they're in a room. A malicious or compromised server operator can log every player's movement in every game using their server.
 
 **Status:** Not mitigated in code. Trust-or-self-host.
 
@@ -139,7 +137,9 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 - Self-host the signaling server (see [`self-hosting.md`](self-hosting.md)) and point the client at it via the `PROXCHAT_SERVER` env var at build time. Eliminates third-party-operator trust.
 - The default deployment points at a server we operate. Users who don't trust that operator should self-host.
 
-**Why not end-to-end encrypt instead:** moving to per-room shared keys that the server can't decrypt would force volume math client-side. That undoes the anti-cheat design in Part 1 (clients would see peer positions directly). The trade-off favors keeping server-side decryption as the price of a meaningful anti-cheat posture.
+**v0.2 design context:** Pre-v0.2 the server held an `ENCRYPTION_KEY` and decrypted AES-GCM position blobs on every `/compute-volumes` request. From an operator-trust standpoint that's identical to what v0.2 does — whoever runs the server can read positions either way (just by inspecting decrypt output instead of inspecting the coords store). The encryption layer protected against a third-party network observer between client and server, but TLS already covers that channel; once we have TLS the encryption was duplicate work that introduced its own reliability problems (clock-skew rejections in #7 logs). v0.2 trades the duplicate-encryption layer for the simpler design and fixes the lag/freeze symptoms.
+
+**Why not end-to-end encrypt instead:** moving to per-room shared keys that the server can't decrypt would force volume math client-side, which would let modified clients see peer positions directly — that undoes the anti-cheat design in Part 1. The trade-off favors keeping the server as the proximity-math authority as the price of a meaningful anti-cheat posture.
 
 ## Summoner names visible in signaling traffic + logs
 
