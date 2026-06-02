@@ -183,7 +183,7 @@ echo "" | openssl s_client -connect turn.your-domain.com:5349 \
 - **Health checks.** Docker Compose includes a built-in healthcheck that hits `/health` every 30 s. The README's status badge also pulls from this endpoint via Shields.io.
 - **TLS termination is your responsibility.** Caddy is the recommended default since it handles cert renewal end-to-end. nginx + certbot also works but renewal is a separate concern.
 - **WebSocket upgrades.** Any reverse proxy you use must support and forward the WebSocket upgrade headers, or `/ws` will fail even if `/health` returns 200.
-- **Rate limiting.** The shipped server has no rate limits on `/turn-credentials` or `/compute-volumes`. If you're exposing your deployment publicly, consider adding basic per-IP rate limits at the reverse-proxy layer — see [the open backlog](https://github.com/danthi123/LoLProxChat/issues) for the server-side rate-limit tracking issue.
+- **Rate limiting (v0.1.31+).** The server ships with per-IP rate limits, body size cap, and WebSocket connection/message limits built in (`server/src/rate-limit.ts::LIMITS`). Defaults: `/turn-credentials` 60/min, `/compute-volumes` 15/sec sustained + 256 KB body cap, WebSocket 20 connections per IP + 60 msg/sec per connection + 64 KB per message. Tuned for ~50% headroom over the real 10 Hz gameplay cadence — legitimate clients should never trigger them. If you serve an unusual environment (CG-NAT'd ISP where many subscribers share one public IP, large training-server setup with many clients per IP, etc.) the constants in `LIMITS` are the single place to adjust + rebuild. No env-var knobs by design — keeps the server config trivially auditable.
 
 ## Pointing the client at your server
 

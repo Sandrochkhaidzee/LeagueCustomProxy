@@ -123,14 +123,22 @@ Source files:
 
 | File | Responsibility |
 |---|---|
-| `src/index.ts` | HTTP/WebSocket bootstrap, route dispatch |
-| `src/ws-handler.ts` | Per-connection lifecycle, room messages |
+| `src/index.ts` | HTTP/WebSocket bootstrap, route dispatch, per-IP rate limit + body cap + WS connection cap |
+| `src/ws-handler.ts` | Per-connection lifecycle, room messages, per-connection message rate limit |
 | `src/rooms.ts` | In-memory room table, presence tracking |
 | `src/volumes.ts` | AES-GCM blob encrypt/decrypt, quadratic falloff, bucket quantization, jitter |
 | `src/turn.ts` | Cloudflare TURN credential fetcher + cache + coturn HMAC fallback |
+| `src/rate-limit.ts` | Token-bucket and concurrency limiters used across endpoints. No external dep. |
 | `src/types.ts` | Shared request/response types |
 
-33 tests under `server/tests/`.
+46 tests under `server/tests/`.
+
+**Rate-limit defaults** (all in `src/rate-limit.ts::LIMITS`):
+- `/turn-credentials`: 60 req/min per IP
+- `/compute-volumes`: 15 req/sec sustained per IP (30-token burst), 256 KB body cap
+- WebSocket: 20 connections per IP, 60 msg/sec per connection (120 burst), 64 KB per message
+
+Defaults are tuned for ~50% headroom over normal gameplay cadence (10 Hz position broadcasts, occasional signaling bursts). Operators with unusual environments (e.g. CG-NAT'd ISP sharing one public IP among many subscribers) can adjust the constants in `LIMITS` and rebuild.
 
 ## Update flow
 
@@ -143,6 +151,8 @@ In-app updater (`src-tauri/src/updater.rs` + `src/services/updater.ts`):
 5. The new process waits ~800 ms (so the old process releases its file lock), deletes the old `.exe` with up to 5 retries, then renames `.new` → `.exe` (renaming a running `.exe` is allowed on Windows; deleting one isn't).
 
 Manual checks (Settings → Updates → CHECK) skip the launch delay and the Auto-update gate.
+
+**URL validation (v0.1.31+):** `download_and_apply_update` refuses any URL that doesn't start with `ALLOWED_DOWNLOAD_PREFIX` (defined alongside `GITHUB_LATEST` in `updater.rs`). Defense-in-depth against a hypothetical frontend compromise (XSS, supply-chain attack on a bundled JS dep) being able to call the command with an attacker-controlled URL → arbitrary binary execution. Forks should adjust both constants in lockstep.
 
 ## Key client services (under `src/services/`)
 
@@ -176,7 +186,7 @@ Not services in their own right — small support modules consumed by the servic
 | Command (file) | Responsibility |
 |---|---|
 | `capture::set_capture_bounds`, `capture::capture_minimap` | Win32 GDI BitBlt of a bounded screen rect into an RGBA data URL. |
-| `lcu::check_league_running`, `lcu::get_game_state`, `lcu::get_live_client_data`, `lcu::read_text_file`, `lcu::get_league_install_dir` | LCU + Live Client Data polling. Install-dir resolution via the LCU lockfile path. |
+| `lcu::check_league_running`, `lcu::get_game_state`, `lcu::get_live_client_data`, `lcu::read_league_config_file`, `lcu::get_league_install_dir` | LCU + Live Client Data polling. Install-dir resolution via the LCU lockfile path. `read_league_config_file` takes no arguments and reads only `Config/game.cfg` — Rust computes the path so the frontend can't supply arbitrary file paths (closed in v0.1.31). |
 | `updater::check_for_update`, `updater::download_and_apply_update` | GitHub Releases check + in-place exe swap. Handles the `--complete-update <old-path>` startup arg. |
 | `main::position_scanner`, `main::hide_scanner` | Auto-pin the scanner window over the detected minimap region. |
 | `main::get_screen_size` | Primary monitor resolution for DPI math. |

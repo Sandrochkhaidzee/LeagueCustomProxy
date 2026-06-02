@@ -156,13 +156,38 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 
 ## WebView2 process trust
 
-**Risk:** The Tauri client loads the orchestrator + WebRTC code into a WebView2 process. Any vulnerability in the bundled WebView2 (which the WebView2 runtime updates separately via Microsoft Edge) could in principle let a crafted response from the signaling server execute code on the user's machine.
+**Risk:** The Tauri client loads the orchestrator + WebRTC code into a WebView2 process. Any vulnerability in the bundled WebView2 (which the WebView2 runtime updates separately via Microsoft Edge) — or in a JS dependency loaded inside it (e.g. `onnxruntime-web`, supply-chain compromise) — could in principle let attacker-controlled code run inside the WebView. The Tauri command surface then becomes the *blast radius* of any such compromise.
 
-**Status:** Low practical risk, accepted.
+**Status:** Low practical risk for the vulnerability itself, with the blast radius now tightly bounded.
 
-- The attack surface is small: WebView2 only talks to one trusted signaling server endpoint (HTTPS-only) and one TURN provider.
+- The WebView2 attack surface is small: it only talks to one trusted signaling server endpoint (HTTPS-only) and one TURN provider.
 - WebView2 receives security updates from Microsoft Edge automatically — no patching responsibility on us.
+- **Tauri command blast-radius mitigations (v0.1.31+):**
+  - `download_and_apply_update` validates the URL prefix matches our GitHub release-assets path. A compromised WebView can no longer redirect the auto-updater to an attacker-controlled binary → RCE.
+  - `read_league_config_file` takes no path argument and is hard-coded to read only `Config/game.cfg`. A compromised WebView no longer has an arbitrary-file-read primitive (replaces the old `read_text_file(path)` command).
+  - These don't *prevent* WebView2 compromise — they ensure a compromise can't trivially be escalated to local code execution or file exfiltration via our IPC surface.
 - A compromised signaling server could in principle target this vector, but a compromised signaling server has bigger problems (it already holds the encryption key and sees all signaling).
+
+## Signaling-server resource abuse / DoS
+
+**Risk:** The signaling server's HTTP endpoints (`/turn-credentials`, `/compute-volumes`) and WebSocket relay are open to the public internet. Without per-IP limits, a malicious script can:
+
+- Exhaust the operator's Cloudflare TURN quota by spamming `/turn-credentials`.
+- Pin CPU by flooding `/compute-volumes` with valid-shaped requests (each does an AES-GCM decrypt per peer blob).
+- OOM the server with a single massive POST body.
+- Open thousands of WebSocket connections from one IP to exhaust file descriptors.
+- Flood relay traffic through a legitimate joiner to all other peers in their room.
+
+**Status:** Mitigated since v0.1.31. Application-layer limits in `server/src/rate-limit.ts`:
+
+- `/turn-credentials`: 60 req/min per IP (legit clients call ~once per peer connection)
+- `/compute-volumes`: 15 req/sec sustained per IP (real cadence is 10 Hz; gives 50% headroom)
+- `/compute-volumes` body cap: 256 KB (real payload is ~2 KB)
+- WebSocket: 20 concurrent connections per IP, 60 msg/sec per connection, 64 KB per message
+
+All limits return `429` / `413` / WS close `1008` cleanly — legitimate clients see no impact.
+
+**What this doesn't cover:** distributed attacks from many IPs, large premades behind a single CG-NAT'd ISP (lift WS connection cap), or sustained slow attacks under the rate threshold. The first two would need an operator-level intervention (e.g. Cloudflare in front of the signaling server); the third is a fundamental limit of any open service.
 
 ## Signaling-server presence enumeration
 
@@ -182,6 +207,9 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 |---|---|---|
 | Analytics / telemetry / fingerprinting | **Not applicable** | None collected. No SDKs, no usage stats, no crash reporting service |
 | Public IP exposure | **Mitigated (opt-in)** | Force-TURN toggle in Settings, v0.1.27+ |
+| Updater URL injection (RCE via compromised WebView) | **Mitigated** | `ALLOWED_DOWNLOAD_PREFIX` check in `updater.rs`, v0.1.31+ |
+| Arbitrary file read (via compromised WebView) | **Mitigated** | `read_text_file(path)` removed; replaced with no-arg `read_league_config_file`, v0.1.31+ |
+| Server resource abuse / DoS | **Mitigated** | Per-IP rate limits + body cap + WS hardening, v0.1.31+ |
 | Server-operator decrypt | Doc-only | Self-host alternative documented in [`self-hosting.md`](self-hosting.md) |
 | Summoner names visible | Accepted | Gameplay-public; redact-before-share warning in README |
 | Code-signing absence | Partially mitigated | SHA-256 in release notes since v0.1.26+; build-from-source as full bypass |

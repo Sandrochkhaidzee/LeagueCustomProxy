@@ -4,6 +4,20 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.1.31] — 2026-06-02
+
+### Security
+- **Closed: updater URL injection (H1).** `download_and_apply_update` now refuses any URL that doesn't start with the GitHub release-asset prefix for this repo (`https://github.com/danthi123/LoLProxChat/releases/download/`). Without this check, a compromised frontend could have called the command with an attacker-controlled URL → download + spawn arbitrary binary → full RCE on the user's machine. See [`docs/threat-model.md`](docs/threat-model.md) Part 2 § Update flow.
+- **Closed: arbitrary file read (H2).** Renamed `read_text_file(path)` → `read_league_config_file()`. The new command takes no arguments; the path is computed Rust-side from `find_league_install_dir()` and reads only `Config/game.cfg`. Removes the arbitrary-file-read primitive that the frontend used to inherit.
+
+### Added
+- `server/src/rate-limit.ts` — in-memory token-bucket + per-IP concurrency limiter. No external dep; ~150 LOC. 13 new server tests (`server/tests/rate-limit.test.ts`).
+- `server/src/index.ts` and `server/src/ws-handler.ts` wired through the new limiters: per-IP rate limiting on `/turn-credentials` (60/min) and `/compute-volumes` (15/sec sustained, 30 burst); 256 KB body cap on `/compute-volumes`; WebSocket `maxPayload` 64 KB, 20 concurrent connections per IP, 60 msg/sec sustained per connection. Total server tests now 46 (was 33).
+- Clock-skew rejections in `decryptPosition` now emit a structured `[volumes]` warn line with the actual blob age. Was silently returning null, which masked some intermittent voice-issue reports.
+
+### Changed
+- `lcu::read_text_file` removed from the Tauri command surface; superseded by `lcu::read_league_config_file`. Sole caller (`Orchestrator.readMinimapScale`) updated to use the new command; the `leagueConfigPath` field on `Orchestrator` is gone.
+
 ## [v0.1.30] — 2026-06-02
 
 ### Changed
@@ -135,7 +149,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.1.30...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.1.31...HEAD
+[v0.1.31]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.31
 [v0.1.30]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.30
 [v0.1.29]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.29
 [v0.1.28]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.28
