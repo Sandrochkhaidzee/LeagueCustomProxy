@@ -7,12 +7,16 @@ export class RoomManager {
   /** ws → ClientInfo (for fast lookup on disconnect) */
   private clients = new Map<WebSocket, ClientInfo>();
 
-  /** Add a client to a room. Returns list of existing peer names (before this join). */
-  join(roomId: string, name: string, ws: WebSocket): string[] {
+  /**
+   * Add a client to a room. Returns list of existing peer names (before this join).
+   * `team` is v0.3+ — when omitted the client is treated as legacy v0.2 and
+   * `computeTieredVolumes` falls back to team-blind 1200u behavior.
+   */
+  join(roomId: string, name: string, ws: WebSocket, team?: 'ORDER' | 'CHAOS'): string[] {
     const existing = this.rooms.get(roomId) ?? [];
     const existingNames = existing.map(c => c.name);
 
-    const info: ClientInfo = { roomId, name, ws };
+    const info: ClientInfo = { roomId, name, ws, team };
     existing.push(info);
     this.rooms.set(roomId, existing);
     this.clients.set(ws, info);

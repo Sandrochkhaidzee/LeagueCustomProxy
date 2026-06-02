@@ -50,7 +50,10 @@ export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
           }
         }
 
-        const peers = rooms.join(msg.room, msg.name, ws);
+        // v0.3: optional team field. v0.2.x clients omit it; we pass undefined
+        // and computeTieredVolumes falls back to legacy team-blind behavior.
+        const team = msg.team === 'ORDER' || msg.team === 'CHAOS' ? msg.team : undefined;
+        const peers = rooms.join(msg.room, msg.name, ws, team);
 
         // Send room_state to the joiner
         send(ws, { type: 'room_state', peers });

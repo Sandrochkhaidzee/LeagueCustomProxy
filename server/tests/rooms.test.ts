@@ -188,4 +188,28 @@ describe('RoomManager', () => {
       expect(rooms.getRoomPositions('does-not-exist', 'me', 60_000)).toEqual({});
     });
   });
+
+  // v0.3: team for cross-team filtering (server-side)
+  describe('team on join', () => {
+    it('records team when join includes it', () => {
+      const ws = mockWs();
+      rooms.join('room1', 'Alice', ws, 'ORDER');
+      const info = rooms.getClientInfo(ws);
+      expect(info?.team).toBe('ORDER');
+    });
+
+    it('leaves team undefined when join omits it (legacy v0.2 client)', () => {
+      const ws = mockWs();
+      rooms.join('room1', 'Alice', ws);
+      const info = rooms.getClientInfo(ws);
+      expect(info?.team).toBeUndefined();
+    });
+
+    it('accepts CHAOS team', () => {
+      const ws = mockWs();
+      rooms.join('room1', 'Alice', ws, 'CHAOS');
+      const info = rooms.getClientInfo(ws);
+      expect(info?.team).toBe('CHAOS');
+    });
+  });
 });
