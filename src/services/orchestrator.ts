@@ -30,7 +30,6 @@ export class Orchestrator {
   private lastOverlayRepositionTime = 0;
   private lastOverlayBounds: { x: number; y: number; w: number; h: number } | null = null;
   private lastLoggedPosition: { x: number; y: number } | null = null;
-  private leagueConfigPath: string | null = null;
   private lastMinimapScale: number | null = null;
   private dpiScale = 1;
   private lastGameState: TauriGameState | null = null;
@@ -199,17 +198,11 @@ export class Orchestrator {
       console.log('[LoLProxChat] Resolution: game=' + gameW + 'x' + gameH +
         ' dpiScale=' + this.dpiScale);
 
-      // Derive League's install dir from the running LeagueClient process
-      // (so users with custom install paths still get minimap-scale calibration).
-      try {
-        const installDir = await invoke<string | null>('get_league_install_dir');
-        this.leagueConfigPath = installDir
-          ? installDir.replace(/\\/g, '/') + '/Config/game.cfg'
-          : 'C:/Riot Games/League of Legends/Config/game.cfg';
-      } catch {
-        this.leagueConfigPath = 'C:/Riot Games/League of Legends/Config/game.cfg';
-      }
-      console.log('[LoLProxChat] League config path:', this.leagueConfigPath);
+      // Note: League install dir is resolved Rust-side via the
+      // read_league_config_file command (computes the path from the running
+      // LeagueClient process or common defaults). The frontend no longer
+      // handles the path directly — closing an arbitrary-file-read attack
+      // surface that v0.1.30 and earlier had via read_text_file.
 
       this.tracking = new TrackingService(gameW, gameH, session.mapType);
       this.tracking.loadChampionTemplate(session.localPlayer.championName);
@@ -560,18 +553,11 @@ export class Orchestrator {
   /**
    * Read MinimapScale from League's game.cfg. The file is an INI-style config
    * with [Section] headers. MinimapScale is under [HUD] and ranges from 0.0 to 1.0.
-   * Config path is resolved at session start via the Tauri get_league_install_dir
-   * command — see setupTrackingAndSession.
+   * The Rust side computes the install dir and reads only `Config/game.cfg`;
+   * the frontend never handles arbitrary paths.
    */
   private readMinimapScale(callback: (scale: number | null) => void): void {
-    if (!this.leagueConfigPath) {
-      console.warn('[LoLProxChat] readMinimapScale: no config path');
-      callback(null);
-      return;
-    }
-
-    // Read game.cfg via Tauri backend
-    invoke<string>('read_text_file', { path: this.leagueConfigPath })
+    invoke<string>('read_league_config_file')
       .then(text => this.parseMinimapScale(text, callback))
       .catch(err => {
         console.warn('[LoLProxChat] Failed to read game.cfg:', err);

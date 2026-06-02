@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { ClientMessage, ServerMessage } from './types.js';
 import type { RoomManager } from './rooms.js';
+import { TokenBucket, LIMITS } from './rate-limit.js';
 
 function send(ws: WebSocket, msg: ServerMessage): void {
   if (ws.readyState === ws.OPEN) {
@@ -13,7 +14,17 @@ function sendError(ws: WebSocket, message: string): void {
 }
 
 export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
+  // Per-connection message rate limiter. Each WebSocket gets its own bucket
+  // so a single noisy client can't block a normal one. Capacity matches the
+  // ~10 Hz position-broadcast cadence plus signaling bursts at game start.
+  const msgLimiter = new TokenBucket(LIMITS.WS_MESSAGES);
+  const limitKey = 'self'; // single bucket per connection — key is irrelevant
+
   ws.on('message', (data) => {
+    if (!msgLimiter.tryConsume(limitKey)) {
+      sendError(ws, 'message rate limit exceeded — slow down');
+      return;
+    }
     let msg: ClientMessage;
     try {
       msg = JSON.parse(data.toString());

@@ -160,8 +160,14 @@ pub async fn get_live_client_data() -> Option<serde_json::Value> {
         .ok()
 }
 
-/// Read a text file from disk. Used for loading saved config/calibration.
+/// Read the League client's `Config/game.cfg`. Path is computed Rust-side
+/// from `find_league_install_dir()` so the frontend can't supply an arbitrary
+/// path — this used to be a `read_text_file(path: String)` command which gave
+/// JS arbitrary file-read capability if WebView2 ever got compromised.
 #[tauri::command]
-pub fn read_text_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", path, e))
+pub fn read_league_config_file() -> Result<String, String> {
+    let dir = find_league_install_dir().ok_or("League install directory not detected".to_string())?;
+    let path = dir.join("Config").join("game.cfg");
+    std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))
 }

@@ -123,10 +123,17 @@ export async function decryptPosition(
       ciphertext,
     );
     const payload = JSON.parse(new TextDecoder().decode(decrypted));
-    if (
-      typeof payload.t !== 'number' ||
-      Math.abs(Date.now() - payload.t) > BLOB_MAX_AGE_MS
-    ) {
+    if (typeof payload.t !== 'number') {
+      return null;
+    }
+    const ageMs = Date.now() - payload.t;
+    if (Math.abs(ageMs) > BLOB_MAX_AGE_MS) {
+      // Surface clock skew as a structured log so we can spot patterns in
+      // user-reported voice issues (silent rejection used to swallow this).
+      console.warn(
+        '[volumes] blob rejected: age=' + ageMs +
+        'ms exceeds limit ' + BLOB_MAX_AGE_MS + 'ms (client clock skew?)',
+      );
       return null;
     }
     return { x: payload.x, y: payload.y };

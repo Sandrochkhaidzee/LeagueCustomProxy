@@ -4,6 +4,16 @@ const GITHUB_LATEST: &str =
     "https://api.github.com/repos/danthi123/LoLProxChat/releases/latest";
 const UA: &str = "proxchat-updater";
 
+// Allowed URL prefix for the update download. The release-asset URL GitHub's
+// API returns is always of the form
+//   https://github.com/danthi123/LoLProxChat/releases/download/<tag>/<asset>
+// Restricting download_and_apply_update to this prefix means a compromised
+// frontend can't redirect the auto-updater to an attacker-controlled binary.
+// Self-hosters who fork the repo and adjust GITHUB_LATEST above should update
+// this prefix to match their fork.
+const ALLOWED_DOWNLOAD_PREFIX: &str =
+    "https://github.com/danthi123/LoLProxChat/releases/download/";
+
 #[derive(Serialize, Clone)]
 pub struct UpdateInfo {
     pub current_version: String,
@@ -87,6 +97,16 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
 /// The new process completes the swap (delete old, rename .new → .exe).
 #[tauri::command]
 pub async fn download_and_apply_update(url: String) -> Result<(), String> {
+    // Defense-in-depth: refuse any URL that doesn't look like one of our own
+    // release assets. Closes the "compromised frontend → arbitrary binary
+    // download + execute" attack chain. See updater.rs ALLOWED_DOWNLOAD_PREFIX.
+    if !url.starts_with(ALLOWED_DOWNLOAD_PREFIX) {
+        return Err(format!(
+            "update url rejected — must start with {}",
+            ALLOWED_DOWNLOAD_PREFIX
+        ));
+    }
+
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let parent = current_exe
         .parent()

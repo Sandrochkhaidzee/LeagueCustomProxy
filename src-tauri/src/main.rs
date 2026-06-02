@@ -259,7 +259,7 @@ fn main() {
             lcu::check_league_running,
             lcu::get_game_state,
             lcu::get_live_client_data,
-            lcu::read_text_file,
+            lcu::read_league_config_file,
             lcu::get_league_install_dir,
             position_scanner,
             hide_scanner,
