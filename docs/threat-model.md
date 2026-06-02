@@ -133,7 +133,7 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 
 **Available controls:**
 
-- Self-host the signaling server (see `docs/SETUP.md`) and point the client at it via the `PROXCHAT_SERVER` env var at build time. Eliminates third-party-operator trust.
+- Self-host the signaling server (see [`self-hosting.md`](self-hosting.md)) and point the client at it via the `PROXCHAT_SERVER` env var at build time. Eliminates third-party-operator trust.
 - The default deployment points at a server we operate. Users who don't trust that operator should self-host.
 
 **Why not end-to-end encrypt instead:** moving to per-room shared keys that the server can't decrypt would force volume math client-side. That undoes the anti-cheat design in Part 1 (clients would see peer positions directly). The trade-off favors keeping server-side decryption as the price of a meaningful anti-cheat posture.
@@ -182,7 +182,7 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 |---|---|---|
 | Analytics / telemetry / fingerprinting | **Not applicable** | None collected. No SDKs, no usage stats, no crash reporting service |
 | Public IP exposure | **Mitigated (opt-in)** | Force-TURN toggle in Settings, v0.1.27+ |
-| Server-operator decrypt | Doc-only | Self-host alternative documented in SETUP.md |
+| Server-operator decrypt | Doc-only | Self-host alternative documented in [`self-hosting.md`](self-hosting.md) |
 | Summoner names visible | Accepted | Gameplay-public; redact-before-share warning in README |
 | Code-signing absence | Partially mitigated | SHA-256 in release notes since v0.1.26+; build-from-source as full bypass |
 | WebView2 process trust | Accepted | Auto-updated by Microsoft Edge; small attack surface |

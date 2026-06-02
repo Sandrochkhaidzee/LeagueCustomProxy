@@ -1,0 +1,206 @@
+# Self-Hosting the Signaling Server
+
+This guide is for operators who want to run their own signaling server instead of using the default at `proxchat.dant123.com`. Pointing the client at a different server is a build-time decision — see [`CONTRIBUTING.md`](../CONTRIBUTING.md) § "Common commands" for the build flow and the `PROXCHAT_SERVER` env var.
+
+For client-side usage, see the [user guide](user-guide.md).
+
+## Architecture in one paragraph
+
+The server is a ~500-LOC Node process: WebSocket signaling (room presence + offer/answer/ICE relay), AES-GCM position blob encryption + per-pair distance → volume math, and TURN credential issuance (Cloudflare Realtime TURN by default; coturn HMAC as a fallback). Single container deployed via Docker Compose. Stateless modulo the in-memory rooms table — restarts drop active rooms, clients reconnect automatically. See [`architecture.md`](architecture.md) for the full picture.
+
+## Prerequisites
+
+- A Linux host with Docker (or Node 18+ for the no-Docker path).
+- A domain name with a wildcard or specific TLS cert (Caddy or another auto-cert reverse proxy makes this painless).
+- A Cloudflare account if you're going the recommended TURN route. The free tier covers 1 TB egress/month — sufficient for thousands of voice-hours.
+
+## Step 1 — Generate an encryption key
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+This is the AES-GCM key the server uses to encrypt/decrypt position blobs. Two important properties:
+
+- **It must be the same across server restarts.** Rotating it invalidates every in-flight blob from connected clients and breaks active voice sessions.
+- **It must never leave your infrastructure.** It's the only thing standing between an attacker and decrypted positions.
+
+Save it in your `.env` file (next step).
+
+## Step 2 — Get TURN credentials (Cloudflare Realtime TURN, recommended)
+
+For users behind symmetric NAT (mobile networks, some corporate setups), peers need a TURN relay to connect. The default deployment uses Cloudflare Realtime TURN — 1 TB/month egress free, no infrastructure to maintain, $0.05/GB after.
+
+1. Sign in to the [Cloudflare Dashboard](https://dash.cloudflare.com).
+2. **Realtime** → **TURN** → **Create TURN Key**. Name it something memorable (e.g. `lolproxchat-prod`).
+3. Copy both values that appear:
+   - **TURN Key ID** — UUID-like identifier
+   - **API Token** — secret bearer token, **shown only once at creation**
+
+If you'd rather self-host coturn instead, skip to § "Optional: self-host coturn" below.
+
+**To avoid surprise bills:** don't add a payment method to your Cloudflare account. The free tier becomes a hard cap — service degrades at quota instead of charging.
+
+## Step 3 — Write `.env`
+
+Next to the compose file:
+
+```ini
+ENCRYPTION_KEY=<your-64-hex-key>
+TURN_KEY_ID=<UUID from Cloudflare>
+TURN_KEY_API_TOKEN=<token from Cloudflare>
+```
+
+The compose file is at `docker-compose.proxchat.yml` in the repo root. `.env` is already in `.gitignore`.
+
+## Step 4 — Deploy via Docker
+
+```bash
+docker compose -f docker-compose.proxchat.yml up -d
+```
+
+The server listens on `:3100`. Front it with a TLS-terminating reverse proxy that supports WebSocket upgrades. Example Caddy block:
+
+```caddy
+proxchat.your-domain.com {
+  reverse_proxy localhost:3100
+}
+```
+
+Caddy upgrades WebSockets automatically. For nginx, ensure:
+
+```nginx
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+```
+
+### Or deploy directly (no Docker)
+
+```bash
+cd server
+npm install
+npm run build
+PORT=3100 ENCRYPTION_KEY=<hex> TURN_KEY_ID=<id> TURN_KEY_API_TOKEN=<token> npm start
+```
+
+## Step 5 — Verify
+
+```bash
+# Health (server up, accepting requests)
+curl https://proxchat.your-domain.com/health
+# {"status":"ok","rooms":0}
+
+# TURN credentials (Cloudflare proxy working)
+curl https://proxchat.your-domain.com/turn-credentials
+# {"iceServers":[{...,"urls":["turn:turn.cloudflare.com:..."]}]}
+
+# WebSocket handshake (should return 101 Switching Protocols)
+curl -i -H "Connection: Upgrade" -H "Upgrade: websocket" \
+     -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGVzdA==" \
+     https://proxchat.your-domain.com/ws
+```
+
+If all three return what you expect, you can point a client at this server (rebuild with `PROXCHAT_SERVER=https://proxchat.your-domain.com`) and start using it.
+
+## Optional: self-host coturn instead of Cloudflare
+
+If you'd rather run your own TURN relay (e.g. you don't want a Cloudflare account, or you want full data-path control), the signaling server still supports coturn HMAC credentials as a fallback. It's used automatically when `TURN_KEY_ID` is unset and `TURN_SERVER` + `TURN_SECRET` are present.
+
+### Server-side env vars
+
+```ini
+TURN_SERVER=turn.your-domain.com
+TURN_SECRET=<coturn-shared-secret>
+```
+
+If both Cloudflare and coturn vars are set, the server prefers Cloudflare.
+
+### Uncomment the coturn service block
+
+The `docker-compose.proxchat.yml` ships with a coturn block commented out. Uncomment it and configure the bits below.
+
+### Minimal `turnserver.conf`
+
+```ini
+listening-port=3478
+fingerprint
+lt-cred-mech
+use-auth-secret
+static-auth-secret=<same value as TURN_SECRET env var>
+realm=your-domain.com
+server-name=turn.your-domain.com
+external-ip=<your-public-ip>
+min-port=49152
+max-port=49252
+no-multicast-peers
+no-cli
+```
+
+### Router-side
+
+Forward to the coturn host:
+
+- UDP 3478 (TURN/STUN)
+- UDP 49152–49252 (relay range, must match `min-port` / `max-port`)
+- TCP 5349 if you add TURNS (next section)
+
+The signaling server's `/turn-credentials` endpoint issues short-lived HMAC credentials so the static auth secret never leaves your infrastructure.
+
+### TURNS (TLS) — recommended
+
+TURNS protects credentials in transit, looks like generic HTTPS to firewalls, and helps users on restrictive corporate networks connect. If you already run Caddy / nginx-proxy-manager / Traefik with a wildcard cert for your domain, you can mount the cert dir into coturn:
+
+1. Set `TLS_CERT_DIR=/path/to/dir/containing/wildcard.crt-and-.key` in `.env` next to the compose. The compose references `${TLS_CERT_DIR}` and the `.env` is not committed.
+2. Append to `turnserver.conf`:
+   ```ini
+   tls-listening-port=5349
+   cert=/certs/wildcard_.your-domain.com.crt
+   pkey=/certs/wildcard_.your-domain.com.key
+   ```
+   Filenames must match what's in `${TLS_CERT_DIR}`.
+3. Forward TCP 5349 on your router.
+4. **Cert renewal.** Reverse proxies auto-renew but coturn caches the cert at startup. Schedule a nightly restart so renewed certs get picked up:
+   ```cron
+   17 4 * * * /usr/bin/docker restart proxchat-coturn >/dev/null 2>&1
+   ```
+   A few seconds of TURNS downtime each night; users mid-call won't notice.
+
+### Verifying TURNS works
+
+```bash
+echo "" | openssl s_client -connect turn.your-domain.com:5349 \
+  -servername turn.your-domain.com 2>&1 | grep -E "subject=|issuer=|Verification"
+# Expect:
+#   subject=CN=*.your-domain.com
+#   issuer=...Let's Encrypt...
+#   Verification: OK
+```
+
+## Operational notes
+
+- **The encryption key is critical and unrotatable in practice.** Treat it like a password manager secret. If you ever rotate it, plan for active voice sessions to break the moment the new key is live.
+- **The server is stateless modulo rooms.** Restarts drop active rooms; clients reconnect. No DB to migrate, no persistence to back up.
+- **Health checks.** Docker Compose includes a built-in healthcheck that hits `/health` every 30 s. The README's status badge also pulls from this endpoint via Shields.io.
+- **TLS termination is your responsibility.** Caddy is the recommended default since it handles cert renewal end-to-end. nginx + certbot also works but renewal is a separate concern.
+- **WebSocket upgrades.** Any reverse proxy you use must support and forward the WebSocket upgrade headers, or `/ws` will fail even if `/health` returns 200.
+- **Rate limiting.** The shipped server has no rate limits on `/turn-credentials` or `/compute-volumes`. If you're exposing your deployment publicly, consider adding basic per-IP rate limits at the reverse-proxy layer — see [the open backlog](https://github.com/danthi123/LoLProxChat/issues) for the server-side rate-limit tracking issue.
+
+## Pointing the client at your server
+
+A built client baked in its `PROXCHAT_SERVER` URL at compile time. To point at your deployment:
+
+1. Clone the repo, `cp .env.example .env`.
+2. Edit `.env`: `PROXCHAT_SERVER=https://proxchat.your-domain.com`.
+3. `npx tauri build`.
+4. Distribute the resulting `lolproxchat.exe` to your users (or run it yourself).
+
+The WebSocket URL is derived from `PROXCHAT_SERVER` (`https://` → `wss://`).
+
+## When to graduate off self-hosting
+
+You probably don't need to. The default deployment at `proxchat.dant123.com` is what 99% of users use, and a private deployment makes sense in only two cases:
+
+- **Trust.** You don't want a third party (me) able to decrypt position blobs even in principle. See [`threat-model.md`](threat-model.md) § "Server operator can decrypt all positions".
+- **Capacity.** You're running a player base large enough to justify operational cost. (For perspective: 1000 concurrent users at full Opus 128 kbps would be ~16 MB/s of voice, well within any small-VPS budget.)
+
+If neither applies, save yourself the ops work.
