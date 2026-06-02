@@ -64,6 +64,67 @@ describe('TrackingService state transitions', () => {
   });
 });
 
+describe('setLastPosition jump warning', () => {
+  let svc: TrackingService;
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    svc = new TrackingService(1920, 1080, 'summoners_rift');
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => { /* swallow */ });
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  // setLastPosition is private — call via reflection. Same trick the
+  // tracking module uses internally; tests should mirror its boundary.
+  const setLastPosition = (s: TrackingService, pos: { x: number; y: number }, source: string) =>
+    (s as any).setLastPosition(pos, source);
+  const peekLastPosition = (s: TrackingService) => s.getLastPosition();
+  const setLastUpdateMs = (s: TrackingService, ms: number) => { (s as any).lastPositionUpdateMs = ms; };
+
+  test('first call sets position without warning (no prior position to compare)', () => {
+    setLastPosition(svc, { x: 1000, y: 1000 }, 'test');
+    expect(peekLastPosition(svc)).toEqual({ x: 1000, y: 1000 });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  test('plausible movement does not warn', () => {
+    setLastPosition(svc, { x: 1000, y: 1000 }, 'test-1');
+    // Pretend last update was 1 second ago; champion moves ~500 game units (slow)
+    setLastUpdateMs(svc, performance.now() - 1000);
+    setLastPosition(svc, { x: 1500, y: 1000 }, 'test-2');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  test('impossibly fast jump warns (>2000 units/sec)', () => {
+    setLastPosition(svc, { x: 1000, y: 1000 }, 'test-1');
+    // 0.05s later, position jumps 5000 game units → 100k u/s. Far above 2000.
+    setLastUpdateMs(svc, performance.now() - 50);
+    setLastPosition(svc, { x: 6000, y: 1000 }, 'classifier-reacquire');
+    expect(warnSpy).toHaveBeenCalled();
+    const msg = warnSpy.mock.calls[0].join(' ');
+    expect(msg).toContain('[Tracking] WARN');
+    expect(msg).toContain('classifier-reacquire');
+  });
+
+  test('position still updates after a warning (warn is not a guard)', () => {
+    setLastPosition(svc, { x: 1000, y: 1000 }, 'test-1');
+    setLastUpdateMs(svc, performance.now() - 50);
+    setLastPosition(svc, { x: 14000, y: 14000 }, 'extrapolate');
+    expect(peekLastPosition(svc)).toEqual({ x: 14000, y: 14000 });
+  });
+
+  test('threshold is per-second velocity, not raw distance', () => {
+    // 1500-unit move in 1 second = 1500 u/s — below 2000 threshold, no warn
+    setLastPosition(svc, { x: 0, y: 0 }, 'test-1');
+    setLastUpdateMs(svc, performance.now() - 1000);
+    setLastPosition(svc, { x: 1500, y: 0 }, 'test-2');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('pixelToGamePosition', () => {
   let svc: TrackingService;
 

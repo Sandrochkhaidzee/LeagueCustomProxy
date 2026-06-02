@@ -1,6 +1,28 @@
 import { getIceServers } from '../core/config';
 import { getForceTurnRelay } from './privacy';
 
+// Time-based EMA on per-peer volume targets. Damps CV-jitter spikes without
+// introducing audible ramp delay on normal updates. Two important properties:
+//   • First call (prev == null) snaps to the new value so new peers don't
+//     start playing at 1.0 before the proximity pipeline catches up.
+//   • Alpha is capped at 0.3 so even a long gap between updates (e.g. a peer
+//     re-entering hearing range after going far away) ramps over multiple
+//     ticks instead of snapping to a loud value. At ~3 FPS update cadence,
+//     the smoother reaches ~95% of target in about a second.
+// Exported so tests can verify the math without a real RTCPeerConnection.
+export function nextSmoothedVolume(
+  prev: number | null,
+  target: number,
+  nowMs: number,
+  lastUpdateMs: number,
+): number {
+  const clamped = Math.max(0, Math.min(1, target));
+  if (prev === null) return clamped;
+  const dtSec = (nowMs - lastUpdateMs) / 1000;
+  const alpha = Math.min(0.3, 1 - Math.exp(-dtSec / 0.3));
+  return prev * (1 - alpha) + clamped * alpha;
+}
+
 // Time constant for gain ramping (seconds). setTargetAtTime reaches ~63% in
 // timeConstant; ~95% in 3*timeConstant. 50ms = smooth-feeling steps without
 // audible lag between volume tick updates.
@@ -167,10 +189,17 @@ export class PeerConnection {
   }
 
   private tryPlay(): void {
-    this.audioElement.play().catch(() => {
-      // Autoplay blocked — retry on next user gesture (click/keydown)
+    this.audioElement.play().catch((err) => {
+      // Autoplay blocked by browser policy — retry on next user gesture.
+      // Log explicitly so a user reporting "voice doesn't work" with Debug on
+      // can be told to click anywhere in the overlay to unblock playback.
+      console.warn('[WebRTC] Autoplay blocked for', this.remoteName,
+        '— will retry on next user gesture:', err?.name || err);
       const resume = () => {
-        this.audioElement.play().catch(() => {});
+        this.audioElement.play().catch((retryErr) => {
+          console.warn('[WebRTC] Autoplay retry still blocked for', this.remoteName, ':',
+            retryErr?.name || retryErr);
+        });
         document.removeEventListener('click', resume);
         document.removeEventListener('keydown', resume);
       };
@@ -276,21 +305,8 @@ export class PeerConnection {
   }
 
   setVolume(volume: number): void {
-    const clamped = Math.max(0, Math.min(1, volume));
     const now = performance.now();
-    if (this.smoothedVolume === null) {
-      // First call — snap to the value so new peers don't start at 1.0
-      this.smoothedVolume = clamped;
-    } else {
-      // Time-based EMA with ~300ms half-life. Damps spikes from CV jitter.
-      // Cap alpha so even a long gap (e.g. friend was out of range and
-      // suddenly re-enters) ramps in over multiple ticks instead of snapping
-      // to a loud value. 0.3 → at the existing ~3 FPS volume update cadence,
-      // the smoother reaches ~95% of target in about a second.
-      const dt = (now - this.lastSetVolumeMs) / 1000;
-      const alpha = Math.min(0.3, 1 - Math.exp(-dt / 0.3));
-      this.smoothedVolume = this.smoothedVolume * (1 - alpha) + clamped * alpha;
-    }
+    this.smoothedVolume = nextSmoothedVolume(this.smoothedVolume, volume, now, this.lastSetVolumeMs);
     this.lastSetVolumeMs = now;
     this.targetVolume = this.smoothedVolume;
     if (!this.muted) this.applyGain(this.smoothedVolume);

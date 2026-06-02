@@ -34,5 +34,3 @@ export const MAP_DIMENSIONS: Record<MapType, { width: number; height: number }> 
   howling_abyss: { width: 12988, height: 12988 },
   unknown: { width: 14870, height: 14980 },
 };
-
-export const MAX_HEARING_RANGE = 1200; // game units, ~vision range

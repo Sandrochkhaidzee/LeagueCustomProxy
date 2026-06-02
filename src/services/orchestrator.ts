@@ -534,25 +534,6 @@ export class Orchestrator {
     }));
   }
 
-  private calibrationIndex = 0;
-
-  captureCalibrationData(data: any): void {
-    this.calibrationIndex++;
-    const idx = String(this.calibrationIndex).padStart(3, '0');
-
-    // TODO: Implement calibration data saving via Tauri file system commands
-    console.log('[LoLProxChat] Calibration capture #' + idx, JSON.stringify(data).substring(0, 200));
-
-    // Capture minimap screenshot via Tauri
-    invoke<{ data_url: string; width: number; height: number }>('capture_minimap')
-      .then((result) => {
-        console.log('[LoLProxChat] Calibration minimap captured:', idx, 'size:', result.data_url.length);
-      })
-      .catch((err) => {
-        console.error('[LoLProxChat] Calibration capture failed:', err);
-      });
-  }
-
   /**
    * Receive minimap screen bounds from calibration overlay and convert to
    * capture-relative coordinates for the tracking service.
@@ -576,17 +557,10 @@ export class Orchestrator {
   }
 
   /**
-   * Derive the League config directory.
-   * TODO: Get actual install path from Tauri backend (e.g., from LCU lockfile location).
-   * Falls back to the default install path.
-   */
-  private resolveLeagueConfigPath(): string {
-    return 'C:/Riot Games/League of Legends/Config/game.cfg';
-  }
-
-  /**
    * Read MinimapScale from League's game.cfg. The file is an INI-style config
    * with [Section] headers. MinimapScale is under [HUD] and ranges from 0.0 to 1.0.
+   * Config path is resolved at session start via the Tauri get_league_install_dir
+   * command — see setupTrackingAndSession.
    */
   private readMinimapScale(callback: (scale: number | null) => void): void {
     if (!this.leagueConfigPath) {

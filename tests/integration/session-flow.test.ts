@@ -1,6 +1,5 @@
 import { GameStateService } from '../../src/services/game-state';
 import { generateRoomId } from '../../src/core/room';
-import { calculateDistance, calculateVolume, isInRange } from '../../src/core/proximity';
 import { Player } from '../../src/core/types';
 
 describe('Session flow integration', () => {
@@ -33,25 +32,8 @@ describe('Session flow integration', () => {
     expect(id1).toBe(id2);
   });
 
-  it('proximity chain: distance -> volume -> range check', () => {
-    const posA = { x: 5000, y: 5000 };
-    const posB = { x: 5500, y: 5000 };
-
-    const dist = calculateDistance(posA, posB);
-    expect(dist).toBe(500);
-    expect(isInRange(dist)).toBe(true);
-
-    const vol = calculateVolume(dist);
-    expect(vol).toBeGreaterThan(0);
-    expect(vol).toBeLessThan(1);
-  });
-
-  it('far away players are out of range', () => {
-    const posA = { x: 1000, y: 1000 };
-    const posB = { x: 5000, y: 5000 };
-
-    const dist = calculateDistance(posA, posB);
-    expect(isInRange(dist)).toBe(false);
-    expect(calculateVolume(dist)).toBe(0);
-  });
+  // Proximity math (distance/volume/range) is server-authoritative — the
+  // client just submits encrypted positions to /compute-volumes and applies
+  // whatever volumes come back. Tests for that math live in
+  // server/tests/volumes.test.ts.
 });
