@@ -74,6 +74,8 @@ The log is plain text. It contains your summoner name and nearby players' summon
 | Peers connect but you hear nothing | Confirm both clients are v0.1.7+ (wire-protocol fix). Then check WebRTC ICE state with Debug on — look for `[WebRTC] ICE state ... : connected`. If it goes to `failed`, peers are behind restrictive NAT and need TURN. |
 | ShadowPlay / OBS / Game Bar can't see the app UI | You're on a pre-v0.1.26 build. Update — `WDA_EXCLUDEFROMCAPTURE` was removed entirely. |
 | Logs get wiped when you restart the app | You're on a pre-v0.1.25 build. Update — the app now keeps three rolling sessions instead of truncating. |
+| Voice doesn't work when you (or your friend) play **Nunu & Willump** or **Dr. Mundo** | You're on a pre-v0.2.1 build. Update — the champion classifier was failing to match those display names against the model labels, so CV never locked on for that player and they couldn't broadcast a useful position. |
+| Voice cut out intermittently or felt laggy for one peer specifically on v0.1.x | Fixed in v0.2.0 — the old peer-to-peer encrypted-blob round trip was sensitive to clock skew and data-channel delays. v0.2 sends positions client→server directly. Update both peers. |
 
 ## Updating
 

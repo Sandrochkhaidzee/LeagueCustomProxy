@@ -6,7 +6,7 @@ For client-side usage, see the [user guide](user-guide.md).
 
 ## Architecture in one paragraph
 
-The server is a ~500-LOC Node process: WebSocket signaling (room presence + offer/answer/ICE relay), AES-GCM position blob encryption + per-pair distance → volume math, and TURN credential issuance (Cloudflare Realtime TURN by default; coturn HMAC as a fallback). Single container deployed via Docker Compose. Stateless modulo the in-memory rooms table — restarts drop active rooms, clients reconnect automatically. See [`architecture.md`](architecture.md) for the full picture.
+The server is a ~500-LOC Node process: WebSocket signaling (room presence + offer/answer/ICE relay + per-client XY coords store), per-pair distance → volume math against that store, and TURN credential issuance (Cloudflare Realtime TURN by default; coturn HMAC as a fallback). Single container deployed via Docker Compose. Stateless modulo the in-memory rooms table (which now also holds the latest coords per client) — restarts drop active rooms, clients reconnect automatically. See [`architecture.md`](architecture.md) for the full picture.
 
 ## Prerequisites
 
@@ -14,18 +14,20 @@ The server is a ~500-LOC Node process: WebSocket signaling (room presence + offe
 - A domain name with a wildcard or specific TLS cert (Caddy or another auto-cert reverse proxy makes this painless).
 - A Cloudflare account if you're going the recommended TURN route. The free tier covers 1 TB egress/month — sufficient for thousands of voice-hours.
 
-## Step 1 — Generate an encryption key
+## Step 1 — Generate an encryption key (only if you'll serve v0.1.x clients)
+
+v0.2+ clients send their position to `/compute-volumes` directly — no encryption required. You can skip this step entirely if all of your users are on v0.2.0 or newer.
+
+If you want the server to keep accepting position blobs from v0.1.33-or-older clients during a rollout, generate the AES-GCM key those clients' blobs are encrypted with:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-This is the AES-GCM key the server uses to encrypt/decrypt position blobs. Two important properties:
+- **It must be the same across server restarts** for as long as v0.1.x clients are connecting — rotating it invalidates every in-flight blob from them.
+- **It must never leave your infrastructure** — it's the only thing standing between an attacker and decrypted positions in the legacy code path.
 
-- **It must be the same across server restarts.** Rotating it invalidates every in-flight blob from connected clients and breaks active voice sessions.
-- **It must never leave your infrastructure.** It's the only thing standing between an attacker and decrypted positions.
-
-Save it in your `.env` file (next step).
+Once your community is fully on v0.2+, drop `ENCRYPTION_KEY` from `.env` and the legacy path stops being reachable.
 
 ## Step 2 — Get TURN credentials (Cloudflare Realtime TURN, recommended)
 
@@ -46,9 +48,10 @@ If you'd rather self-host coturn instead, skip to § "Optional: self-host coturn
 Next to the compose file:
 
 ```ini
-ENCRYPTION_KEY=<your-64-hex-key>
 TURN_KEY_ID=<UUID from Cloudflare>
 TURN_KEY_API_TOKEN=<token from Cloudflare>
+# Only required if you want to keep serving v0.1.33-or-older clients — see Step 1.
+# ENCRYPTION_KEY=<your-64-hex-key>
 ```
 
 The compose file is at `docker-compose.proxchat.yml` in the repo root. `.env` is already in `.gitignore`.
@@ -80,7 +83,8 @@ proxy_set_header Connection "upgrade";
 cd server
 npm install
 npm run build
-PORT=3100 ENCRYPTION_KEY=<hex> TURN_KEY_ID=<id> TURN_KEY_API_TOKEN=<token> npm start
+# ENCRYPTION_KEY is only needed for legacy v0.1.x clients — see Step 1.
+PORT=3100 TURN_KEY_ID=<id> TURN_KEY_API_TOKEN=<token> npm start
 ```
 
 ## Step 5 — Verify
@@ -178,7 +182,7 @@ echo "" | openssl s_client -connect turn.your-domain.com:5349 \
 
 ## Operational notes
 
-- **The encryption key is critical and unrotatable in practice.** Treat it like a password manager secret. If you ever rotate it, plan for active voice sessions to break the moment the new key is live.
+- **The encryption key (if you set one) is unrotatable in practice while v0.1.x clients are connected.** Treat it like a password manager secret. Rotating it breaks every legacy client's in-flight position blob the moment the new key is live; v0.2+ clients are unaffected since they don't use it.
 - **The server is stateless modulo rooms.** Restarts drop active rooms; clients reconnect. No DB to migrate, no persistence to back up.
 - **Health checks.** Docker Compose includes a built-in healthcheck that hits `/health` every 30 s. The README's status badge also pulls from this endpoint via Shields.io.
 - **TLS termination is your responsibility.** Caddy is the recommended default since it handles cert renewal end-to-end. nginx + certbot also works but renewal is a separate concern.
@@ -200,7 +204,7 @@ The WebSocket URL is derived from `PROXCHAT_SERVER` (`https://` → `wss://`).
 
 You probably don't need to. The default deployment at `proxchat.dant123.com` is what 99% of users use, and a private deployment makes sense in only two cases:
 
-- **Trust.** You don't want a third party (me) able to decrypt position blobs even in principle. See [`threat-model.md`](threat-model.md) § "Server operator can decrypt all positions".
+- **Trust.** You don't want a third party (me) to be able to see your room's positions. v0.2 holds them in process memory on the server, so whoever runs the server can read them. See [`threat-model.md`](threat-model.md) § "Server operator can read all positions".
 - **Capacity.** You're running a player base large enough to justify operational cost. (For perspective: 1000 concurrent users at full Opus 128 kbps would be ~16 MB/s of voice, well within any small-VPS budget.)
 
 If neither applies, save yourself the ops work.

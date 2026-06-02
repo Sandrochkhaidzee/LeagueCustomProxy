@@ -79,7 +79,7 @@ For the rest — every Settings toggle, troubleshooting, log-grab flow, uninstal
 2. **Position** — Win32 BitBlt of the minimap region + HSV color filter + blob detection + ONNX champion classifier locates your champion icon. Position is in game coordinates.
 3. **Signaling** — players in the same match join a deterministic WebSocket room (room ID = hash of sorted player names) on a self-hosted Node server.
 4. **Voice** — WebRTC peer-to-peer audio between players (Opus 128 kbps, DTLS-SRTP). No audio touches any server.
-5. **Proximity volume** — AES-GCM-encrypted position blobs flow peer-to-peer; the server decrypts them just long enough to compute pairwise volumes (quadratic falloff up to 1200 game units, then quantized into 5 buckets + ±5% jitter to limit side-channel precision). Clients never see decrypted peer positions.
+5. **Proximity volume** — each client streams its XY coordinates to the signaling server (over the same WebSocket used for presence/signaling); the server computes pairwise volumes for everyone in the room (continuous quadratic falloff up to 1200 game units). Clients only ever receive `{ peerName: volume }` — never another peer's raw position.
 
 For depth, see [`docs/architecture.md`](docs/architecture.md).
 
@@ -87,7 +87,7 @@ For depth, see [`docs/architecture.md`](docs/architecture.md).
 
 ## Privacy + anti-cheat in one paragraph
 
-LoLProxChat collects **no analytics, no telemetry, no fingerprinting, no persistent user identifiers**. The only data that leaves your machine is your summoner name (for room routing — same name visible on the match scoreboard), AES-GCM-encrypted position blobs (decrypted server-side, never logged), WebRTC signaling, and the voice audio itself (DTLS-SRTP, peer-to-peer, never touches the server). Want to keep your public IP private even from peers in your match? **Settings → Hide IP (Force TURN)** routes voice through the TURN relay. See [`docs/threat-model.md`](docs/threat-model.md) for the full breakdown.
+LoLProxChat collects **no analytics, no telemetry, no fingerprinting, no persistent user identifiers**. The only data that leaves your machine is your summoner name (for room routing — same name visible on the match scoreboard), your XY position (sent to the server over TLS, held in process memory only for as long as you're in the room, never logged), WebRTC signaling, and the voice audio itself (DTLS-SRTP, peer-to-peer, never touches the server). Want to keep your public IP private even from peers in your match? **Settings → Hide IP (Force TURN)** routes voice through the TURN relay. See [`docs/threat-model.md`](docs/threat-model.md) for the full breakdown.
 
 ---
 

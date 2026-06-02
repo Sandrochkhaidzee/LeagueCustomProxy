@@ -64,8 +64,8 @@ If we ever need to re-introduce server-side coarsening for a real adversarial sc
 
 ### The server operator can read positions
 
-- Whoever holds `ENCRYPTION_KEY` can decrypt any blob they see.
-- A malicious operator running the signaling server can log decrypted positions of every player in every game using their server.
+- In v0.2+ the server holds every connected client's plaintext XY in process memory for as long as they're in a room. A malicious operator running the signaling server can log positions of every player in every game using their server.
+- In the legacy v0.1.x code path that's still wired up for back-compat, whoever holds `ENCRYPTION_KEY` can AES-GCM-decrypt any position blob they see — equivalent operator-trust surface; the encryption only protects against passive network observers, which TLS already does.
 - Trust in the server operator is required — this is why the default deployment uses a server we control. Users who don't trust that can self-host and point their client at their own deployment.
 
 ## Calibration of `MAX_HEARING_RANGE`
@@ -78,12 +78,12 @@ If this range is increased, the side-channel value to a modified client grows. I
 
 | Mitigation | Status | Notes |
 |---|---|---|
-| Server-side AES-GCM blob encryption | Applied | Since first release |
-| Blob age check (10s) | Applied | In `decryptPosition` |
+| Server-side AES-GCM blob encryption | Legacy v0.1 path only | First release through v0.1.33; v0.2 removed the encryption layer since TLS already protects the wire and the encryption was duplicate work that introduced reliability problems (clock-skew rejections, blob lag — issue #7 logs). Still wired on the server for back-compat with v0.1.x clients. |
+| Blob age check (10s) | Legacy v0.1 path only | In `decryptPosition`. v0.2 uses `STALE_POSITION_MS` on the server-side coords store instead — 5 s. |
 | Volume quantization to 5 buckets | Reverted (v0.1.33) | Originally applied v0.1.26; the precision-protection upside was marginal at our user scale and the audible cliff cost was material (issue #14 + #7 logs) |
 | ±5% multiplicative jitter on returned volumes | Reverted (v0.1.33) | Same revert as quantization above |
 | Drop volumes below a noise floor | Not applied | Would prevent "barely audible = exactly N units away" signaling |
-| Snap positions to a coarse grid client-side before encrypting | Not applied | Lossy at source; would survive even key compromise. Would also slightly degrade volume accuracy for legitimate users |
+| Snap positions to a coarse grid client-side | Not applied | Lossy at source. Slightly degrades volume accuracy for legitimate users. Easier to argue for now that v0.2 sends plaintext coords — would also reduce what a compromised server can see. |
 | Reduce `MAX_HEARING_RANGE` | Not applied | Would shrink the side channel proportionally but also shrink the proximity-audio feature itself |
 | Stateful per-pair smoothing on the server | Not applied | Would resist sample averaging but adds per-room state to the server and undoes the stateless-math-function design |
 
@@ -169,14 +169,14 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
   - `download_and_apply_update` validates the URL prefix matches our GitHub release-assets path. A compromised WebView can no longer redirect the auto-updater to an attacker-controlled binary → RCE.
   - `read_league_config_file` takes no path argument and is hard-coded to read only `Config/game.cfg`. A compromised WebView no longer has an arbitrary-file-read primitive (replaces the old `read_text_file(path)` command).
   - These don't *prevent* WebView2 compromise — they ensure a compromise can't trivially be escalated to local code execution or file exfiltration via our IPC surface.
-- A compromised signaling server could in principle target this vector, but a compromised signaling server has bigger problems (it already holds the encryption key and sees all signaling).
+- A compromised signaling server could in principle target this vector, but a compromised signaling server has bigger problems (it already sees every client's plaintext position and routes all signaling).
 
 ## Signaling-server resource abuse / DoS
 
 **Risk:** The signaling server's HTTP endpoints (`/turn-credentials`, `/compute-volumes`) and WebSocket relay are open to the public internet. Without per-IP limits, a malicious script can:
 
 - Exhaust the operator's Cloudflare TURN quota by spamming `/turn-credentials`.
-- Pin CPU by flooding `/compute-volumes` with valid-shaped requests (each does an AES-GCM decrypt per peer blob).
+- Pin CPU by flooding `/compute-volumes` with valid-shaped requests (v0.2 path is a per-peer distance + falloff calc — cheap individually but flood-able; legacy v0.1 path adds an AES-GCM decrypt per peer blob, more expensive).
 - OOM the server with a single massive POST body.
 - Open thousands of WebSocket connections from one IP to exhaust file descriptors.
 - Flood relay traffic through a legitimate joiner to all other peers in their room.

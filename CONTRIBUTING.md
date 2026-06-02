@@ -72,8 +72,8 @@ docs/                  — User guide, architecture, self-hosting, threat model,
 
 ## Testing
 
-- **Client tests** live under `tests/` (separate root from `src/`). Run with `npm test`. The existing 68 tests cover core logic, tracking state machine, audio EMA math + slider×proximity math, device list filtering, tracking-helper scoring math, the position-jump warning gates, and the session-flow integration.
-- **Server tests** live under `server/tests/`. Run with `cd server && npm test`. 46 tests cover room management, TURN credential generation (both coturn-HMAC and Cloudflare paths), volume math, and rate-limiting (`TokenBucket`, `ConcurrencyLimiter`, `clientIp`).
+- **Client tests** live under `tests/` (separate root from `src/`). Run with `npm test`. The existing 74 tests cover core logic, tracking state machine, audio EMA math + slider×proximity math, device list filtering, tracking-helper scoring math, the position-jump warning gates, the session-flow integration, and the champion-classifier label resolver (including the Nunu / Dr. Mundo display-name normalization added in v0.2.1).
+- **Server tests** live under `server/tests/`. Run with `cd server && npm test`. 60 tests cover room management (including server-side coords storage + staleness pruning added in v0.2.0), TURN credential generation (both coturn-HMAC and Cloudflare paths), volume math (both the legacy v0.1 encrypted-blob path and the v0.2 room-state path), and rate-limiting (`TokenBucket`, `ConcurrencyLimiter`, `clientIp`).
 - New features should land with tests where the logic is testable (pure functions, state machines). DOM-heavy or Tauri-IPC-heavy code can skip tests; mock surfaces are too brittle to be worth maintaining.
 
 ## Commit conventions
@@ -108,7 +108,7 @@ See [`docs/self-hosting.md`](docs/self-hosting.md) § "Cutting a Release" for th
 
 These are decisions worth knowing about before proposing a change:
 
-- **End-to-end voice encryption with per-room keys** — would force volume math client-side, which undoes the anti-cheat design. The current model (server-only key, server-side volume math, client never sees decrypted positions) is intentional. See [`docs/threat-model.md`](docs/threat-model.md).
+- **Client-side proximity math (with or without per-room E2E encryption)** — would let modified clients read every peer's raw distance vector, which undoes the anti-cheat design. The current model (positions go to the server, server returns only volumes, client never sees another peer's coords) is intentional. v0.2 dropped the server-side AES-GCM blob layer because TLS already covers the wire and the encryption was duplicate work that introduced reliability problems — the anti-cheat guarantee never depended on it. See [`docs/threat-model.md`](docs/threat-model.md).
 - **A hosted doc site** — flat markdown in the repo is the right resolution for a project this size. If `docs/` ever sprawls beyond 10-15 files, revisit.
 - **Telemetry / analytics** — the project commits to none. If ever added, must be opt-in and visible in Settings. See [`docs/threat-model.md`](docs/threat-model.md) § "What we don't collect".
 - **Self-hosted coturn as the default TURN backend** — was the default through v0.1.25; replaced with Cloudflare Realtime TURN in v0.1.26 (server) / docs in v0.1.26+. coturn remains a supported fallback for self-hosters, see [`docs/self-hosting.md`](docs/self-hosting.md).
