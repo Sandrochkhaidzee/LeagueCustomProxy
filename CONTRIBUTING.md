@@ -72,7 +72,7 @@ docs/                  — User guide, architecture, self-hosting, threat model,
 
 ## Testing
 
-- **Client tests** live under `tests/` (separate root from `src/`). Run with `npm test`. The existing 62 tests cover core logic, tracking state machine, audio EMA math, device list filtering, tracking-helper scoring math, the position-jump warning gates, and the session-flow integration.
+- **Client tests** live under `tests/` (separate root from `src/`). Run with `npm test`. The existing 68 tests cover core logic, tracking state machine, audio EMA math + slider×proximity math, device list filtering, tracking-helper scoring math, the position-jump warning gates, and the session-flow integration.
 - **Server tests** live under `server/tests/`. Run with `cd server && npm test`. 46 tests cover room management, TURN credential generation (both coturn-HMAC and Cloudflare paths), volume math, and rate-limiting (`TokenBucket`, `ConcurrencyLimiter`, `clientIp`).
 - New features should land with tests where the logic is testable (pure functions, state machines). DOM-heavy or Tauri-IPC-heavy code can skip tests; mock surfaces are too brittle to be worth maintaining.
 

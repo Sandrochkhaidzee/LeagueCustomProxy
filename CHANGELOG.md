@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.1.32] — 2026-06-02
+
+### Fixed
+- **Per-row volume slider now respects real proximity.** Moving the slider used to immediately play the peer at `slider × 1.0` (hardcoded proximity) before the next 100 ms position tick dropped them back to whatever proximity actually was. Caused a fraction-of-a-second blip of audible playback on each slider movement even when the peer was supposed to be silent. The slider now reads the last server-returned proximity volume from `lastProximityVolumes` and applies on top of it. (`#7`)
+
+### Changed
+- **Server: `BLOB_MAX_AGE_MS` widened from 10 s to 30 s.** The L7 logging added in v0.1.31 confirmed that even modest Windows-clock drift (~10-15 s, surprisingly common in the wild) was causing the server to reject every position blob from one user in a session, breaking proximity audio asymmetrically with no obvious failure at the connection layer. 30 s absorbs typical drift; the security tradeoff is a longer replay window for captured blobs, but the volume side-channel is already coarsened by quantization + jitter (v0.1.26).
+
+### Added
+- `computeFinalPeerVolume(proximity, slider)` exported from `audio.ts` as a pure helper so the slider math is unit-testable without spinning up AudioService + PeerConnection + WebAudio.
+- 6 new tests for the helper (`tests/services/audio.test.ts`): clamping, proximity-0 always-silent, slider-0 always-silent, identity. Client tests now 68 (was 62).
+
 ## [v0.1.31] — 2026-06-02
 
 ### Security
@@ -149,7 +161,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.1.31...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.1.32...HEAD
+[v0.1.32]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.32
 [v0.1.31]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.31
 [v0.1.30]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.30
 [v0.1.29]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.29
