@@ -15,7 +15,7 @@ const originals = {
   warn: console.warn.bind(console),
   info: console.info.bind(console),
   error: console.error.bind(console),
-  debug: (console as any).debug ? console.debug.bind(console) : console.log.bind(console),
+  debug: console.debug.bind(console),
 };
 
 function formatArgs(args: any[]): string {
@@ -53,14 +53,14 @@ export function setLoggingEnabled(value: boolean): void {
     console.warn = makeWrapper(originals.warn, 'warn');
     console.info = makeWrapper(originals.info, 'info');
     console.error = makeWrapper(originals.error, 'error');
-    (console as any).debug = makeWrapper(originals.debug, 'debug');
+    console.debug = makeWrapper(originals.debug, 'debug');
   } else {
     console.log = noop;
     console.warn = noop;
     console.info = noop;
     // console.error always passes through to the real console, just not to the file
     console.error = originals.error;
-    (console as any).debug = noop;
+    console.debug = noop;
   }
 }
 

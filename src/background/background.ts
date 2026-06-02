@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Orchestrator } from '../services/orchestrator';
 import { isAutoUpdateEnabled } from '../services/updater';
+import '../core/window-globals';
 
 console.log('[LoLProxChat] Background script loading...');
 
@@ -83,7 +84,7 @@ console.log('LoLProxChat background service started');
 // delay so the overlay's check-update handler has a chance to register.
 if (isAutoUpdateEnabled()) {
   setTimeout(() => {
-    const runCheck = (window as any).__proxchatRunUpdateCheck;
+    const runCheck = window.__proxchatRunUpdateCheck;
     if (typeof runCheck === 'function') {
       runCheck(false);
     }

@@ -2,6 +2,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { Position, MapType, MAP_DIMENSIONS } from '../core/types';
 import { getMinimapBounds, MinimapBounds } from '../core/map-calibration';
 import { ChampionClassifier } from './champion-classifier';
+import {
+  computeMaxJumpPx,
+  computeReacquireThreshold,
+  pickBestBlobInRange,
+  pickClassifierReacquisition,
+  ScoreFns,
+} from './tracking-helpers';
 
 export enum TrackingState {
   SCANNING = 'scanning',
@@ -9,17 +16,7 @@ export enum TrackingState {
   DEAD = 'dead',
 }
 
-interface Blob {
-  color: 'teal' | 'red';
-  pixels: number;
-  cx: number;
-  cy: number;
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-  fillRatio: number; // pixels / bbox_area — low for rings, high for filled shapes
-}
+import type { Blob } from './blob-types';
 
 export class TrackingService {
   private state: TrackingState = TrackingState.SCANNING;
@@ -937,106 +934,40 @@ export class TrackingService {
       return;
     }
 
-    // Predicted position using velocity
-    const lastRegX = this.lastPixelPos.x - this.minimapRegion.x;
-    const lastRegY = this.lastPixelPos.y - this.minimapRegion.y;
-    const predX = lastRegX + this.velocityX;
-    const predY = lastRegY + this.velocityY;
+    // Predicted position using velocity + adaptive jump radius (expanded
+    // during holds so we can catch up to a blob that moved while we waited).
+    const lastReg = {
+      x: this.lastPixelPos.x - this.minimapRegion.x,
+      y: this.lastPixelPos.y - this.minimapRegion.y,
+    };
+    const predicted = { x: lastReg.x + this.velocityX, y: lastReg.y + this.velocityY };
+    const now = performance.now();
+    const holdSec = this.holdStartMs > 0 ? (now - this.holdStartMs) / 1000 : 0;
+    const maxJumpPx = computeMaxJumpPx(this.expectedIconDiam, this.holdStartMs, now);
 
-    // Max jump distance: allow up to 2x icon diameter per frame for normal movement.
-    // While holding position, grow the search radius by ~1 icon diameter / second
-    // (scan-rate independent) so we can re-acquire a blob that moved during the hold.
-    const BASE_JUMP_PX = Math.max(20, Math.round(this.expectedIconDiam * 2.0));
-    const holdSec = this.holdStartMs > 0 ? (performance.now() - this.holdStartMs) / 1000 : 0;
-    const holdExpansion = holdSec > 0
-      ? Math.round(this.expectedIconDiam * holdSec)
-      : 0;
-    const MAX_JUMP_PX = BASE_JUMP_PX + holdExpansion;
-    const maxJumpSq = MAX_JUMP_PX * MAX_JUMP_PX;
+    const scoreFns: ScoreFns = {
+      cls: (b) => this.getClassifierScore(b),
+      white: (b) => this.whitePixelScore(b, whiteMask, viewportMask, region.width, region.height),
+      peer: (b) => this.peerAvoidanceScore(b),
+    };
 
-    // Minimum classifier confidence to follow a blob. If the classifier is loaded
-    // and the best nearby blob scores below this, hold position instead of following
-    // a blob the classifier says is NOT our champion.
-    const CLS_FOLLOW_THRESHOLD = 0.2;
+    // Phase 1: nearest in-range blob with composite scoring
+    const phase1 = pickBestBlobInRange(tealBlobs, lastReg, predicted, maxJumpPx, hasClassifier, scoreFns);
 
-    // --- Phase 1: Try normal frame-to-frame tracking (blobs within jump range) ---
-    let bestBlob: Blob | null = null;
-    let bestScore = -Infinity;
-
-    for (const b of tealBlobs) {
-      const dxLast = b.cx - lastRegX;
-      const dyLast = b.cy - lastRegY;
-      if (dxLast * dxLast + dyLast * dyLast > maxJumpSq) continue;
-
-      const dxPred = b.cx - predX;
-      const dyPred = b.cy - predY;
-      const posScore = 1 - (dxPred * dxPred + dyPred * dyPred) / maxJumpSq;
-
-      const peerScore = this.peerAvoidanceScore(b);
-      const whiteScore = this.whitePixelScore(b, whiteMask, viewportMask, region.width, region.height);
-      const clsScore = this.getClassifierScore(b);
-
-      // If classifier is loaded, reject blobs it confidently says aren't our champion
-      if (hasClassifier && clsScore < CLS_FOLLOW_THRESHOLD) continue;
-
-      const score = hasClassifier
-        ? posScore * 0.35 + clsScore * 0.30 + whiteScore * 0.20 + peerScore * 0.15
-        : posScore * 0.45 + peerScore * 0.30 + whiteScore * 0.25;
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestBlob = b;
-      }
-    }
-
-    // --- Phase 2: No blob in jump range — try classifier re-acquisition ---
-    // Handles teleport, respawn, camera pan, blob overlap recovery.
-    // Jump to any teal blob with high classifier confidence regardless of distance.
-    // After holding for a while (>1s), lower the threshold to recover faster.
-    if (!bestBlob && hasClassifier) {
+    // Phase 2: classifier-based long-range reacquire if Phase 1 found nothing
+    if (!phase1 && hasClassifier) {
       if (this.holdStartMs === 0) this.holdStartMs = performance.now();
-      // If we've been stationary for a while and lost the icon, it's far
-      // more likely to be a transient render glitch than the user teleporting
-      // — require very high classifier confidence before snapping to a blob
-      // elsewhere on the minimap (otherwise we lock onto a minion wave or turret).
-      const stationarySec = this.lastMovementMs > 0
-        ? (performance.now() - this.lastMovementMs) / 1000
-        : 0;
-      const CLS_REACQUIRE_THRESHOLD = stationarySec > 3
-        ? 0.85
-        : holdSec > 1.0 ? 0.35 : 0.5;
-      let bestClsBlob: Blob | null = null;
-      let bestClsScore = 0;
-
-      for (const b of tealBlobs) {
-        const clsScore = this.getClassifierScore(b);
-        if (clsScore >= CLS_REACQUIRE_THRESHOLD && clsScore > bestClsScore) {
-          bestClsScore = clsScore;
-          bestClsBlob = b;
-        }
-      }
-
-      if (bestClsBlob) {
-        const cx = this.minimapRegion.x + bestClsBlob.cx;
-        const cy = this.minimapRegion.y + bestClsBlob.cy;
-        this.lastPixelPos = { x: cx, y: cy };
-        const newPos = this.pixelToGamePosition(cx, cy, this.minimapRegion);
-        this.setLastPosition(newPos, 'classifier-reacquire');
-        this.velocityX = 0;
-        this.velocityY = 0;
-        this.lockedTickCount++;
-        console.log('[Tracking] Re-acquired via classifier (cls=' + bestClsScore.toFixed(2) +
-          '): pixel(' + cx + ',' + cy + ')' +
-          ' game(' + Math.round(newPos.x) + ',' + Math.round(newPos.y) + ')');
-        if (this.onPositionUpdate && this.lastPosition) {
-          this.onPositionUpdate(this.lastPosition);
-        }
+      const stationarySec = this.lastMovementMs > 0 ? (now - this.lastMovementMs) / 1000 : 0;
+      const reacquireThreshold = computeReacquireThreshold(stationarySec, holdSec);
+      const phase2 = pickClassifierReacquisition(tealBlobs, reacquireThreshold, scoreFns.cls);
+      if (phase2) {
+        this.acquireViaClassifier(phase2.blob, phase2.score);
         return;
       }
     }
 
-    // --- Phase 3: No blob matched at all — extrapolate with decaying velocity ---
-    if (!bestBlob) {
+    // Phase 3: no blob matched at all — extrapolate
+    if (!phase1) {
       if (this.lockedTickCount === 0) {
         console.log('[Tracking] Extrapolating position (no match in range)');
         this.holdStartMs = performance.now();
@@ -1045,24 +976,52 @@ export class TrackingService {
       return;
     }
 
-    // Log when resuming tracking after a hold
+    this.finalizeLockedFrame(phase1.blob, lastReg, holdSec);
+  }
+
+  /** Phase 2 success path: snap position, reset velocity, log, fire callback. */
+  private acquireViaClassifier(blob: Blob, clsScore: number): void {
+    if (!this.minimapRegion) return;
+    const cx = this.minimapRegion.x + blob.cx;
+    const cy = this.minimapRegion.y + blob.cy;
+    this.lastPixelPos = { x: cx, y: cy };
+    const newPos = this.pixelToGamePosition(cx, cy, this.minimapRegion);
+    this.setLastPosition(newPos, 'classifier-reacquire');
+    this.velocityX = 0;
+    this.velocityY = 0;
+    this.lockedTickCount++;
+    console.log('[Tracking] Re-acquired via classifier (cls=' + clsScore.toFixed(2) +
+      '): pixel(' + cx + ',' + cy + ')' +
+      ' game(' + Math.round(newPos.x) + ',' + Math.round(newPos.y) + ')');
+    if (this.onPositionUpdate && this.lastPosition) {
+      this.onPositionUpdate(this.lastPosition);
+    }
+  }
+
+  /** Phase 1 success path: update velocity EMA, position, movement timestamp. */
+  private finalizeLockedFrame(
+    blob: Blob,
+    lastReg: { x: number; y: number },
+    holdSec: number,
+  ): void {
+    if (!this.minimapRegion) return;
     if (this.lockedTickCount > 0) {
       console.log('[Tracking] Resumed tracking after hold (' + holdSec.toFixed(2) + 's)');
     }
 
-    const cx = this.minimapRegion.x + bestBlob.cx;
-    const cy = this.minimapRegion.y + bestBlob.cy;
+    const cx = this.minimapRegion.x + blob.cx;
+    const cy = this.minimapRegion.y + blob.cy;
 
     // Velocity EMA — preserve per-frame-at-8-FPS behavior across scan rates.
     // weight_old = 0.5^(TUNED_FPS * dt); at 8 FPS dt=0.125 → weight_old = 0.5.
     const velWeightOld = Math.pow(0.5, TrackingService.TUNED_FPS * this.lastDtSec);
     const velWeightNew = 1 - velWeightOld;
-    this.velocityX = this.velocityX * velWeightOld + (bestBlob.cx - lastRegX) * velWeightNew;
-    this.velocityY = this.velocityY * velWeightOld + (bestBlob.cy - lastRegY) * velWeightNew;
+    this.velocityX = this.velocityX * velWeightOld + (blob.cx - lastReg.x) * velWeightNew;
+    this.velocityY = this.velocityY * velWeightOld + (blob.cy - lastReg.y) * velWeightNew;
 
-    // Track movement so we can prefer stationary "stickiness" in Phase 2 below.
-    const moveDx = bestBlob.cx - lastRegX;
-    const moveDy = bestBlob.cy - lastRegY;
+    // Track real movement so Phase 2 can prefer stationary "stickiness".
+    const moveDx = blob.cx - lastReg.x;
+    const moveDy = blob.cy - lastReg.y;
     if (moveDx * moveDx + moveDy * moveDy > 9 /* 3px */) {
       this.lastMovementMs = performance.now();
     }

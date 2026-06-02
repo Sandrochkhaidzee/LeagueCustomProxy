@@ -15,6 +15,7 @@ import {
   probeMicPermission,
 } from '../services/devices';
 import { getForceTurnRelay, setForceTurnRelay } from '../services/privacy';
+import '../core/window-globals';
 
 interface NearbyPeer {
   summonerName: string;
@@ -200,7 +201,7 @@ btnOpenLogs.addEventListener('click', () => {
 });
 
 // Expose for background.ts to trigger an auto-check on launch
-(window as any).__proxchatRunUpdateCheck = runUpdateCheck;
+window.__proxchatRunUpdateCheck = runUpdateCheck;
 
 // Force-TURN privacy toggle. New peer connections created after this is
 // flipped honor the new setting; existing connections keep whatever policy
@@ -225,7 +226,7 @@ btnDebug.addEventListener('click', () => {
   setLoggingEnabled(debugEnabled);
   // Read by orchestrator when emitting scanner:scene events so the scanner
   // window only renders the tracking dot while Debug is on.
-  (window as any).__lolproxchat_debug_enabled = debugEnabled;
+  window.__lolproxchat_debug_enabled = debugEnabled;
   // Hide the HSV thumbnail immediately when Debug flips off.
   if (!debugEnabled) {
     debugFilterThumb.classList.add('hidden');

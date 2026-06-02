@@ -8,6 +8,7 @@ import { ChampionClassifier } from './champion-classifier';
 import { DataChannelService } from './data-channel';
 import { VolumeClient } from './volume-client';
 import { PeerState } from '../core/types';
+import '../core/window-globals';
 import { isStreamerMode } from '../core/streamer-detect';
 
 export class Orchestrator {
@@ -489,7 +490,7 @@ export class Orchestrator {
     emit('scanner:scene', {
       filteredImageUrl: data.filteredImageUrl,
       lastPosition: data.lastPosition,
-      debugEnabled: (window as any).__lolproxchat_debug_enabled === true,
+      debugEnabled: window.__lolproxchat_debug_enabled === true,
     }).catch(() => { /* scanner may not be ready yet — non-fatal */ });
 
     // Broadcast panel-relevant state to the overlay UI
