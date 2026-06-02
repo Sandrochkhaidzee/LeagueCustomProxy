@@ -93,10 +93,10 @@ This is the part that matters for both the threat model and the "what does the s
 1. The client encrypts its position with **AES-GCM** using a key only the server has. Includes a timestamp inside the encrypted payload so the server can age-check on decrypt.
 2. The client sends the **encrypted blob** to every peer via the WebRTC data channel. Peers can't decrypt it — they just relay it back to the server in their own next `/compute-volumes` request.
 3. On each volume tick, the client POSTs to `/compute-volumes` with its own raw position + the bag of encrypted peer blobs it received this cycle.
-4. The server decrypts each peer blob, computes the pairwise distance, applies quadratic falloff (`1 - (d/MAX_HEARING_RANGE)²`), snaps the result to one of 5 buckets (`0`, `0.20`, `0.45`, `0.75`, `1.0`), applies ±5% multiplicative jitter, and returns only `{ peerName: volume }` to the requesting client.
+4. The server decrypts each peer blob, computes the pairwise distance, applies quadratic falloff (`1 - (d/MAX_HEARING_RANGE)²`), and returns only `{ peerName: volume }` to the requesting client. The output is a continuous float in `[0, 1]` since v0.1.33 — the v0.1.26 bucket quantization + jitter was reverted because the side-channel precision gain was marginal at our user scale while the audible cliff cost was material (see [`threat-model.md`](threat-model.md) for the design-evolution rationale).
 5. The server also returns the requester's own freshly-encrypted blob (`myBlob`) for the next round of peer-to-peer broadcast.
 
-The result: **a peer client never sees another client's raw position, and the volume value it receives carries about ~250 units of distance uncertainty per bucket plus the jitter noise floor.** Server quantization details in `server/src/volumes.ts`; threat-model rationale in [`threat-model.md`](threat-model.md).
+The result: **a peer client never sees another client's raw position; the volume value carries only the inherent distance-to-volume mapping noise**, no server-added obfuscation as of v0.1.33. Server-side math lives in `server/src/volumes.ts`; threat-model rationale (including why quantization+jitter was reverted) in [`threat-model.md`](threat-model.md).
 
 ## WebRTC voice flow
 
@@ -104,7 +104,7 @@ Voice is a parallel concern from positions — runs on the same `RTCPeerConnecti
 
 - Each client publishes a single mic stream through a WebAudio graph: `mic → GainNode → MediaStreamDestination → RTCPeerConnection`.
 - Each peer's incoming stream goes through the inverse: `RTCPeerConnection → MediaStreamSource → GainNode → AudioContext.destination`.
-- The per-peer gain is driven by the server-returned volume, smoothed by an EMA (`nextSmoothedVolume`) with a 0.3 alpha cap so even sudden bucket transitions ramp over ~1 second instead of snapping.
+- The per-peer gain is driven by the server-returned volume, smoothed by an EMA (`nextSmoothedVolume`) with a 0.3 alpha cap so distance changes ramp over ~1 second instead of snapping. The cap originally bridged quantization buckets; with v0.1.33's continuous output it primarily damps CV jitter.
 - ICE candidates flow through the signaling server's `/ws` endpoint. Direct P2P (host or srflx) is preferred; TURN relay kicks in if the user opted into "Hide IP" or if direct paths fail. TURN credentials come from Cloudflare's Realtime TURN API, proxied through the signaling server's `/turn-credentials`.
 - ICE failure auto-recovers: initiator side calls `pc.restartIce()` + re-issues an offer, capped at 2 attempts per peer, counter resets on successful re-connect.
 
@@ -115,7 +115,7 @@ A ~500-LOC Node process. Single container deployed via Docker Compose. Stateless
 **Endpoints:**
 
 - **`/ws`** — WebSocket upgrade. Handles room join/leave, peer presence broadcast, and relay of `offer` / `answer` / `ice-candidate` signals between named peers. Room IDs are deterministic hashes of sorted player summoner names, so any two players in the same match independently compute the same room ID.
-- **`POST /compute-volumes`** — Receives `{ myPosition, peers: { name: encryptedBlob, ... } }`, returns `{ myBlob, peerVolumes }`. Quantized + jittered volumes, 24-hour-bounded blob ages.
+- **`POST /compute-volumes`** — Receives `{ myPosition, peers: { name: encryptedBlob, ... } }`, returns `{ myBlob, peerVolumes }`. Continuous quadratic-falloff volumes (v0.1.33+; was bucket-quantized + jittered in v0.1.26-v0.1.32). 30-second blob age window.
 - **`GET /turn-credentials`** — Returns ICE servers for the requesting client. Calls Cloudflare's TURN API in the background (cached in-process for 24 hours with stale-grace fallback on API failure). Falls back to self-hosted coturn HMAC credentials if `TURN_KEY_ID` is unset and `TURN_SERVER`/`TURN_SECRET` are set.
 - **`GET /health`** — `{ status: "ok", rooms: N }`. Used by Docker healthcheck and the public status badge in the README.
 

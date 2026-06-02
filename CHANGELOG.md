@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.1.33] — 2026-06-02
+
+### Fixed
+- **Per-row volume slider (#12).** Bumped width 50→80 px, thumb 10→14 px, track height 4→6 px. The old 50 px slider for a 0-100 range gave ~0.5 px per value step, which felt like clicking through discrete steps rather than dragging smoothly. Now drags continuously.
+
+### Changed
+- **Server: reverted volume quantization + jitter from v0.1.26 (#14).** `calculateVolume` now returns continuous quadratic falloff (`1 - (d/MAX)²`) directly — no 5-bucket snapping, no ±5% jitter. The original anti-cheat rationale (limit a modified client's distance precision) was marginal at our user scale, and the audible "cliffs" when peer CV jittered between adjacent teal blobs in real gameplay (visible across issue #7 and #13 logs) made the smoothness cost dominate. The continuous output is deterministic; the client-side EMA smooths transitions naturally without bridging large cliffs.
+- Server tests rewritten to assert continuous behavior + a determinism check (same input = same output). Total server tests now 47 (was 46).
+
+### Removed
+- `VOLUME_BUCKETS`, `quantizeVolume`, and `jitterVolume` from `server/src/volumes.ts`. No public API change — the `/compute-volumes` response shape is unchanged.
+
 ## [v0.1.32] — 2026-06-02
 
 ### Fixed
@@ -161,7 +173,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.1.32...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.1.33...HEAD
+[v0.1.33]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.33
 [v0.1.32]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.32
 [v0.1.31]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.31
 [v0.1.30]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.30

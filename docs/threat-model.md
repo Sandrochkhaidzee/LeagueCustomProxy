@@ -33,12 +33,15 @@ A user running a modified ("cheating") client should not be able to derive enemy
 - The `/compute-volumes` response is `{ "PeerName": volume, ... }` where each volume is a number between 0 and 1.
 - No coordinate data leaves the server.
 
-### Volumes are quantized + jittered before being returned (v0.1.26+)
+### ~~Volumes are quantized + jittered before being returned~~ (reverted v0.1.33)
 
-- Continuous distance-to-volume math runs server-side, then the result is snapped to one of five discrete buckets: `0`, `0.20`, `0.45`, `0.75`, `1.0`.
-- Each bucket value is then multiplied by ±5% random jitter before being returned.
-- This means a modified client can't extract a precise distance estimate from the volume — only a coarse tier (silent / distant / nearby / close / adjacent), and even that tier carries random noise per request.
-- The client-side EMA in `PeerConnection.setVolume` (~1s ramp) smooths bucket transitions so the audible experience is unaffected.
+The v0.1.26 server-side quantization (5 buckets) + ±5% jitter was reverted in v0.1.33. Rationale:
+
+- The precision-protection argument was marginal at our user scale. A modified client extracting "near / medium / far" buckets is barely less informative than continuous values for any practical exploit.
+- The audible cost was material — bucket transitions caused 25-50% volume cliffs that the client-side EMA could not fully smooth, especially when peer CV jittered between adjacent teal blobs in teamfights (visible in issue #7 and #13 logs).
+- Continuous output is now back. Client-side EMA in `PeerConnection.setVolume` (~1s ramp) smooths natural distance changes without bridging large cliffs.
+
+If we ever need to re-introduce server-side coarsening for a real adversarial scenario, options worth considering: per-pair EMA smoothing (eliminates cliffs but adds per-room state), or a fine-grained bucket scheme (e.g. 16 levels — less precision lost than 5 buckets, less audible than 5 either).
 
 ## What the design does not protect
 
@@ -46,14 +49,14 @@ A user running a modified ("cheating") client should not be able to derive enemy
 
 - A modified client can read its per-peer volume vector to learn whether an enemy is within `MAX_HEARING_RANGE` (1200 game units, calibrated to roughly match LoL vision range).
 - That binary "enemy is in audible range" signal is information the stock game wouldn't provide if the enemy is in fog of war.
-- The bucket quantization reduces this to "in range, and roughly which tier of distance" rather than a precise distance.
+- ~~The bucket quantization reduces this to "in range, and roughly which tier of distance" rather than a precise distance.~~ Reverted in v0.1.33; volume is again continuous. The leak is now "presence within range + a distance estimate accurate to about ±5% noise floor from the underlying CV jitter."
 - This leak is **inherent to proximity audio existing at all** — closing it would mean abandoning the feature.
 
 ### Two coordinated modified clients can triangulate
 
 - If two players in the same lobby both run modified clients and share their per-peer volume vectors out-of-band, distance estimates from two known points can localize an enemy.
-- Bucket quantization + jitter make the localization fuzzy (precision bounded by bucket width, ~250-300 game units per tier) but don't eliminate it.
-- A determined cheat ring with multiple modified clients can reduce the fuzz further by averaging many samples — jitter is i.i.d. per request, so noise drops as `sqrt(N)`.
+- ~~Bucket quantization + jitter make the localization fuzzy~~ (reverted v0.1.33). With continuous output back, triangulation is bounded only by the underlying CV jitter on the modified-client side.
+- The user-scale threat-model judgment is that this trade is the right one — see "Volumes are quantized + jittered" subsection above.
 
 ### Single-client self-reported position trust
 
@@ -79,9 +82,9 @@ If this range is increased, the side-channel value to a modified client grows. I
 |---|---|---|
 | Server-side AES-GCM blob encryption | Applied | Since first release |
 | Blob age check (10s) | Applied | In `decryptPosition` |
-| Volume quantization to 5 buckets | Applied (v0.1.26) | See `VOLUME_BUCKETS` in `server/src/volumes.ts` |
-| ±5% multiplicative jitter on returned volumes | Applied (v0.1.26) | See `jitterVolume` |
-| Drop volumes below a noise floor | Not applied | Would prevent "barely audible = exactly N units away" signaling; minor extra hardening on top of buckets |
+| Volume quantization to 5 buckets | Reverted (v0.1.33) | Originally applied v0.1.26; the precision-protection upside was marginal at our user scale and the audible cliff cost was material (issue #14 + #7 logs) |
+| ±5% multiplicative jitter on returned volumes | Reverted (v0.1.33) | Same revert as quantization above |
+| Drop volumes below a noise floor | Not applied | Would prevent "barely audible = exactly N units away" signaling |
 | Snap positions to a coarse grid client-side before encrypting | Not applied | Lossy at source; would survive even key compromise. Would also slightly degrade volume accuracy for legitimate users |
 | Reduce `MAX_HEARING_RANGE` | Not applied | Would shrink the side channel proportionally but also shrink the proximity-audio feature itself |
 | Stateful per-pair smoothing on the server | Not applied | Would resist sample averaging but adds per-room state to the server and undoes the stateless-math-function design |
