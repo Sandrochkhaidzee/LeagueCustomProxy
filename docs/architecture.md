@@ -126,7 +126,7 @@ Source files:
 | `src/index.ts` | HTTP/WebSocket bootstrap, route dispatch, per-IP rate limit + body cap + WS connection cap |
 | `src/ws-handler.ts` | Per-connection lifecycle, room messages, per-connection message rate limit |
 | `src/rooms.ts` | In-memory room table, presence tracking |
-| `src/volumes.ts` | AES-GCM blob encrypt/decrypt, quadratic falloff, bucket quantization, jitter |
+| `src/volumes.ts` | AES-GCM blob encrypt/decrypt, continuous quadratic-falloff distance→volume math |
 | `src/turn.ts` | Cloudflare TURN credential fetcher + cache + coturn HMAC fallback |
 | `src/rate-limit.ts` | Token-bucket and concurrency limiters used across endpoints. No external dep. |
 | `src/types.ts` | Shared request/response types |
