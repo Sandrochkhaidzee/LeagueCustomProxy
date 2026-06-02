@@ -1,6 +1,13 @@
-# Threat Model — Cheat / Information Leak
+# Threat Model
 
-This document covers what the LoLProxChat design protects against in terms of using the app to gain an unfair information advantage in League of Legends, and what it explicitly does not protect against. It does **not** cover broader user-facing threats (network privacy, server operator trust, etc.) — those are tracked separately.
+This document describes the threats LoLProxChat protects against, the threats it doesn't, and the mitigations applied or available. Two broad categories:
+
+1. **Cheat / information leak** — using the app to gain an unfair in-game advantage
+2. **Threats to users** — privacy, network, trust risks faced by people who run the app
+
+---
+
+# Part 1 — Cheat / Information Leak
 
 ## Design intent
 
@@ -80,3 +87,85 @@ If this range is increased, the side-channel value to a modified client grows. I
 | Stateful per-pair smoothing on the server | Not applied | Would resist sample averaging but adds per-room state to the server and undoes the stateless-math-function design |
 
 The applied mitigations raise the floor for casual abuse without imposing measurable cost on legitimate use. The unapplied mitigations are tracked in [issue #10](https://github.com/danthi123/LoLProxChat/issues/10) for consideration if abuse becomes evident in the wild.
+
+---
+
+# Part 2 — Threats to Users
+
+These are risks the *user* takes on by running the app, separate from in-game cheating. Some are mitigated, some are documented-and-accepted.
+
+## Public IP exposure via WebRTC ICE candidates
+
+**Risk:** WebRTC peer connections exchange ICE candidates to figure out how to reach each other. The "server-reflexive" (srflx) candidate contains each player's public IP, and that candidate is signaled to every peer in the match. A malicious player in the lobby can extract everyone else's public IP. With it, they can launch a DDoS against the home network, attempt port scanning, etc. This is the same class of risk Discord had pre-2017 before they forced all voice through their relays.
+
+**Status:** **Mitigated by opt-in toggle (v0.1.27).**
+
+- **Settings → Hide IP (Force TURN)** sets `iceTransportPolicy: 'relay'` on the RTCPeerConnection. Chromium then refuses to gather or use any non-relay candidate, so peers only ever see the TURN server's IP, never the user's public IP.
+- Default is **off**, because TURN relay adds ~20-100 ms latency and uses TURN bandwidth (which we pay for via the Cloudflare free tier). Most users on default config still expose their IP to fellow players.
+- Takes effect on the next peer connection (existing connections keep their original transport policy until re-established).
+- Only matters in matches where you don't already trust everyone. If your premade is on Discord with you, your IP is already known to them via that channel — the toggle adds nothing then.
+
+**Server-side mitigation alternative (not chosen):** forcing all clients TURN-only by default would protect users transparently but multiply server-side bandwidth costs and add latency for everyone. Opt-in keeps the cost on the users who choose it.
+
+## Server operator can decrypt all positions
+
+**Risk:** Whoever holds the `ENCRYPTION_KEY` on the signaling server can AES-GCM-decrypt every position blob they see in transit. A malicious or compromised server operator can log every player's movement in every game using their server.
+
+**Status:** Not mitigated in code. Trust-or-self-host.
+
+**Available controls:**
+
+- Self-host the signaling server (see `docs/SETUP.md`) and point the client at it via the `PROXCHAT_SERVER` env var at build time. Eliminates third-party-operator trust.
+- The default deployment points at a server we operate. Users who don't trust that operator should self-host.
+
+**Why not end-to-end encrypt instead:** moving to per-room shared keys that the server can't decrypt would force volume math client-side. That undoes the anti-cheat design in Part 1 (clients would see peer positions directly). The trade-off favors keeping server-side decryption as the price of a meaningful anti-cheat posture.
+
+## Summoner names visible in signaling traffic + logs
+
+**Risk:** WebSocket signaling messages include summoner names. The signaling server sees them, the per-session debug log records them, anyone observing the network path between the client and the signaling server (e.g., an ISP doing TLS inspection on a corporate network) sees them inside the WebSocket frames.
+
+**Status:** Accepted as low severity. Summoner names are gameplay-public — anyone who can see the match scoreboard already has them. The debug log warning ("contains your summoner name and nearby players' names") covers the case of users sharing logs publicly via GitHub issues.
+
+## Code-signing absence → typosquatting risk
+
+**Risk:** The release `.exe` is not code-signed (paid certificate tied to a legal entity, out of scope for a personal project). Windows shows a SmartScreen warning on first run, which the user has to override. A malicious lookalike binary would produce the same warning. A typosquatted GitHub release (e.g., a fork pretending to be official) is hard for users to distinguish from the real one.
+
+**Status:** Partially mitigated.
+
+- **SHA-256 hash published in every release body** (since v0.1.26+). The hash + per-OS verification instructions are included in the release notes. Users can compare their downloaded `.exe` against the official hash; anyone sharing the release link elsewhere (Reddit, Discord) can post the hash alongside.
+- The hash defends against in-transit tampering, mirror reposts, and typosquatted re-uploads, but **does not defend against initial trust** — a user who downloads from the wrong GitHub URL has no way to know.
+- Users wary of unsigned binaries can build from source (`npx tauri build`) — locally-built binaries skip the SmartScreen warning entirely.
+
+## WebView2 process trust
+
+**Risk:** The Tauri client loads the orchestrator + WebRTC code into a WebView2 process. Any vulnerability in the bundled WebView2 (which the WebView2 runtime updates separately via Microsoft Edge) could in principle let a crafted response from the signaling server execute code on the user's machine.
+
+**Status:** Low practical risk, accepted.
+
+- The attack surface is small: WebView2 only talks to one trusted signaling server endpoint (HTTPS-only) and one TURN provider.
+- WebView2 receives security updates from Microsoft Edge automatically — no patching responsibility on us.
+- A compromised signaling server could in principle target this vector, but a compromised signaling server has bigger problems (it already holds the encryption key and sees all signaling).
+
+## Signaling-server presence enumeration
+
+**Risk:** Anyone with WebSocket access to the signaling server, or its operator, can enumerate currently-active users (those connected to rooms right now). Tells an observer "this player is currently using LoLProxChat."
+
+**Status:** Accepted as low severity. There is no public list, no API for enumeration. The threat requires either compromising the server or being its operator. Mitigations would require breaking presence-broadcast semantics, which is core to how peers discover each other.
+
+## Voice content in transit
+
+**Risk:** Voice flows P2P over WebRTC, but the media layer encryption is the standard DTLS-SRTP — anyone observing the network path can tell *that* there's voice traffic between two endpoints, just not what's being said.
+
+**Status:** Standard WebRTC baseline. Not specifically mitigated. Not user-facing in any practical sense.
+
+## Mitigations applied vs. mitigations possible (Part 2)
+
+| Threat | Status | Notes |
+|---|---|---|
+| Public IP exposure | **Mitigated (opt-in)** | Force-TURN toggle in Settings, v0.1.27+ |
+| Server-operator decrypt | Doc-only | Self-host alternative documented in SETUP.md |
+| Summoner names visible | Accepted | Gameplay-public; redact-before-share warning in README |
+| Code-signing absence | Partially mitigated | SHA-256 in release notes since v0.1.26+; build-from-source as full bypass |
+| WebView2 process trust | Accepted | Auto-updated by Microsoft Edge; small attack surface |
+| Signaling presence enumeration | Accepted | No mitigation without breaking peer-discovery |
+| Voice in transit | Standard DTLS-SRTP | Inherent to WebRTC |

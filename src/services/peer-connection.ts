@@ -1,4 +1,5 @@
 import { getIceServers } from '../core/config';
+import { getForceTurnRelay } from './privacy';
 
 // Time constant for gain ramping (seconds). setTargetAtTime reaches ~63% in
 // timeConstant; ~95% in 3*timeConstant. 50ms = smooth-feeling steps without
@@ -61,9 +62,17 @@ export class PeerConnection {
   iceRestartAttempts = 0;
   static readonly MAX_ICE_RESTARTS = 2;
 
-  private constructor(remoteName: string, iceServers: RTCIceServer[], audioContext: AudioContext | null) {
+  private constructor(
+    remoteName: string,
+    iceServers: RTCIceServer[],
+    audioContext: AudioContext | null,
+    iceTransportPolicy: RTCIceTransportPolicy = 'all',
+  ) {
     this.remoteName = remoteName;
-    this.pc = new RTCPeerConnection({ iceServers });
+    this.pc = new RTCPeerConnection({ iceServers, iceTransportPolicy });
+    if (iceTransportPolicy === 'relay') {
+      console.log('[WebRTC] Forcing TURN relay for', remoteName, '— no direct P2P candidates will be used');
+    }
     this.audioContext = audioContext;
 
     this.audioElement = new Audio();
@@ -123,7 +132,8 @@ export class PeerConnection {
 
   static async create(remoteName: string, audioContext: AudioContext | null = null): Promise<PeerConnection> {
     const iceServers = await getIceServers();
-    return new PeerConnection(remoteName, iceServers, audioContext);
+    const policy: RTCIceTransportPolicy = getForceTurnRelay() ? 'relay' : 'all';
+    return new PeerConnection(remoteName, iceServers, audioContext, policy);
   }
 
   private ensureWebAudioRoute(): void {

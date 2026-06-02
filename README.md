@@ -72,6 +72,8 @@ LoLProxChat is built to stay within the categories Riot Games explicitly publish
 
 **Specifically the proximity audio:** the volume falloff to zero at ~1200 game units (typical LoL vision range) means by default you only hear enemies who are roughly close enough that the game would already give you visual indicators of their presence (minimap icon when they walk past warded ground, champion model when they enter your vision). The app does not reveal *where* an enemy is — only that one is somewhere within hearing range. This is strictly less information than what Discord voice chat with the same opponent already provides (which has zero distance modulation).
 
+For the detailed breakdown of what the design protects against (anti-cheat side channels, server-operator trust, IP exposure via WebRTC, etc.) and the mitigations applied, see [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
+
 **Riot Developer Portal status:**
 LoLProxChat is **registered and approved** on the Riot Developer Portal — **App ID 809090**. The registration documents the LCU + Live Client Data endpoints used and the architectural approach (Tauri overlay, no memory reads, no injection). This is the official sign-off that the app's design fits Riot's allowed-tools category.
 
@@ -94,6 +96,7 @@ References:
 4. **Always Open** mic is the default — just talk and they'll hear you, scaled by in-game distance. Switch to **Push to Talk (F8)** in Settings if you'd prefer.
 5. Click **MIC** to self-mute, **VOL** to mute everyone, or the per-row **MUTE** button to silence a specific player.
 6. Pick a specific mic / speaker under **Settings → Input Device / Output Device** if Windows' default isn't what you want.
+7. **Privacy:** if you'd rather not expose your public IP to other players in the match, flip **Settings → Hide IP (Force TURN)** on. Routes all voice through the TURN relay (~20-100 ms added latency) so peers only see the relay's IP, never yours. See [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full discussion.
 
 ## Reporting bugs
 

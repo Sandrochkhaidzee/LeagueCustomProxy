@@ -14,6 +14,7 @@ import {
   listAudioDevices,
   probeMicPermission,
 } from '../services/devices';
+import { getForceTurnRelay, setForceTurnRelay } from '../services/privacy';
 
 interface NearbyPeer {
   summonerName: string;
@@ -200,6 +201,21 @@ btnOpenLogs.addEventListener('click', () => {
 
 // Expose for background.ts to trigger an auto-check on launch
 (window as any).__proxchatRunUpdateCheck = runUpdateCheck;
+
+// Force-TURN privacy toggle. New peer connections created after this is
+// flipped honor the new setting; existing connections keep whatever policy
+// they were created with (would need to re-join the game to apply).
+const btnForceTurn = document.getElementById('btn-force-turn') as HTMLButtonElement;
+function syncForceTurnButton(): void {
+  const on = getForceTurnRelay();
+  btnForceTurn.textContent = on ? 'ON' : 'OFF';
+  btnForceTurn.classList.toggle('active', on);
+}
+queueMicrotask(syncForceTurnButton);
+btnForceTurn.addEventListener('click', () => {
+  setForceTurnRelay(!getForceTurnRelay());
+  syncForceTurnButton();
+});
 
 btnDebug.addEventListener('click', () => {
   debugEnabled = !debugEnabled;
