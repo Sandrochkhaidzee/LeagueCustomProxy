@@ -116,9 +116,19 @@ export class TrackingService {
   // Single chokepoint for lastPosition writes so we can flag impossible
   // jumps (recall/TP is fine; CV mis-tracking the icon to a wrong location
   // looks identical in raw output and is a primary suspect for the
-  // "loud voice from far away" symptom). Threshold of 2000 game-units/sec
-  // sits well above any legit champion movement (~750 u/s top end) but
-  // below recall-from-fountain.
+  // "loud voice from far away" symptom).
+  //
+  // Two conditions must both hold to warn:
+  //   • distance > MIN_JUMP_UNITS — filters out per-tick pixel jitter on a
+  //     stationary champion (≈1px on the minimap can be 50-100 game-units;
+  //     at 50ms tick that registers as 2000+ u/s but isn't a real jump).
+  //   • speed > MIN_JUMP_SPEED   — filters out fast-but-legit champion
+  //     movement (Hecarim ult / Master Yi Q top out around 800 u/s; recalls
+  //     and CV mis-tracks are 10x faster).
+  // Without the distance gate, the v0.1.23-v0.1.29 threshold spammed ~100
+  // warnings per 5-minute session of normal walking.
+  private static readonly JUMP_WARN_MIN_UNITS = 500;
+  private static readonly JUMP_WARN_MIN_SPEED = 2000;
   private setLastPosition(newPos: Position, source: string): void {
     if (this.lastPosition && this.lastPositionUpdateMs > 0) {
       const dx = newPos.x - this.lastPosition.x;
@@ -126,7 +136,7 @@ export class TrackingService {
       const dist = Math.sqrt(dx * dx + dy * dy);
       const dt = Math.max(0.05, (performance.now() - this.lastPositionUpdateMs) / 1000);
       const speed = dist / dt;
-      if (speed > 2000) {
+      if (dist > TrackingService.JUMP_WARN_MIN_UNITS && speed > TrackingService.JUMP_WARN_MIN_SPEED) {
         console.warn('[Tracking] WARN: position jumped ' + Math.round(dist) +
           ' units in ' + dt.toFixed(2) + 's (' + Math.round(speed) + ' u/s) via ' + source +
           ' — recall/TP or CV mis-tracking. (' +

@@ -98,9 +98,18 @@ describe('setLastPosition jump warning', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  test('impossibly fast jump warns (>2000 units/sec)', () => {
+  test('CV pixel jitter at high scan rate does NOT warn (small distance gate)', () => {
+    // 150-unit jitter in 50ms = 3000 u/s. Speed exceeds the speed gate but
+    // distance is below MIN_JUMP_UNITS (500). Was spamming the log pre-v0.1.30.
+    setLastPosition(svc, { x: 7400, y: 7200 }, 'locked-track');
+    setLastUpdateMs(svc, performance.now() - 50);
+    setLastPosition(svc, { x: 7540, y: 7220 }, 'locked-track');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  test('large jump at impossible speed warns (both gates passed)', () => {
     setLastPosition(svc, { x: 1000, y: 1000 }, 'test-1');
-    // 0.05s later, position jumps 5000 game units → 100k u/s. Far above 2000.
+    // 0.05s later, position jumps 5000 game units → 100k u/s, dist > 500.
     setLastUpdateMs(svc, performance.now() - 50);
     setLastPosition(svc, { x: 6000, y: 1000 }, 'classifier-reacquire');
     expect(warnSpy).toHaveBeenCalled();
@@ -109,19 +118,19 @@ describe('setLastPosition jump warning', () => {
     expect(msg).toContain('classifier-reacquire');
   });
 
+  test('large distance but at normal walking speed does NOT warn (speed gate)', () => {
+    // 600-unit move over 1.5s = 400 u/s — distance passes but speed doesn't.
+    setLastPosition(svc, { x: 0, y: 0 }, 'test-1');
+    setLastUpdateMs(svc, performance.now() - 1500);
+    setLastPosition(svc, { x: 600, y: 0 }, 'test-2');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   test('position still updates after a warning (warn is not a guard)', () => {
     setLastPosition(svc, { x: 1000, y: 1000 }, 'test-1');
     setLastUpdateMs(svc, performance.now() - 50);
     setLastPosition(svc, { x: 14000, y: 14000 }, 'extrapolate');
     expect(peekLastPosition(svc)).toEqual({ x: 14000, y: 14000 });
-  });
-
-  test('threshold is per-second velocity, not raw distance', () => {
-    // 1500-unit move in 1 second = 1500 u/s — below 2000 threshold, no warn
-    setLastPosition(svc, { x: 0, y: 0 }, 'test-1');
-    setLastUpdateMs(svc, performance.now() - 1000);
-    setLastPosition(svc, { x: 1500, y: 0 }, 'test-2');
-    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
 
