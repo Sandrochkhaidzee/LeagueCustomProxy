@@ -210,14 +210,14 @@ npm run build && npm start
 |---|---|---|
 | `PORT` | no (default `3100`) | HTTP/WebSocket port |
 | `ENCRYPTION_KEY` | yes | 64-char hex (256-bit) key for AES-GCM position encryption |
-| `TURN_SERVER` | optional | TURN/STUN server hostname (returned to clients) |
-| `TURN_SECRET` | optional | coturn shared secret for HMAC credential generation |
+| `TURN_KEY_ID` | recommended | Cloudflare Realtime TURN Key ID — see [Cloudflare Dashboard → Realtime → TURN](https://dash.cloudflare.com) |
+| `TURN_KEY_API_TOKEN` | recommended | Cloudflare Realtime TURN API token (paired with `TURN_KEY_ID`) |
+| `TURN_SERVER` | optional | Self-hosted coturn hostname — only used if the Cloudflare vars above are unset |
+| `TURN_SECRET` | optional | Self-hosted coturn shared secret (paired with `TURN_SERVER`) |
 
-If `TURN_SERVER`/`TURN_SECRET` are unset, clients fall back to Google STUN only — fine for most home NAT setups, may fail behind symmetric NAT (corporate, some mobile networks).
+If none of the TURN variables are set, clients fall back to Google STUN only — fine for most home NAT setups, may fail behind symmetric NAT (corporate, some mobile networks).
 
-`docker-compose.proxchat.yml` at the repo root includes both `server` and a `coturn` sidecar. Front the server with a TLS-terminating reverse proxy (Caddy, nginx, Traefik) that proxies `/` to `:3100` and supports WebSocket upgrades.
-
-**TURN/TURNS:** The coturn entry in the compose is configured to run as root and mount a wildcard cert directory via `${TLS_CERT_DIR}` (per-host env var, never committed). With that set up, TURNS (TLS) on port 5349 works alongside plain TURN on 3478. See `docs/SETUP.md` for the cert mount details, router port-forwarding requirements, and the cron pattern for picking up renewed certs.
+`docker-compose.proxchat.yml` at the repo root brings up the `server` container. By default it expects Cloudflare TURN credentials; a commented-out `coturn` service block at the bottom is available for operators who'd rather self-host TURN — uncomment it and configure `coturn/turnserver.conf` per `docs/SETUP.md`. Front the server with a TLS-terminating reverse proxy (Caddy, nginx, Traefik) that proxies `/` to `:3100` and supports WebSocket upgrades.
 
 ### Tests
 

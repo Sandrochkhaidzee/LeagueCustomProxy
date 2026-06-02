@@ -2,10 +2,17 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { RoomManager } from './rooms.js';
 import { handleConnection } from './ws-handler.js';
-import { generateTurnCredentials } from './turn.js';
+import { generateTurnCredentials, generateCloudflareIceServers } from './turn.js';
 import { computeVolumes } from './volumes.js';
 
 const PORT = parseInt(process.env.PORT || '3100');
+// Cloudflare Realtime TURN (preferred, see docs/SETUP.md). When configured,
+// the server fetches ICE credentials from Cloudflare on /turn-credentials.
+const TURN_KEY_ID = process.env.TURN_KEY_ID || '';
+const TURN_KEY_API_TOKEN = process.env.TURN_KEY_API_TOKEN || '';
+// Self-hosted coturn fallback (optional). Used only when the Cloudflare vars
+// above are unset — lets operators who'd rather run their own coturn keep
+// the existing HMAC flow without code changes.
 const TURN_SERVER = process.env.TURN_SERVER || '';
 const TURN_SECRET = process.env.TURN_SECRET || '';
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
@@ -48,7 +55,12 @@ const httpServer = createServer((req, res) => {
   }
 
   if (req.url === '/turn-credentials') {
-    generateTurnCredentials(TURN_SERVER, TURN_SECRET).then((data) => {
+    // Prefer Cloudflare if both vars are set; fall back to self-hosted coturn
+    // HMAC; otherwise return empty iceServers (client falls back to public STUN).
+    const credsPromise = TURN_KEY_ID && TURN_KEY_API_TOKEN
+      ? generateCloudflareIceServers(TURN_KEY_ID, TURN_KEY_API_TOKEN)
+      : generateTurnCredentials(TURN_SERVER, TURN_SECRET);
+    credsPromise.then((data) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(data));
     });

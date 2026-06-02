@@ -68,14 +68,31 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Save this — it must be the same on every server instance and is the only thing standing between an attacker and seeing decrypted positions.
 
+### Get TURN credentials (Cloudflare Realtime TURN)
+
+For users behind symmetric NAT (mobile networks, some corporate setups), peers need a TURN relay to connect. The default deployment uses **Cloudflare Realtime TURN** — 1 TB/month egress free, no infrastructure to maintain, `$0.05/GB` after.
+
+1. Sign in to the [Cloudflare Dashboard](https://dash.cloudflare.com).
+2. **Realtime** → **TURN** → **Create TURN Key** (give it a name like `lolproxchat-prod`).
+3. Copy both values that appear:
+   - **TURN Key ID** — UUID-like identifier
+   - **API Token** — secret bearer token, **shown only once at creation**
+
+Drop both into a `.env` file next to the compose:
+
+```
+ENCRYPTION_KEY=<your-64-hex-key>
+TURN_KEY_ID=<UUID from Cloudflare>
+TURN_KEY_API_TOKEN=<token from Cloudflare>
+```
+
+Prefer to self-host coturn instead? Skip this section and see **§ Optional: self-host coturn** below.
+
 ### Deploy via Docker
 
-`docker-compose.proxchat.yml` at the repo root brings up the server plus a coturn sidecar:
+`docker-compose.proxchat.yml` at the repo root brings up the signaling server. It auto-reads from `.env`:
 
 ```bash
-export ENCRYPTION_KEY=<your-64-hex-key>
-export TURN_SERVER=turn.your-domain.com    # optional
-export TURN_SECRET=<coturn-shared-secret>  # optional
 docker compose -f docker-compose.proxchat.yml up -d
 ```
 
@@ -115,9 +132,20 @@ curl -i -H "Connection: Upgrade" -H "Upgrade: websocket" \
      https://proxchat.your-domain.com/ws
 ```
 
-### TURN server (recommended for WAN-to-WAN)
+### Optional: self-host coturn
 
-For users behind symmetric NAT (common on mobile networks, some corporate setups), peers need a TURN relay to talk to each other. The `docker-compose.proxchat.yml` includes a coturn sidecar.
+If you'd rather run your own TURN relay instead of using Cloudflare (e.g. you don't want a Cloudflare account, or you want full data-path control), the signaling server still supports coturn HMAC credentials as a fallback. It's used automatically when `TURN_KEY_ID` is unset and `TURN_SERVER` + `TURN_SECRET` are present.
+
+**Set env vars instead of (or in addition to) the Cloudflare ones:**
+
+```
+TURN_SERVER=turn.your-domain.com
+TURN_SECRET=<coturn-shared-secret>
+```
+
+If both pairs are set, the server prefers Cloudflare.
+
+**Uncomment the coturn block in `docker-compose.proxchat.yml`** (it's commented out by default). Then continue with the configuration below.
 
 #### Minimal turnserver.conf
 
