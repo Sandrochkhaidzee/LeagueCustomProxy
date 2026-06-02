@@ -39,7 +39,13 @@ export class PeerConnection {
   private audioContext: AudioContext | null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private gainNode: GainNode | null = null;
-  private targetVolume = 1;
+  // Default to silent. Volume is supposed to come from the proximity pipeline
+  // (applyPeerVolumes → setVolume). If a peer connects before that pipeline
+  // has produced a value for them (e.g. during tracking SCANNING state where
+  // only allies get a volume), defaulting to 1.0 would play them at full
+  // volume regardless of in-game distance — exactly the "hear across the
+  // map at startup" bug reported on #6 / #7.
+  private targetVolume = 0;
   private muted = false;
   // Outer-loop EMA on volume targets so brief CV tracking glitches don't
   // produce audible dropouts. null = first call (snap to value, no smoothing).

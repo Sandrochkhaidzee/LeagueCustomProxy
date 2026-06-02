@@ -103,7 +103,7 @@ To grab the log:
 
 1. Open **Settings → Debug**, click **OFF** to flip it to **ON**. (This starts writing diagnostics to disk; it has near-zero overhead.)
 2. **Reproduce the bug** — start a game, repeat whatever triggered the issue, etc.
-3. Open **Settings → Debug Logs**, click **OPEN**. Explorer pops up at `%LOCALAPPDATA%\com.proxchat.app\` — drag `lolproxchat.log` into your GitHub issue.
+3. Open **Settings → Debug Logs**, click **OPEN**. Explorer pops up at `%LOCALAPPDATA%\com.proxchat.app\` — drag `lolproxchat.log` into your GitHub issue. (If you restarted the app since the issue happened, grab `lolproxchat.1.log` instead — that's the previous session. We keep up to 3 sessions of history: `.log` → `.1.log` → `.2.log`.)
 
 The log is plain text. It contains your summoner name and the summoner names of nearby players (gameplay-public), plus technical IP info from WebRTC ICE candidates. If any of that is sensitive in your situation, skim through and redact before posting.
 

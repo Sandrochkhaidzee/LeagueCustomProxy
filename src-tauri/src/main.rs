@@ -169,7 +169,17 @@ fn main() {
             // The TS layer only writes to it while Debug is on.
             if let Ok(dir) = app.path().app_local_data_dir() {
                 let _ = std::fs::create_dir_all(&dir);
-                let path = dir.join("lolproxchat.log");
+                // Rotate previous session logs so users who restart the app
+                // before grabbing diagnostics don't lose the prior session.
+                // Keeps up to 3 sessions: lolproxchat.log (current),
+                // lolproxchat.1.log (previous), lolproxchat.2.log (oldest).
+                let log_path = dir.join("lolproxchat.log");
+                let log_1 = dir.join("lolproxchat.1.log");
+                let log_2 = dir.join("lolproxchat.2.log");
+                let _ = std::fs::remove_file(&log_2);
+                let _ = std::fs::rename(&log_1, &log_2);
+                let _ = std::fs::rename(&log_path, &log_1);
+                let path = log_path;
                 if let Ok(file) = std::fs::OpenOptions::new()
                     .create(true)
                     .write(true)

@@ -21,6 +21,9 @@ export class AudioService {
   private mutedPlayers: Set<string> = new Set();
   // Track last reported volume state per peer so we only log transitions
   private lastAppliedVolume: Map<string, string> = new Map();
+  // Throttling state for the verbose applyPeerVolumes snapshot log
+  private lastVolumeLogLine = '';
+  private lastVolumeLogMs = 0;
   private settings: AudioSettings = {
     // Always-open by default; PTT (F8 hold) available in Settings.
     inputMode: 'always',
@@ -299,14 +302,22 @@ export class AudioService {
     // Verbose snapshot of every server-returned per-peer volume. Lets us
     // distinguish "server said 0 / we played 0" from "server said 0.8 /
     // EMA stuck near 1" when debugging volume bugs. Already silent unless
-    // Debug is on (console.log is no-op'd by core/logging.ts).
+    // Debug is on (console.log is no-op'd by core/logging.ts). Throttled
+    // to ≥1s OR when the summary string changes, so an active session
+    // doesn't drown the log in ~10 lines/sec of identical snapshots.
     const entries = Object.entries(volumes);
     const summary = entries.length
       ? entries.map(([n, v]) => `${n}=${v.toFixed(2)}`).join(' ')
       : '(none)';
     const skipped = entries.filter(([n]) => !this.peers.has(n)).map(([n]) => n);
-    console.log('[Audio] applyPeerVolumes:', summary,
-      skipped.length ? `(skipped no-peer: ${skipped.join(',')})` : '');
+    const skippedTag = skipped.length ? `(skipped no-peer: ${skipped.join(',')})` : '';
+    const fullLine = summary + (skippedTag ? ' ' + skippedTag : '');
+    const now = performance.now();
+    if (fullLine !== this.lastVolumeLogLine || now - this.lastVolumeLogMs >= 1000) {
+      console.log('[Audio] applyPeerVolumes:', fullLine);
+      this.lastVolumeLogLine = fullLine;
+      this.lastVolumeLogMs = now;
+    }
 
     for (const [name, volume] of Object.entries(volumes)) {
       const peer = this.peers.get(name);
