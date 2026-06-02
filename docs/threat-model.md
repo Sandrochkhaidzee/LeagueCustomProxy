@@ -121,7 +121,7 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 - **Settings → Hide IP (Force TURN)** sets `iceTransportPolicy: 'relay'` on the RTCPeerConnection. Chromium then refuses to gather or use any non-relay candidate, so peers only ever see the TURN server's IP, never the user's public IP.
 - Default is **off**, because TURN relay adds ~20-100 ms latency and uses TURN bandwidth (which we pay for via the Cloudflare free tier). Most users on default config still expose their IP to fellow players.
 - Takes effect on the next peer connection (existing connections keep their original transport policy until re-established).
-- Only matters in matches where you don't already trust everyone. If your premade is on Discord with you, your IP is already known to them via that channel — the toggle adds nothing then.
+- Only matters in matches where you don't already trust everyone. If you're queuing with a premade of friends, they're not the threat — but the other 8 players in the match could be, and the toggle is what protects you from them.
 
 **Server-side mitigation alternative (not chosen):** forcing all clients TURN-only by default would protect users transparently but multiply server-side bandwidth costs and add latency for everyone. Opt-in keeps the cost on the users who choose it.
 
