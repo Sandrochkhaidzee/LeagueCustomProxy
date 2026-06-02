@@ -94,6 +94,24 @@ The applied mitigations raise the floor for casual abuse without imposing measur
 
 These are risks the *user* takes on by running the app, separate from in-game cheating. Some are mitigated, some are documented-and-accepted.
 
+## What we don't collect
+
+LoLProxChat collects **no analytics, no telemetry, no usage statistics, no crash reports, no device fingerprints, and no persistent user identifiers.** There are no user accounts. There is no third-party analytics SDK. The signaling server does not log per-user activity beyond what's needed to route a single in-flight request.
+
+The only data that ever leaves the user's machine is:
+
+- **Summoner name** — sent to the signaling server so peers in the same match can find each other in a room. Same name visible to anyone on the match scoreboard.
+- **Encrypted position blob** — AES-GCM-encrypted with a server-only key, sent so the server can compute proximity volumes. Decrypted server-side, never logged or persisted, dropped immediately after the volume math runs.
+- **WebRTC signaling messages** (SDP offers/answers, ICE candidates) — exchanged peer-to-peer via the signaling server as a relay. Standard WebRTC handshake; contains your public IP unless `Hide IP (Force TURN)` is enabled (see below).
+- **Voice audio** — flows peer-to-peer over DTLS-SRTP, never touches the signaling server. Goes through the TURN relay (Cloudflare) only if direct P2P fails or `Hide IP (Force TURN)` is on, and even then the relay can't decrypt it.
+
+The only data persisted locally is:
+
+- **Settings** — input mode, mic/speaker device IDs, volume preferences, auto-update opt-in, Hide-IP toggle, per-player mute prefs. Stored in WebView2 localStorage at `%LOCALAPPDATA%\com.proxchat.app\`. Never sent anywhere.
+- **Debug log** (only when `Debug` is toggled on) — written to `%LOCALAPPDATA%\com.proxchat.app\lolproxchat.log`. Only leaves your machine if you manually attach it to a GitHub issue. Rotates after 3 sessions.
+
+There is no opt-in/opt-out switch for analytics because there is no analytics. The same applies to any future release — if telemetry is ever introduced, it will be opt-in, explicitly documented here, and clearly visible in Settings.
+
 ## Public IP exposure via WebRTC ICE candidates
 
 **Risk:** WebRTC peer connections exchange ICE candidates to figure out how to reach each other. The "server-reflexive" (srflx) candidate contains each player's public IP, and that candidate is signaled to every peer in the match. A malicious player in the lobby can extract everyone else's public IP. With it, they can launch a DDoS against the home network, attempt port scanning, etc. This is the same class of risk Discord had pre-2017 before they forced all voice through their relays.
@@ -162,6 +180,7 @@ These are risks the *user* takes on by running the app, separate from in-game ch
 
 | Threat | Status | Notes |
 |---|---|---|
+| Analytics / telemetry / fingerprinting | **Not applicable** | None collected. No SDKs, no usage stats, no crash reporting service |
 | Public IP exposure | **Mitigated (opt-in)** | Force-TURN toggle in Settings, v0.1.27+ |
 | Server-operator decrypt | Doc-only | Self-host alternative documented in SETUP.md |
 | Summoner names visible | Accepted | Gameplay-public; redact-before-share warning in README |
