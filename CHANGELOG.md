@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.2.1] — 2026-06-02
+
+### Fixed
+- **Champion classifier failed for Nunu & Willump and Dr. Mundo players (#7).** The LCU Live Client Data API returns display names (`"Nunu & Willump"`, `"Dr. Mundo"`) but the classifier label file is keyed by sanitized asset names (`"Nunu"`, `"Dr_ Mundo"`). Exact-match lookup returned `localClassIndex=-1`, every scored blob came back `0.000`, and CV never disambiguated the player's icon after the first SCANNING→LOCKED transition — root cause of the "Woosemines never broadcasts position" symptom in the v0.1.33 issue #7 logs. Added a small display-name → label-name normalization map and lifted the resolver into a pure static for unit testing. Confirmed Wukong is unaffected (display name matches the label directly).
+
+### Added
+- `tests/services/champion-classifier.test.ts` — 6 tests covering exact match, normalization for Nunu/Dr. Mundo, Wukong-resolves-directly, and a guard that fails if a future model retrain drops one of the normalized target labels. Client tests now 74 (was 68).
+
 ## [v0.2.0] — 2026-06-02
 
 ### Changed
@@ -190,7 +198,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.2.1...HEAD
+[v0.2.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.2.1
 [v0.2.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.2.0
 [v0.1.33]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.33
 [v0.1.32]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.32

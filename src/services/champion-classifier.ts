@@ -4,6 +4,19 @@ ort.env.wasm.numThreads = 1;
 ort.env.wasm.wasmPaths = '/background/';
 ort.env.wasm.proxy = false;
 
+// LCU returns champion *display* names ("Nunu & Willump", "Dr. Mundo") but
+// the classifier labels file is keyed by sanitized asset names ("Nunu",
+// "Dr_ Mundo"). Without this map the exact-match lookup in `load` returns
+// localClassIndex=-1 and EVERY blob scores 0.0 forever — confirmed root
+// cause of issue #7 for a Nunu player whose tracking never recovered after
+// the first SCANNING-to-LOCKED transition. Keys + values are pre-lowercased
+// for the case-insensitive lookup. Add new entries here if a future
+// champion ships with a display name that doesn't match its label.
+const DISPLAY_TO_LABEL_NAME: Record<string, string> = {
+  'nunu & willump': 'nunu',
+  'dr. mundo': 'dr_ mundo',
+};
+
 export class ChampionClassifier {
   private session: ort.InferenceSession | null = null;
   private labelMap: Record<string, string> = {};
@@ -25,13 +38,7 @@ export class ChampionClassifier {
     const resp = await fetch(labelMapUrl);
     this.labelMap = await resp.json();
 
-    // Find local champion's class index (case-insensitive match)
-    for (const [idx, name] of Object.entries(this.labelMap)) {
-      if ((name as string).toLowerCase() === localChampionName.toLowerCase()) {
-        this.localClassIndex = parseInt(idx);
-        break;
-      }
-    }
+    this.localClassIndex = ChampionClassifier.resolveLocalClassIndex(this.labelMap, localChampionName);
     if (this.localClassIndex >= 0) {
       console.log('[Classifier] Local champion:', localChampionName,
         '→ matched label "' + this.labelMap[String(this.localClassIndex)] + '"',
@@ -53,6 +60,22 @@ export class ChampionClassifier {
 
   isLoaded(): boolean {
     return this.session !== null;
+  }
+
+  /**
+   * Pure function — exposed for testing. Returns -1 if no match found.
+   * Applies DISPLAY_TO_LABEL_NAME first so champions whose LCU display
+   * name differs from their classifier label still resolve.
+   */
+  static resolveLocalClassIndex(
+    labelMap: Record<string, string>,
+    localChampionName: string,
+  ): number {
+    const needle = (DISPLAY_TO_LABEL_NAME[localChampionName.toLowerCase()] ?? localChampionName).toLowerCase();
+    for (const [idx, name] of Object.entries(labelMap)) {
+      if (name.toLowerCase() === needle) return parseInt(idx);
+    }
+    return -1;
   }
 
   /**
