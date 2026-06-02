@@ -14,6 +14,11 @@ export interface ClientMessage {
   // blobs for each other (see docs/plans/2026-06-02-server-side-positions.md).
   x?: number;
   y?: number;
+  // v0.3: team identifier on 'join' (ORDER / CHAOS) and the per-tick
+  // cross-team toggle on 'coords'. Both optional for back-compat — a v0.2
+  // client omits them and the server falls back to team-blind 1200u behavior.
+  team?: 'ORDER' | 'CHAOS';
+  hearCrossTeam?: boolean;
 }
 
 // Server → Client messages
@@ -34,4 +39,12 @@ export interface ClientInfo {
   // Latest XY position the client reported via 'coords'. Undefined until the
   // first 'coords' message arrives or if the client predates v0.2.
   position?: { x: number; y: number; updatedMs: number };
+  // v0.3: team for cross-team filtering. Undefined means a legacy v0.2 client —
+  // server falls back to team-blind volume math (every peer audible if in range).
+  team?: 'ORDER' | 'CHAOS';
+  // v0.3: when true, requester hears enemies up to MAX_HEARING_RANGE (1200u).
+  // When false (or undefined), capped at DEFAULT_CROSS_TEAM_RANGE (600u).
+  // Updated server-side on every 'coords' message so toggle changes pick up
+  // within ~100ms.
+  hearCrossTeam?: boolean;
 }
