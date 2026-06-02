@@ -70,11 +70,16 @@ export class RoomManager {
     return this.clients.get(ws);
   }
 
-  /** Record a client's latest XY position. No-op if the ws isn't in a room. */
-  setPosition(ws: WebSocket, x: number, y: number): void {
+  /**
+   * Record a client's latest XY position. No-op if the ws isn't in a room.
+   * v0.3+ piggybacks `hearCrossTeam` here so the toggle picks up within
+   * one position tick (~100ms) without a dedicated message type.
+   */
+  setPosition(ws: WebSocket, x: number, y: number, hearCrossTeam?: boolean): void {
     const info = this.clients.get(ws);
     if (!info) return;
     info.position = { x, y, updatedMs: Date.now() };
+    info.hearCrossTeam = hearCrossTeam === true;
   }
 
   /**

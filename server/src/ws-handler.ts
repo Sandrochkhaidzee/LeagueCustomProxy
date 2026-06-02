@@ -115,7 +115,8 @@ export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
           sendError(ws, 'coords requires finite x and y');
           return;
         }
-        rooms.setPosition(ws, msg.x, msg.y);
+        // v0.3: optional hearCrossTeam piggyback. v0.2.x clients omit it.
+        rooms.setPosition(ws, msg.x, msg.y, msg.hearCrossTeam === true);
         break;
       }
 
