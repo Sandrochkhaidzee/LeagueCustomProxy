@@ -289,10 +289,24 @@ New builds are published to [GitHub Releases](https://github.com/danthi123/LoLPr
 ```bash
 # bump src-tauri/Cargo.toml version
 npx tauri build
+SHA=$(sha256sum src-tauri/target/release/lolproxchat.exe | awk '{print $1}')
 gh release create v0.1.X src-tauri/target/release/lolproxchat.exe \
   --title "v0.1.X — short summary" \
-  --notes "release notes here"
+  --notes "release notes here
+
+## Verify download
+
+\`\`\`
+SHA-256: $SHA
+\`\`\`
+
+Compare against your downloaded \`lolproxchat.exe\` to confirm it's the official build:
+- Windows PowerShell: \`Get-FileHash lolproxchat.exe\`
+- Linux/macOS: \`shasum -a 256 lolproxchat.exe\`
+- WSL / git-bash: \`sha256sum lolproxchat.exe\`"
 ```
+
+The hash defends against typosquatted re-uploads or in-transit tampering — anyone sharing the release URL elsewhere (Reddit, Discord) can paste the hash alongside, and downloads that don't match are immediately suspect.
 
 Users can always grab the most recent via:
 ```

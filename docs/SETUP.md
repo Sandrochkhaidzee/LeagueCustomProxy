@@ -192,10 +192,22 @@ cd server && npm test     # vitest — server room/volume/turn logic
 ```bash
 # Bump src-tauri/Cargo.toml:  version = "0.1.X"
 npx tauri build
+SHA=$(sha256sum src-tauri/target/release/lolproxchat.exe | awk '{print $1}')
 gh release create v0.1.X src-tauri/target/release/lolproxchat.exe \
   --title "v0.1.X — summary" \
-  --notes "what changed"
+  --notes "what changed
+
+## Verify download
+
+\`\`\`
+SHA-256: $SHA
+\`\`\`
+
+- Windows PowerShell: \`Get-FileHash lolproxchat.exe\`
+- WSL / git-bash:     \`sha256sum lolproxchat.exe\`"
 ```
+
+The hash gives users a way to verify the download matches the official build (defense against typosquatting / in-transit tampering / mirror reposts).
 
 ## 5. Train the Champion Classifier (Rare)
 
