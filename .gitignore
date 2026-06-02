@@ -28,3 +28,6 @@ package-lock.json
 
 # Claude Code session-local settings
 .claude/
+
+# Git worktrees (per-feature isolated checkouts)
+.worktrees/
