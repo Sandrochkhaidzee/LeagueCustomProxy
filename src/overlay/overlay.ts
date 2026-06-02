@@ -1,4 +1,5 @@
 import { setLoggingEnabled } from '../core/logging';
+import { listen } from '@tauri-apps/api/event';
 import {
   checkForUpdate,
   downloadAndApply,
@@ -207,13 +208,31 @@ btnDebug.addEventListener('click', () => {
   scanRateRow.classList.toggle('hidden', !debugEnabled);
   setLoggingEnabled(debugEnabled);
   // Read by orchestrator when emitting scanner:scene events so the scanner
-  // window only renders the filtered image + tracking dot while Debug is on.
+  // window only renders the tracking dot while Debug is on.
   (window as any).__lolproxchat_debug_enabled = debugEnabled;
-  // Toggle WDA_EXCLUDEFROMCAPTURE on the scanner window. Only needed when
-  // Debug is on (to break the HSV-filter capture feedback loop) — leaving it
-  // off by default lets Nvidia ShadowPlay / Win11 Game Bar record normally.
-  sendToBackground('setExcludedFromCapture', { excluded: debugEnabled });
+  // Hide the HSV thumbnail immediately when Debug flips off.
+  if (!debugEnabled) {
+    debugFilterThumb.classList.add('hidden');
+    debugFilterThumb.removeAttribute('src');
+  }
 });
+
+// HSV-filtered minimap preview — shown only while Debug is on. Listens to the
+// same scanner:scene event the scanner window does; the panel renders the
+// filtered image (which used to live painted on the scanner itself, but that
+// fed back into the next capture cycle and required excluding the scanner
+// from capture, which broke ShadowPlay / OBS).
+const debugFilterThumb = document.getElementById('debug-filter-thumb') as HTMLImageElement;
+listen<{ filteredImageUrl: string | null; debugEnabled: boolean }>('scanner:scene', (event) => {
+  const { filteredImageUrl, debugEnabled: dbg } = event.payload;
+  if (dbg && filteredImageUrl) {
+    debugFilterThumb.src = filteredImageUrl;
+    debugFilterThumb.classList.remove('hidden');
+  } else {
+    debugFilterThumb.classList.add('hidden');
+    if (!filteredImageUrl) debugFilterThumb.removeAttribute('src');
+  }
+}).catch((e) => console.warn('[Overlay] scanner:scene listen failed:', e));
 
 document.getElementById('input-mode')!.addEventListener('change', (e) => {
   const mode = (e.target as HTMLSelectElement).value;

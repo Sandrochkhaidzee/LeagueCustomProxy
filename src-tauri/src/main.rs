@@ -91,27 +91,6 @@ fn hide_scanner(app: tauri::AppHandle) {
     }
 }
 
-/// Toggle WDA_EXCLUDEFROMCAPTURE on the **scanner** window. Set true only
-/// when Debug is on — that's the only case where the scanner paints into the
-/// minimap region (HSV-filtered debug image) and would feed back into the next
-/// BitBlt frame. The panel never carries this flag so ShadowPlay / Game Bar
-/// always record normally.
-#[tauri::command]
-fn set_excluded_from_capture(app: tauri::AppHandle, excluded: bool) -> Result<(), String> {
-    let window = app.get_webview_window("scanner").ok_or("no scanner window")?;
-    let hwnd = window.hwnd().map_err(|e| e.to_string())?;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
-    };
-    let affinity = if excluded { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
-    unsafe {
-        SetWindowDisplayAffinity(HWND(hwnd.0 as _), affinity)
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 /// Get screen dimensions for the primary monitor.
 #[tauri::command]
 fn get_screen_size() -> (u32, u32) {
@@ -209,9 +188,10 @@ fn main() {
             };
 
             // Scanner is always click-through (never receives input).
-            // WDA_EXCLUDEFROMCAPTURE is only applied to the scanner when Debug
-            // turns on — keeping the panel free of that flag means ShadowPlay
-            // and Win11 Game Bar record normally regardless of Debug state.
+            // Neither window carries WDA_EXCLUDEFROMCAPTURE — the HSV-filtered
+            // debug image now renders as a thumbnail in the panel instead of
+            // being painted into the captured minimap region, so there's no
+            // feedback loop to break and ShadowPlay / OBS see everything.
             if let Some(scanner) = app.get_webview_window("scanner") {
                 let _ = scanner.set_ignore_cursor_events(true);
             }
@@ -285,7 +265,6 @@ fn main() {
             hide_scanner,
             get_screen_size,
             set_panel_size,
-            set_excluded_from_capture,
             append_log,
             open_log_folder,
             updater::check_for_update,

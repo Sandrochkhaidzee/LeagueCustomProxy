@@ -168,6 +168,19 @@ html, body {
 }
 .hidden { display: none !important; }
 
+/* Debug-only thumbnail of the HSV-filtered minimap. Used to live painted on
+   top of the scanner window, but that fed back into the next capture and
+   forced WDA_EXCLUDEFROMCAPTURE — which broke ShadowPlay / OBS recording.
+   Showing it in the panel here keeps capture working at all times. */
+#debug-filter-thumb {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  border: 1px solid rgba(100, 120, 160, 0.3);
+  border-radius: 3px;
+  image-rendering: pixelated;
+}
+
 .setting-row {
   display: flex;
   align-items: center;

@@ -48,12 +48,6 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
       invoke('set_panel_size', { width: payload.width, height: payload.height })
         .catch(() => { /* ignore — loop falls back to last value */ });
       break;
-    case 'setExcludedFromCapture':
-      // Toggle WDA_EXCLUDEFROMCAPTURE on the overlay. Only true while
-      // Debug is on, so ShadowPlay / Game Bar work for normal users.
-      invoke('set_excluded_from_capture', { excluded: payload.excluded })
-        .catch((e) => console.warn('[LoLProxChat] set_excluded_from_capture failed:', e));
-      break;
     case 'setInputDevice':
       orchestrator.applyInputDevice(payload.id);
       break;
