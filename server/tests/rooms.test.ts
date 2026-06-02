@@ -116,4 +116,76 @@ describe('RoomManager', () => {
     expect(rooms.getPeers('room1')).toEqual(['Alice']);
     expect(rooms.getPeers('room2')).toEqual(['Bob']);
   });
+
+  // v0.2: server-side position storage
+  describe('setPosition / getRoomPositions', () => {
+    it('records a client position once they have joined', () => {
+      const ws = mockWs();
+      rooms.join('room1', 'Alice', ws);
+      rooms.setPosition(ws, 100, 200);
+      const positions = rooms.getRoomPositions('room1', 'NotAlice', 60_000);
+      expect(positions).toEqual({ Alice: { x: 100, y: 200 } });
+    });
+
+    it('setPosition is a no-op for a ws not in a room', () => {
+      const ws = mockWs();
+      rooms.setPosition(ws, 100, 200);  // not in any room
+      expect(rooms.getRoomPositions('room1', 'foo', 60_000)).toEqual({});
+    });
+
+    it('excludes the requester from the result', () => {
+      const wsA = mockWs();
+      const wsB = mockWs();
+      rooms.join('room1', 'Alice', wsA);
+      rooms.join('room1', 'Bob', wsB);
+      rooms.setPosition(wsA, 100, 100);
+      rooms.setPosition(wsB, 500, 500);
+      const fromAlice = rooms.getRoomPositions('room1', 'Alice', 60_000);
+      expect(fromAlice).toEqual({ Bob: { x: 500, y: 500 } });
+      const fromBob = rooms.getRoomPositions('room1', 'Bob', 60_000);
+      expect(fromBob).toEqual({ Alice: { x: 100, y: 100 } });
+    });
+
+    it('skips peers who never reported a position', () => {
+      const wsA = mockWs();
+      const wsB = mockWs();
+      rooms.join('room1', 'Alice', wsA);
+      rooms.join('room1', 'Bob', wsB);
+      rooms.setPosition(wsA, 100, 100);
+      // Bob never reports
+      const fromBob = rooms.getRoomPositions('room1', 'Bob', 60_000);
+      expect(fromBob).toEqual({ Alice: { x: 100, y: 100 } });
+      const fromAlice = rooms.getRoomPositions('room1', 'Alice', 60_000);
+      expect(fromAlice).toEqual({}); // Bob never reported
+    });
+
+    it('skips stale positions older than staleMs', () => {
+      const wsA = mockWs();
+      const wsB = mockWs();
+      rooms.join('room1', 'Alice', wsA);
+      rooms.join('room1', 'Bob', wsB);
+      rooms.setPosition(wsA, 100, 100);
+      // Force Alice's position to be stale by mutating updatedMs directly
+      const aliceInfo = rooms.getClientInfo(wsA);
+      if (aliceInfo?.position) aliceInfo.position.updatedMs = Date.now() - 120_000;
+      rooms.setPosition(wsB, 500, 500);
+      const fromBob = rooms.getRoomPositions('room1', 'Bob', 60_000);
+      expect(fromBob).toEqual({}); // Alice's 120s-old position skipped
+    });
+
+    it('position is released when client leaves the room', () => {
+      const wsA = mockWs();
+      const wsB = mockWs();
+      rooms.join('room1', 'Alice', wsA);
+      rooms.join('room1', 'Bob', wsB);
+      rooms.setPosition(wsA, 100, 100);
+      rooms.leave(wsA);
+      const fromBob = rooms.getRoomPositions('room1', 'Bob', 60_000);
+      expect(fromBob).toEqual({});
+    });
+
+    it('returns empty for unknown roomId', () => {
+      expect(rooms.getRoomPositions('does-not-exist', 'me', 60_000)).toEqual({});
+    });
+  });
 });

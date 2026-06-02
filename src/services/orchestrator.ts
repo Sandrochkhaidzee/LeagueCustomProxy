@@ -5,7 +5,6 @@ import { SignalingService, SignalMessage, PositionBroadcast } from './signaling'
 import { AudioService } from './audio';
 import { TrackingService, TrackingState } from './tracking';
 import { ChampionClassifier } from './champion-classifier';
-import { DataChannelService } from './data-channel';
 import { VolumeClient } from './volume-client';
 import { PeerState } from '../core/types';
 import '../core/window-globals';
@@ -16,7 +15,6 @@ export class Orchestrator {
   private signaling: SignalingService;
   private audio: AudioService | null = null;
   private tracking: TrackingService | null = null;
-  private dataChannels: DataChannelService | null = null;
   private volumeClient: VolumeClient | null = null;
   private session: GameSession | null = null;
 
@@ -240,8 +238,9 @@ export class Orchestrator {
         this.broadcastOverlayState();
       }, 30);
 
-      // Initialize data channel service and volume client
-      this.dataChannels = new DataChannelService();
+      // Volume client speaks the v0.2 /compute-volumes shape — peer positions
+      // come from server-side room state populated by `coords` WSS messages,
+      // not from peer-to-peer data channels.
       this.volumeClient = new VolumeClient();
 
       // Start volume computation tick (~10 Hz). GainNode setTargetAtTime
@@ -262,7 +261,7 @@ export class Orchestrator {
 
   private async positionTick(): Promise<void> {
     if (this.positionTickRunning) return;
-    if (!this.audio || !this.session || !this.tracking || !this.volumeClient || !this.dataChannels) return;
+    if (!this.audio || !this.session || !this.tracking || !this.volumeClient) return;
     this.positionTickRunning = true;
     try {
       await this.positionTickInner();
@@ -272,10 +271,12 @@ export class Orchestrator {
   }
 
   private async positionTickInner(): Promise<void> {
-    if (!this.audio || !this.session || !this.tracking || !this.volumeClient || !this.dataChannels) return;
+    if (!this.audio || !this.session || !this.tracking || !this.volumeClient) return;
 
-    // Broadcast presence over signaling so peers can discover us
-    // Position is NOT included — it's exchanged only via encrypted data channel
+    // Broadcast presence over signaling so peers can discover us.
+    // Coordinates go separately via sendCoords() — kept off this message so
+    // every peer doesn't see them, and so server-side staleness can be
+    // computed against the actual position update time.
     this.signaling.broadcastPosition({
       summonerName: this.localSummonerName,
       championName: this.session.localPlayer.championName,
@@ -309,37 +310,35 @@ export class Orchestrator {
       return;
     }
 
-    // Stop broadcasting if our position is stale (CV has been extrapolating
-    // for >2s). Better to let peers' last-known blob from us expire on the
-    // server than to pollute their proximity math with phantom positions.
+    // Stop reporting if our position is stale (CV has been extrapolating
+    // for >2s). The server prunes positions older than STALE_POSITION_MS
+    // (60s) on its own, but we want to stop polluting earlier than that
+    // when CV has clearly lost the player.
     if (this.tracking.getHoldDurationSec() > 2) {
       this.broadcastOverlayState();
       return;
     }
 
+    // Push our latest XY to server-side room state. /compute-volumes reads
+    // every peer's stored position from there — no more P2P blob exchange.
+    this.signaling.sendCoords(position.x, position.y);
+
+    // Log our position whenever it moves >500 game units so we can see the
+    // coordinates we're broadcasting (useful for verifying CV accuracy).
+    const moved = !this.lastLoggedPosition
+      || Math.abs(position.x - this.lastLoggedPosition.x) > 500
+      || Math.abs(position.y - this.lastLoggedPosition.y) > 500;
+    if (moved) {
+      this.lastLoggedPosition = { x: position.x, y: position.y };
+      console.log('[LoLProxChat] My position: (' + Math.round(position.x) + ', ' + Math.round(position.y) + ')');
+    }
+
     try {
-      // Collect encrypted blobs received from peers
-      const peerBlobs = this.dataChannels.getPeerBlobs();
-
-      // Log our position whenever it moves >500 game units so we can see the
-      // coordinates we're broadcasting (useful for verifying CV accuracy).
-      const moved = !this.lastLoggedPosition
-        || Math.abs(position.x - this.lastLoggedPosition.x) > 500
-        || Math.abs(position.y - this.lastLoggedPosition.y) > 500;
-      if (moved) {
-        this.lastLoggedPosition = { x: position.x, y: position.y };
-        console.log('[LoLProxChat] My position: (' + Math.round(position.x) + ', ' + Math.round(position.y) + '), sending to ' + Object.keys(peerBlobs).length + ' peers');
-      }
-
-      // Call Edge Function: encrypt our position + compute volumes
-      const result = await this.volumeClient.computeVolumes(position, peerBlobs);
-
-      // Silent — peer connect/disconnect logged elsewhere
-
-      // Broadcast our encrypted blob to all peers
-      this.dataChannels.broadcastBlob(result.myBlob);
-
-      // Apply volume levels to audio streams
+      const result = await this.volumeClient.computeVolumes(
+        position,
+        this.session.roomId,
+        this.localSummonerName,
+      );
       this.audio.applyPeerVolumes(result.peerVolumes);
     } catch (e) {
       console.error('[LoLProxChat] Volume computation failed:', e);
@@ -374,16 +373,11 @@ export class Orchestrator {
 
     this.peerStates.set(peer.summonerName, peerState);
 
-    // Connect to peer (audio + data channel)
+    // Connect to peer (audio only — positions go via the server in v0.2)
     try {
       if (!this.audio.hasPeer(peer.summonerName)) {
         const isInitiator = this.localSummonerName < peer.summonerName;
         await this.audio.connectToPeer(peer.summonerName, isInitiator);
-      }
-      // Always register with DataChannelService (peer may have been created by handleSignal)
-      const peerConn = this.audio.getPeer(peer.summonerName);
-      if (peerConn && this.dataChannels && !this.dataChannels.hasPeer(peer.summonerName)) {
-        this.dataChannels.registerPeer(peer.summonerName, peerConn);
       }
     } catch (e) {
       console.error('[LoLProxChat] Failed to connect to peer:', peer.summonerName, e);
@@ -397,7 +391,6 @@ export class Orchestrator {
 
   private handlePeerLeave(name: string): void {
     this.audio?.disconnectPeer(name);
-    this.dataChannels?.unregisterPeer(name);
     this.peerStates.delete(name);
     this.broadcastOverlayState();
   }
@@ -617,7 +610,6 @@ export class Orchestrator {
 
     this.tracking?.stop();
     this.tracking = null;
-    this.dataChannels = null;
     this.volumeClient = null;
     this.audio?.cleanup();
     this.signaling.leaveRoom();

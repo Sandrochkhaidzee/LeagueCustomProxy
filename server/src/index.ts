@@ -3,7 +3,7 @@ import { WebSocketServer } from 'ws';
 import { RoomManager } from './rooms.js';
 import { handleConnection } from './ws-handler.js';
 import { generateTurnCredentials, generateCloudflareIceServers } from './turn.js';
-import { computeVolumes } from './volumes.js';
+import { computeVolumes, computeVolumesFromRoom } from './volumes.js';
 import { TokenBucket, ConcurrencyLimiter, LIMITS, clientIp } from './rate-limit.js';
 
 const PORT = parseInt(process.env.PORT || '3100');
@@ -78,7 +78,16 @@ const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
       if (aborted) return;
       try {
         const parsed = JSON.parse(body);
-        const result = await computeVolumes(parsed, ENCRYPTION_KEY);
+        // v0.2 path: client passes roomId + name; server reads positions from
+        // room state. v0.1 path: client passes 'peers' field with encrypted
+        // blobs. Detect by shape — new path is preferred when both happen
+        // to be present (shouldn't, but be defensive).
+        const result = parsed && typeof parsed === 'object' && typeof parsed.roomId === 'string'
+          ? computeVolumesFromRoom(
+              parsed,
+              (roomId, exceptName, staleMs) => rooms.getRoomPositions(roomId, exceptName, staleMs),
+            )
+          : await computeVolumes(parsed, ENCRYPTION_KEY);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       } catch (err: any) {

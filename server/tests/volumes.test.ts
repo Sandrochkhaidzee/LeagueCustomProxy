@@ -4,6 +4,7 @@ import {
   encryptPosition,
   decryptPosition,
   computeVolumes,
+  computeVolumesFromRoom,
 } from '../src/volumes.js';
 
 // 64 hex chars = 256-bit test key
@@ -92,5 +93,75 @@ describe('computeVolumes', () => {
     );
 
     expect(result.peerVolumes.BadPeer).toBe(0);
+  });
+});
+
+describe('computeVolumesFromRoom (v0.2 path)', () => {
+  // The function takes a getPositions fn so we don't need a real RoomManager
+  // in tests. Pass a closure over a hand-built positions map.
+  const makeGetter = (positions: Record<string, { x: number; y: number }>) =>
+    () => positions;
+
+  it('computes pairwise volumes against the room state', () => {
+    const result = computeVolumesFromRoom(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      makeGetter({
+        Adjacent: { x: 0, y: 0 },       // distance 0 → 1.0
+        Mid: { x: 600, y: 0 },           // half range → 0.75
+        Far: { x: 1200, y: 0 },          // at edge → 0.0
+      }),
+    );
+    expect(result.peerVolumes.Adjacent).toBe(1.0);
+    expect(result.peerVolumes.Mid).toBeCloseTo(0.75, 5);
+    expect(result.peerVolumes.Far).toBe(0.0);
+    expect(result.myBlob).toBe(''); // v0.2 returns no blob — server already has it
+  });
+
+  it('returns empty peerVolumes when no peers have reported positions', () => {
+    const result = computeVolumesFromRoom(
+      { myPosition: { x: 100, y: 100 }, roomId: 'r1', name: 'Me' },
+      makeGetter({}),
+    );
+    expect(result.peerVolumes).toEqual({});
+  });
+
+  it('throws on invalid myPosition', () => {
+    expect(() =>
+      computeVolumesFromRoom(
+        { myPosition: { x: NaN, y: 0 }, roomId: 'r1', name: 'Me' },
+        makeGetter({}),
+      ),
+    ).toThrow('Invalid position');
+  });
+
+  it('throws on missing roomId', () => {
+    expect(() =>
+      computeVolumesFromRoom(
+        { myPosition: { x: 0, y: 0 }, roomId: '', name: 'Me' },
+        makeGetter({}),
+      ),
+    ).toThrow('Invalid roomId');
+  });
+
+  it('throws on missing name', () => {
+    expect(() =>
+      computeVolumesFromRoom(
+        { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: '' },
+        makeGetter({}),
+      ),
+    ).toThrow('Invalid name');
+  });
+
+  it('passes the staleness window through to getPositions', () => {
+    const calls: Array<[string, string, number]> = [];
+    const getter = (roomId: string, exceptName: string, staleMs: number) => {
+      calls.push([roomId, exceptName, staleMs]);
+      return {};
+    };
+    computeVolumesFromRoom(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      getter,
+    );
+    expect(calls).toEqual([['r1', 'Me', 60_000]]);
   });
 });

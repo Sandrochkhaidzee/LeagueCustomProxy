@@ -3,7 +3,9 @@ import { Position } from '../core/types';
 import { SERVER_URL } from '../core/config';
 
 interface VolumeResponse {
-  myBlob: string;
+  // Always empty in v0.2 — kept on the wire only so older server builds that
+  // still echo the field don't break JSON.parse. Client never reads it.
+  myBlob?: string;
   peerVolumes: Record<string, number>;
 }
 
@@ -14,9 +16,16 @@ export class VolumeClient {
     this.endpoint = `${SERVER_URL}/compute-volumes`;
   }
 
+  /**
+   * v0.2 request: the server reads peer positions from its own room state
+   * (populated by `coords` WSS messages from each client), so the request
+   * just identifies who we are and where we are. No more peer-to-peer
+   * encrypted-blob exchange — see docs/plans/2026-06-02-server-side-positions.md.
+   */
   async computeVolumes(
     myPosition: Position,
-    peerBlobs: Record<string, string>,
+    roomId: string,
+    name: string,
   ): Promise<VolumeResponse> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000);
@@ -29,7 +38,8 @@ export class VolumeClient {
         },
         body: JSON.stringify({
           myPosition: { x: myPosition.x, y: myPosition.y },
-          peers: peerBlobs,
+          roomId,
+          name,
         }),
         signal: controller.signal,
       });

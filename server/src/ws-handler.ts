@@ -83,6 +83,8 @@ export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
       }
 
       case 'position': {
+        // Peer-presence metadata broadcast (name/champion/mute/dead state).
+        // NOT the XY coordinates — those use 'coords' since v0.2.
         const info = rooms.getClientInfo(ws);
         if (!info) {
           sendError(ws, 'Not in a room');
@@ -92,6 +94,25 @@ export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
         for (const peer of others) {
           send(peer.ws, { type: 'position', from: info.name, blob: msg.blob });
         }
+        break;
+      }
+
+      case 'coords': {
+        // v0.2 server-side proximity: client reports its XY directly to the
+        // server (replaces the v0.1 encrypted-blob exchange over WebRTC data
+        // channels). Server stores in room state; the next /compute-volumes
+        // request reads it for pairwise distance.
+        const info = rooms.getClientInfo(ws);
+        if (!info) {
+          sendError(ws, 'Not in a room');
+          return;
+        }
+        if (typeof msg.x !== 'number' || typeof msg.y !== 'number' ||
+            !isFinite(msg.x) || !isFinite(msg.y)) {
+          sendError(ws, 'coords requires finite x and y');
+          return;
+        }
+        rooms.setPosition(ws, msg.x, msg.y);
         break;
       }
 

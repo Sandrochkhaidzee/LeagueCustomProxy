@@ -66,6 +66,40 @@ export class RoomManager {
     return this.clients.get(ws);
   }
 
+  /** Record a client's latest XY position. No-op if the ws isn't in a room. */
+  setPosition(ws: WebSocket, x: number, y: number): void {
+    const info = this.clients.get(ws);
+    if (!info) return;
+    info.position = { x, y, updatedMs: Date.now() };
+  }
+
+  /**
+   * Snapshot of all peer positions in a room, keyed by name. Skips the
+   * requester (`exceptName`) and skips entries with no position set yet,
+   * or whose position is older than `staleMs`.
+   *
+   * v0.2 server-side proximity flow: `computeVolumesFromRoom` calls this to
+   * get every other peer's most recent reported XY, then computes pairwise
+   * distance from the requester's position.
+   */
+  getRoomPositions(
+    roomId: string,
+    exceptName: string,
+    staleMs: number,
+  ): Record<string, { x: number; y: number }> {
+    const room = this.rooms.get(roomId);
+    if (!room) return {};
+    const cutoff = Date.now() - staleMs;
+    const out: Record<string, { x: number; y: number }> = {};
+    for (const c of room) {
+      if (c.name === exceptName) continue;
+      if (!c.position) continue;
+      if (c.position.updatedMs < cutoff) continue;
+      out[c.name] = { x: c.position.x, y: c.position.y };
+    }
+    return out;
+  }
+
   /** Number of active rooms. */
   get roomCount(): number {
     return this.rooms.size;

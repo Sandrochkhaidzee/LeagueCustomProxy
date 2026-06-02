@@ -11,15 +11,34 @@ const MAX_HEARING_RANGE = 1200;
 // quantization + jitter (see docs/threat-model.md Part 1).
 const BLOB_MAX_AGE_MS = 30_000;
 
+// v0.1 request shape — peers field carries encrypted XY blobs from each peer.
+// Kept for back-compat during the v0.2 transition; clients still on the old
+// path send this. See computeVolumes() below.
 export interface VolumeRequest {
   myPosition: { x: number; y: number };
   peers: Record<string, string>; // name -> encrypted blob (base64)
 }
 
+// v0.2 request shape — peers are read from server-side room state instead
+// of being shipped in the request. See computeVolumesFromRoom() below.
+export interface VolumeRequestV2 {
+  myPosition: { x: number; y: number };
+  roomId: string;
+  name: string;
+}
+
 export interface VolumeResponse {
-  myBlob: string;
+  myBlob: string;   // v0.1 path only; v0.2 returns "" since there's nothing to broadcast
   peerVolumes: Record<string, number>;
 }
+
+/**
+ * How stale a peer's last-reported XY can be before the server skips them in
+ * volume computation. 60 s gives plenty of slack for a client that briefly
+ * stalls or has a network blip while still pruning ghost positions from
+ * peers who hard-disconnected without a clean close.
+ */
+const STALE_POSITION_MS = 60_000;
 
 // ---------- helpers ----------
 
@@ -159,4 +178,52 @@ export async function computeVolumes(
   }
 
   return { myBlob, peerVolumes };
+}
+
+// ---------- v0.2 path: positions live in server-side room state ----------
+
+/**
+ * Reads peer XY positions from server-side room state (populated by
+ * 'coords' WSS messages) and computes pairwise distance volumes for the
+ * requester. No encryption involved on either side — the request is on
+ * HTTPS, the room state lives in process memory.
+ *
+ * `getPositions` is injected so this stays unit-testable without a real
+ * RoomManager. Pass `(roomId, exceptName) => rooms.getRoomPositions(...)`
+ * from the HTTP handler.
+ */
+export function computeVolumesFromRoom(
+  body: VolumeRequestV2,
+  getPositions: (roomId: string, exceptName: string, staleMs: number) => Record<string, { x: number; y: number }>,
+): VolumeResponse {
+  if (
+    !body.myPosition ||
+    typeof body.myPosition.x !== 'number' ||
+    typeof body.myPosition.y !== 'number' ||
+    !isFinite(body.myPosition.x) ||
+    !isFinite(body.myPosition.y)
+  ) {
+    throw new Error('Invalid position');
+  }
+  if (typeof body.roomId !== 'string' || !body.roomId) {
+    throw new Error('Invalid roomId');
+  }
+  if (typeof body.name !== 'string' || !body.name) {
+    throw new Error('Invalid name');
+  }
+
+  const positions = getPositions(body.roomId, body.name, STALE_POSITION_MS);
+  const peerVolumes: Record<string, number> = {};
+  for (const [name, pos] of Object.entries(positions)) {
+    const dx = body.myPosition.x - pos.x;
+    const dy = body.myPosition.y - pos.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    peerVolumes[name] = calculateVolume(distance);
+  }
+
+  // v0.2 doesn't produce a myBlob — there's nothing for the requester to
+  // re-broadcast (server already has their position from the most recent
+  // 'coords' message). Return empty string for type-shape compatibility
+  // with the legacy response.
+  return { myBlob: '', peerVolumes };
 }

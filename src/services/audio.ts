@@ -228,8 +228,6 @@ export class AudioService {
     }
 
     if (shouldInitiate) {
-      // Create data channel BEFORE offer so it's included in the SDP
-      peer.createDataChannel();
       console.log('[Audio] Creating offer (initiator) to:', remoteName);
       try {
         const offer = await peer.createOffer();

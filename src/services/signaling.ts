@@ -164,6 +164,22 @@ export class SignalingService {
     }
   }
 
+  /**
+   * v0.2: send the local player's XY coordinates to the server, where they
+   * land in the room state and feed the next /compute-volumes request.
+   * Replaces the encrypted-blob-over-WebRTC-data-channel exchange.
+   */
+  sendCoords(x: number, y: number): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'coords', x, y }));
+    }
+  }
+
+  /** Current room ID + local player name, for HTTP requests that need them
+   *  (volume-client's /compute-volumes uses both in the v0.2 request body). */
+  getCurrentRoom(): string | null { return this.currentRoomId; }
+  getLocalName(): string { return this.localName; }
+
   sendSignal(signal: SignalMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({

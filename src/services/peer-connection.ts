@@ -51,7 +51,6 @@ export class PeerConnection {
   private pc: RTCPeerConnection;
   private remoteStream: MediaStream = new MediaStream();
   private audioElement: HTMLAudioElement;
-  private dataChannel: RTCDataChannel | null = null;
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private hasRemoteDescription = false;
   readonly remoteName: string;
@@ -76,7 +75,6 @@ export class PeerConnection {
   private lastSetVolumeMs = 0;
 
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
-  onDataMessage: ((data: string) => void) | null = null;
   // Fired when ICE has fully failed. The audio layer is responsible for
   // re-issuing an offer (initiator side only) so we don't restart from both
   // ends and race. Capped retry counter lives here to avoid loops.
@@ -145,11 +143,6 @@ export class PeerConnection {
     };
 
     this.startStatsLogging();
-
-    this.pc.ondatachannel = (event) => {
-      this.dataChannel = event.channel;
-      this.setupDataChannel();
-    };
   }
 
   static async create(remoteName: string, audioContext: AudioContext | null = null): Promise<PeerConnection> {
@@ -206,33 +199,6 @@ export class PeerConnection {
       document.addEventListener('click', resume, { once: true });
       document.addEventListener('keydown', resume, { once: true });
     });
-  }
-
-  private setupDataChannel(): void {
-    if (!this.dataChannel) return;
-    this.dataChannel.onopen = () => {
-      console.log('[WebRTC] Data channel OPEN with', this.remoteName);
-    };
-    this.dataChannel.onclose = () => {
-      console.log('[WebRTC] Data channel CLOSED with', this.remoteName);
-    };
-    this.dataChannel.onmessage = (event) => {
-      if (this.onDataMessage) this.onDataMessage(event.data);
-    };
-    this.dataChannel.onerror = (event) => {
-      console.warn('[WebRTC] Data channel error with', this.remoteName, ':', event);
-    };
-  }
-
-  createDataChannel(): void {
-    this.dataChannel = this.pc.createDataChannel('position', { ordered: false, maxRetransmits: 0 });
-    this.setupDataChannel();
-  }
-
-  sendData(data: string): void {
-    if (this.dataChannel?.readyState === 'open') {
-      this.dataChannel.send(data);
-    }
   }
 
   addLocalStream(stream: MediaStream): void {
@@ -335,7 +301,6 @@ export class PeerConnection {
       clearInterval(this.statsIntervalId);
       this.statsIntervalId = null;
     }
-    this.dataChannel?.close();
     this.remoteStream.getTracks().forEach((t) => t.stop());
     this.pc.close();
     this.audioElement.pause();
