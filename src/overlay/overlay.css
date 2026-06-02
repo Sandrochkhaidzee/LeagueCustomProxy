@@ -117,20 +117,22 @@ html, body {
 }
 
 .player-volume {
-  width: 50px;
-  height: 4px;
+  /* 80px gives ~0.8px per value step (vs 50px / 0.5px) so dragging feels
+     continuous instead of "click-each-time" snapping. Issue #12. */
+  width: 80px;
+  height: 6px;
   -webkit-appearance: none;
   appearance: none;
   background: rgba(100, 120, 160, 0.3);
-  border-radius: 2px;
+  border-radius: 3px;
   outline: none;
   cursor: pointer;
   flex-shrink: 0;
 }
 .player-volume::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 10px;
-  height: 10px;
+  width: 14px;
+  height: 14px;
   background: #8892a8;
   border-radius: 50%;
   cursor: pointer;
