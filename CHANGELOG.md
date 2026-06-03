@@ -4,6 +4,9 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+### Added
+- **Opt-in CV crop harvesting (Debug-only developer tooling).** With Debug on and `localStorage 'lolproxchat.harvest'` set to `true`, the tracker saves labeled crops of your champion icon to `%LOCALAPPDATA%\com.proxchat.app\harvest\` during games, to build a real labeled dataset for measuring tracking accuracy. Off by default, zero cost otherwise. Paired with `scripts/eval_real_crops.py` (classifier vs SSIM template matching on real crops). See [CONTRIBUTING](CONTRIBUTING.md#measuring-cv-tracking-accuracy-real-data).
+
 ## [v0.4.0] — 2026-06-03
 
 ### Changed
