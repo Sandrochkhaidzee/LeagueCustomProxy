@@ -263,13 +263,17 @@ export const RING_TEAL_MIN = 0.10;
 /** Min annulus score (ringTeal − centerTeal) to accept; rejects teal-filled turrets. Provisional. */
 export const ANNULUS_MIN = 0.05;
 
-/** Follow-path anti-clutter floor (LENIENT): once locked, accept any teal blob
- *  near the predicted spot whose annulus isn't clearly a filled turret / minion
- *  clump. Much looser than the acquire gate (RING_TEAL_MIN/ANNULUS_MIN) — partial
- *  or neighbor-merged champion rings (score ~0) still pass; only strongly-negative
- *  (teal-FILLED) blobs are rejected, so we don't latch a turret when the champion
- *  has actually left (recall/teleport/death). */
-export const FOLLOW_ANNULUS_FLOOR = -0.15;
+/** Follow-path floor: once locked, follow the nearest in-range blob with a
+ *  POSITIVE ring score (ring teal exceeds center teal). Under the scan-max getRing
+ *  (bestRingInBlob), a teal-FILLED turret/minion clump scores ~0 (the scan finds a
+ *  fully-enclosed center where ring ≈ center), while a real champion ring — even
+ *  partial or neighbor-merged — scores clearly positive (~0.14+ measured on real
+ *  frames). So a small positive floor rejects filled clutter yet stays lenient vs
+ *  the acquire gate (it drops the RING_TEAL_MIN requirement). Frames in
+ *  (0, ANNULUS_MIN) are still followed but counted by the WEAK_FOLLOW_DROP guard.
+ *  (Was -0.15 for the old centroid scoring, where filled blobs scored strongly
+ *  negative; scan-max shifted them to ~0, so the floor had to move up.) */
+export const FOLLOW_ANNULUS_FLOOR = 0.0;
 /** Consecutive frames of trailing a sub-acquire-confidence (score < ANNULUS_MIN)
  *  blob before dropping the lock and forcing a strict reacquire — bounds how long
  *  we coast on a possibly-wrong blob when the champion has left. */

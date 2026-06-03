@@ -362,12 +362,13 @@ describe('ring-annulus thresholds', () => {
     expect(ANNULUS_MIN).toBeLessThan(0.3);
   });
 
-  // Follow-path leniency knobs: the floor is a small negative (only teal-FILLED
-  // clutter is rejected; partial/merged rings near score 0 still follow), and the
-  // coasting bound is a positive integer count of frames.
-  test('FOLLOW_ANNULUS_FLOOR is a small negative in (-0.5, 0)', () => {
-    expect(FOLLOW_ANNULUS_FLOOR).toBeGreaterThan(-0.5);
-    expect(FOLLOW_ANNULUS_FLOOR).toBeLessThan(0);
+  // Follow-path leniency knobs: under scan-max getRing, a filled turret scores ~0
+  // so the floor requires a small POSITIVE ring score (rejects filled clutter,
+  // champion rings score +0.14+), staying lenient vs the acquire gate by dropping
+  // the RING_TEAL_MIN requirement. The coasting bound is a positive integer.
+  test('FOLLOW_ANNULUS_FLOOR is a small non-negative below the acquire gate (scan-max regime)', () => {
+    expect(FOLLOW_ANNULUS_FLOOR).toBeGreaterThanOrEqual(0);
+    expect(FOLLOW_ANNULUS_FLOOR).toBeLessThan(0.05);
   });
   test('WEAK_FOLLOW_DROP is a positive integer', () => {
     expect(WEAK_FOLLOW_DROP).toBeGreaterThan(0);
