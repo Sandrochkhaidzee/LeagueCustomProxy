@@ -3,7 +3,7 @@ import { WebSocketServer } from 'ws';
 import { RoomManager } from './rooms.js';
 import { handleConnection } from './ws-handler.js';
 import { generateTurnCredentials, generateCloudflareIceServers } from './turn.js';
-import { computeVolumes, computeVolumesFromRoom } from './volumes.js';
+import { computeVolumes, computeTieredVolumes } from './volumes.js';
 import { TokenBucket, ConcurrencyLimiter, LIMITS, clientIp } from './rate-limit.js';
 
 const PORT = parseInt(process.env.PORT || '3100');
@@ -78,15 +78,17 @@ const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
       if (aborted) return;
       try {
         const parsed = JSON.parse(body);
-        // v0.2 path: client passes roomId + name; server reads positions from
-        // room state. v0.1 path: client passes 'peers' field with encrypted
-        // blobs. Detect by shape — new path is preferred when both happen
-        // to be present (shouldn't, but be defensive).
+        // v0.3 path: client passes roomId + name; server reads team-aware
+        // room state (team + position + hearCrossTeam per client) and
+        // applies tiered proximity (ally=1.0, cross-team at requester's
+        // chosen range). Legacy v0.2 clients omit team on join — the
+        // function falls back to team-blind 1200u behavior automatically.
+        //
+        // v0.1 path: client passes 'peers' field with encrypted blobs.
+        // Detect by shape — v0.3+ shape is preferred when both happen to be
+        // present (shouldn't, but be defensive).
         const result = parsed && typeof parsed === 'object' && typeof parsed.roomId === 'string'
-          ? computeVolumesFromRoom(
-              parsed,
-              (roomId, exceptName, staleMs) => rooms.getRoomPositions(roomId, exceptName, staleMs),
-            )
+          ? computeTieredVolumes(parsed, (roomId) => rooms.getRoomClients(roomId))
           : await computeVolumes(parsed, ENCRYPTION_KEY);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));

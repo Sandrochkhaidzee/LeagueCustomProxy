@@ -1,5 +1,6 @@
 import type { WebSocket } from 'ws';
 import type { ClientInfo } from './types.js';
+import type { TieredRoomClient } from './volumes.js';
 
 export class RoomManager {
   /** roomId → set of ClientInfo */
@@ -107,6 +108,23 @@ export class RoomManager {
       out[c.name] = { x: c.position.x, y: c.position.y };
     }
     return out;
+  }
+
+  /**
+   * v0.3 — snapshot of all clients in a room with just the fields
+   * `computeTieredVolumes` needs (name, team, hearCrossTeam, position).
+   * Includes the requester; the function filters itself out by name.
+   * No staleness filter here — the caller decides per-peer.
+   */
+  getRoomClients(roomId: string): TieredRoomClient[] {
+    const room = this.rooms.get(roomId);
+    if (!room) return [];
+    return room.map(c => ({
+      name: c.name,
+      team: c.team,
+      hearCrossTeam: c.hearCrossTeam,
+      position: c.position,
+    }));
   }
 
   /** Number of active rooms. */
