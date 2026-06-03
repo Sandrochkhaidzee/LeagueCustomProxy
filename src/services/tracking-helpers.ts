@@ -110,19 +110,47 @@ export function pickBestBlobInRange(
 }
 
 /**
+ * Minimum *absolute* template-match confidence (raw SSIM-margin remapped to
+ * [0,1]) required to lock or re-acquire onto a blob anywhere on the minimap.
+ *
+ * Both re-acquisition (Phase 2) and the SCANNING→LOCK transition pick the
+ * best-scoring blob regardless of distance, scored on the *normalized* (best
+ * blob = 1.0) confidence. Normalization is relative, so it can't tell "the real
+ * champion" from "the least-bad of a frame full of wrong blobs" — letting a
+ * minion/ally icon win and yanking the broadcast position across the map
+ * (observed: position teleporting between opposite corners). The *raw* template
+ * score is absolute, so we gate on it. Real-game measurement: the true
+ * champion's blob scores 0.56-0.65 here; wrong blobs (minions, ally icons) top
+ * out at ~0.49. 0.53 sits in that gap. Below it, the tracker holds/extrapolates
+ * (or stays SCANNING) rather than chasing a wrong blob.
+ *
+ * Only applied on the template path. The old 172-class classifier had no
+ * meaningful absolute confidence (weak on champions like Teemo), which is why
+ * v0.3.1 reverted a similar gate — it refused to lock at all. Template matching
+ * is reliable, so the gate fails safe to "no lock," never "wrong lock."
+ */
+export const REACQUIRE_TEMPLATE_MIN = 0.53;
+
+/**
  * Phase 2: pick the teal blob with the highest classifier confidence above
  * the (adaptive) reacquire threshold, regardless of distance. Handles
  * teleport, respawn, camera pan, blob-overlap recovery.
+ *
+ * `absGate` (optional) adds an absolute-confidence floor on top of the relative
+ * `threshold` — a blob must clear BOTH to be eligible. Used on the template
+ * path to reject far wrong-blob jumps; omitted on the classifier fallback.
  */
 export function pickClassifierReacquisition(
   tealBlobs: Blob[],
   threshold: number,
   clsScoreFn: (b: Blob) => number,
+  absGate?: { scoreFn: (b: Blob) => number; min: number },
 ): ScoredBlob | null {
   let best: ScoredBlob | null = null;
   for (const b of tealBlobs) {
     const clsScore = clsScoreFn(b);
     if (clsScore < threshold) continue;
+    if (absGate && absGate.scoreFn(b) < absGate.min) continue;
     if (!best || clsScore > best.score) best = { blob: b, score: clsScore };
   }
   return best;

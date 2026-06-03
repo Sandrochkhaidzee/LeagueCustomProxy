@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.4.4] — 2026-06-03
+
+### Fixed
+- **Tracked position occasionally teleported across the map (broadcasting a wrong location, breaking proximity audio).** With detection + identity now solid (v0.4.0–v0.4.3), the remaining failure was the *re-acquisition* logic: when your champion briefly wasn't found near its predicted spot, the tracker grabbed the highest-scoring blob **anywhere on the minimap** — and it scored blobs on a *relative* (normalized, best-blob = 1.0) confidence that can't tell the real champion from the least-bad of a frame full of wrong blobs (minion dots, ally icons the looser v0.4.3 detection now also picks up). So it would lock onto a far wrong blob and snap your position to the opposite corner. Both the long-range re-acquisition and the SCANNING→lock transition now also require **absolute** template-match confidence (the raw SSIM score, which real champion blobs clear at 0.56–0.65 while wrong blobs top out ~0.49). Below that bar the tracker holds/extrapolates or keeps scanning rather than chasing a wrong blob — so position stays put instead of teleporting. (This gate is safe only because template matching is reliable; the old 172-class classifier was too weak to gate on, which is why v0.3.1 reverted a similar attempt.)
+
 ## [v0.4.3] — 2026-06-03
 
 ### Fixed
@@ -278,7 +283,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.4...HEAD
+[v0.4.4]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.4
 [v0.4.3]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.3
 [v0.4.2]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.2
 [v0.4.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.1

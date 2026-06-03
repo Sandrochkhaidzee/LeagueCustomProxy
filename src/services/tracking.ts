@@ -15,6 +15,7 @@ import {
   computeReacquireThreshold,
   pickBestBlobInRange,
   pickClassifierReacquisition,
+  REACQUIRE_TEMPLATE_MIN,
   ScoreFns,
   // v0.3: CV tracking tweaks driven by IXAM's v0.1.33 issue #7 logs
   // (v0.3.1 reverted the classifier-confidence-dependent ones — see below)
@@ -77,6 +78,11 @@ export class TrackingService {
   // Populated by either the template-match path (v0.4 primary) or the
   // classifier path (fallback); getClassifierScore reads whichever ran.
   private classifierScores: Map<string, number> = new Map();
+  // Raw (un-normalized, un-EMA'd) template-match scores per blob, in absolute
+  // [0,1] confidence. Unlike classifierScores (relative), these survive as a
+  // meaningful "is this really the champion?" signal — used to gate far
+  // re-acquisition / lock so a wrong blob can't yank position across the map.
+  private templateRawScores: Map<string, number> = new Map();
   // EMA-smoothed scores to dampen single-frame misidentifications
   private smoothedClassifierScores: Map<string, number> = new Map();
   private lastClassifierRunMs = 0;
@@ -384,6 +390,14 @@ export class TrackingService {
       raw.push(Math.max(0, Math.min(1, (margin + 1) / 2)));
     }
 
+    // Stash the raw (absolute) scores before normalization — the lock/re-acquire
+    // gate needs to know "is this actually the champion?", which normalization
+    // (relative, best blob → 1.0) destroys.
+    this.templateRawScores.clear();
+    for (let i = 0; i < tealBlobs.length; i++) {
+      this.templateRawScores.set(tealBlobs[i].cx + ',' + tealBlobs[i].cy, raw[i]);
+    }
+
     // Normalize across blobs + EMA-smooth, mirroring the classifier path so
     // downstream scoring behaves identically.
     const MIN_RAW = 0.5; // remapped: SSIM≈0 → 0.5; below this = no real match
@@ -556,16 +570,28 @@ export class TrackingService {
    * Uses fuzzy matching: finds the closest cached blob center within icon diameter.
    */
   private getClassifierScore(blob: Blob): number {
-    // Exact match first
-    const exact = this.classifierScores.get(blob.cx + ',' + blob.cy);
+    return this.lookupBlobScore(this.classifierScores, blob);
+  }
+
+  /** Absolute template-match confidence for a blob (0 if none cached). */
+  private getTemplateRawScore(blob: Blob): number {
+    return this.lookupBlobScore(this.templateRawScores, blob);
+  }
+
+  /**
+   * Look up a per-blob score, exact center first, else the closest cached
+   * center within icon-diameter tolerance. Blob centers drift a pixel or two
+   * frame-to-frame, so an exact key miss is normal.
+   */
+  private lookupBlobScore(scores: Map<string, number>, blob: Blob): number {
+    const exact = scores.get(blob.cx + ',' + blob.cy);
     if (exact !== undefined) return exact;
 
-    // Fuzzy match: find closest cached center within icon diameter tolerance
     const tolerance = Math.max(5, this.expectedIconDiam * 0.6);
     const toleranceSq = tolerance * tolerance;
     let bestScore = 0;
     let bestDistSq = Infinity;
-    for (const [key, score] of this.classifierScores) {
+    for (const [key, score] of scores) {
       const [kx, ky] = key.split(',').map(Number);
       const dx = blob.cx - kx;
       const dy = blob.cy - ky;
@@ -1088,6 +1114,20 @@ export class TrackingService {
     // position. The classifier still contributes to the composite score above;
     // it's just no longer a veto. The whole classifier-confidence path is being
     // replaced by template matching in v0.4 (docs/plans/2026-06-03-cv-tracking-research.md).
+    //
+    // v0.4.4: on the template path, refuse to lock onto a blob whose ABSOLUTE
+    // match confidence is too low — i.e. the champion isn't actually visible
+    // (dead, fog, off-minimap). Without this, a forced re-acquire (5s hold →
+    // SCANNING) would immediately re-lock onto whatever wrong blob scored best,
+    // re-introducing the cross-map position jump we just fixed in Phase 2.
+    // Safe here (but not for the old classifier) because template confidence is
+    // reliable — failing the gate means "keep scanning," never a wrong lock.
+    if (this.hasTemplates() && this.getTemplateRawScore(bestBlob) < REACQUIRE_TEMPLATE_MIN) {
+      if (this.onPositionUpdate && this.lastPosition) {
+        this.onPositionUpdate(this.lastPosition);
+      }
+      return;
+    }
     this.lockOnBlob(bestBlob, 'composite(score=' + bestScore.toFixed(2) + ')');
   }
 
@@ -1189,7 +1229,13 @@ export class TrackingService {
       if (this.holdStartMs === 0) this.holdStartMs = performance.now();
       const stationarySec = this.lastMovementMs > 0 ? (now - this.lastMovementMs) / 1000 : 0;
       const reacquireThreshold = computeReacquireThreshold(stationarySec, holdSec);
-      const phase2 = pickClassifierReacquisition(tealBlobs, reacquireThreshold, scoreFns.cls);
+      // On the template path, also require absolute match confidence so a far
+      // wrong blob (minion, ally icon) can't win the relative score and yank
+      // position across the map. Classifier fallback keeps the old behavior.
+      const absGate = this.hasTemplates()
+        ? { scoreFn: (b: Blob) => this.getTemplateRawScore(b), min: REACQUIRE_TEMPLATE_MIN }
+        : undefined;
+      const phase2 = pickClassifierReacquisition(tealBlobs, reacquireThreshold, scoreFns.cls, absGate);
       if (phase2) {
         this.acquireViaClassifier(phase2.blob, phase2.score);
         return;

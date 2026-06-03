@@ -4,6 +4,7 @@ import {
   computeBlobScore,
   pickBestBlobInRange,
   pickClassifierReacquisition,
+  REACQUIRE_TEMPLATE_MIN,
   CLS_FOLLOW_THRESHOLD,
   shouldForceReacquisition,
   FORCED_REACQUIRE_HOLD_MS,
@@ -171,6 +172,44 @@ describe('pickClassifierReacquisition', () => {
 
   test('empty input returns null', () => {
     expect(pickClassifierReacquisition([], 0.5, () => 1.0)).toBeNull();
+  });
+
+  // v0.4.4: absolute-confidence gate stops far wrong-blob jumps. The relative
+  // score still ranks; the abs gate vetoes blobs that aren't really the champion.
+  test('absGate vetoes a relatively-best blob whose absolute confidence is too low', () => {
+    const blobs = [mkBlob(0, 0), mkBlob(200, 200)];
+    // blobs[1] wins the relative score but is a wrong blob (low abs confidence).
+    const rel = new Map<Blob, number>([[blobs[0], 0.6], [blobs[1], 1.0]]);
+    const abs = new Map<Blob, number>([[blobs[0], 0.6], [blobs[1], 0.45]]);
+    const result = pickClassifierReacquisition(
+      blobs, 0.5, (b) => rel.get(b) ?? 0,
+      { scoreFn: (b) => abs.get(b) ?? 0, min: REACQUIRE_TEMPLATE_MIN },
+    );
+    expect(result?.blob).toBe(blobs[0]); // falls back to the real champion
+  });
+
+  test('absGate returns null when no blob clears the absolute floor', () => {
+    const blobs = [mkBlob(0, 0), mkBlob(50, 50)];
+    const abs = new Map<Blob, number>([[blobs[0], 0.4], [blobs[1], 0.49]]);
+    const result = pickClassifierReacquisition(
+      blobs, 0, () => 1.0,
+      { scoreFn: (b) => abs.get(b) ?? 0, min: REACQUIRE_TEMPLATE_MIN },
+    );
+    expect(result).toBeNull(); // hold/extrapolate rather than chase a wrong blob
+  });
+
+  test('absGate admits a blob that clears both relative and absolute bars', () => {
+    const blobs = [mkBlob(120, 120)];
+    const result = pickClassifierReacquisition(
+      blobs, 0.3, () => 0.9,
+      { scoreFn: () => 0.6, min: REACQUIRE_TEMPLATE_MIN },
+    );
+    expect(result?.blob).toBe(blobs[0]);
+  });
+
+  test('REACQUIRE_TEMPLATE_MIN sits between measured wrong (≤0.49) and real (≥0.56) blob scores', () => {
+    expect(REACQUIRE_TEMPLATE_MIN).toBeGreaterThan(0.49);
+    expect(REACQUIRE_TEMPLATE_MIN).toBeLessThan(0.56);
   });
 });
 
