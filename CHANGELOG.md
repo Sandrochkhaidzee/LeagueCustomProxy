@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.4.1] — 2026-06-03
+
+### Fixed
+- **Debug thumbnail clipped at the bottom on scaled displays (#11 follow-up).** The dynamic overlay-window resize treated the panel's logical (CSS) height as physical pixels, so a 125%/150%-scaled laptop got a too-short window that cut off the debug thumbnail (a 100%-scaled monitor was unaffected). The height is now scaled by `devicePixelRatio` before sizing the window.
+
 ### Added
 - **Opt-in CV crop harvesting (Debug-only developer tooling).** With Debug on and `localStorage 'lolproxchat.harvest'` set to `true`, the tracker saves labeled crops of your champion icon to `%LOCALAPPDATA%\com.proxchat.app\harvest\` during games, to build a real labeled dataset for measuring tracking accuracy. Off by default, zero cost otherwise. Paired with `scripts/eval_real_crops.py` (classifier vs SSIM template matching on real crops). See [CONTRIBUTING](CONTRIBUTING.md#measuring-cv-tracking-accuracy-real-data).
 
@@ -263,7 +268,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.1...HEAD
+[v0.4.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.0
 [v0.3.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.3.1
 [v0.3.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.3.0
