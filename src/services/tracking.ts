@@ -1111,9 +1111,11 @@ export class TrackingService {
     this.scanFrameCount++;
 
     // Wait ~1s for classifier EMA to stabilize (~0.5s without classifier),
-    // independent of scan rate.
+    // independent of scan rate. The template/annulus path needs NO warmup:
+    // the annulus is a per-frame shape signal with no EMA to settle, so it can
+    // lock the instant a valid champion ring appears.
     const hasClassifier = !!(this.classifier && this.classifier.isLoaded());
-    const warmupMs = hasClassifier ? 1000 : 500;
+    const warmupMs = this.hasTemplates() ? 0 : (hasClassifier ? 1000 : 500);
     if (performance.now() - this.scanStartMs < warmupMs) {
       if (this.onPositionUpdate && this.lastPosition) {
         this.onPositionUpdate(this.lastPosition);
@@ -1277,16 +1279,17 @@ export class TrackingService {
     // minions/terrain (little ring teal) are filtered out entirely. This replaces
     // the dead SSIM/template-confidence gate on the hot path.
     if (this.hasTemplates()) {
-      const champs = tealBlobs.filter(b => {
-        const a = this.getAnnulus(b);
-        return a.ringTeal >= RING_TEAL_MIN && a.score >= ANNULUS_MIN;
-      });
+      // Retain the annulus features once per champ so Phase 2 can reuse them
+      // instead of recomputing getAnnulus for every candidate.
+      const champs = tealBlobs
+        .map(b => ({ b, a: this.getAnnulus(b) }))
+        .filter(({ a }) => a.ringTeal >= RING_TEAL_MIN && a.score >= ANNULUS_MIN);
 
       if (champs.length > 0) {
         // Phase 1 (follow): nearest champion-ring blob within jump range of the
         // predicted point. hasClassifier=false → pure nearest-in-range (position
         // decides among already shape-validated champions; no classifier veto).
-        const follow = pickBestBlobInRange(champs, lastReg, predicted, maxJumpPx, false, scoreFns);
+        const follow = pickBestBlobInRange(champs.map(c => c.b), lastReg, predicted, maxJumpPx, false, scoreFns);
         if (follow) {
           this.finalizeLockedFrame(follow.blob, lastReg, holdSec);
           return;
@@ -1295,16 +1298,12 @@ export class TrackingService {
         // Phase 2 (reacquire): none in range — snap to the strongest champion
         // ring anywhere on the minimap (teleport, respawn, camera pan, overlap).
         if (this.holdStartMs === 0) this.holdStartMs = performance.now();
-        let best: Blob | null = null;
-        let bestFeat: AnnulusFeatures = { ringTeal: 0, centerTeal: 0, score: -Infinity };
-        for (const b of champs) {
-          const a = this.getAnnulus(b);
-          if (a.score > bestFeat.score) { bestFeat = a; best = b; }
+        let best: { b: Blob; a: AnnulusFeatures } | null = null;
+        for (const c of champs) {
+          if (!best || c.a.score > best.a.score) best = c;
         }
         if (best) {
-          console.log('[Tracking] Re-acquiring via annulus (score=' + bestFeat.score.toFixed(2) +
-            ', ringTeal=' + bestFeat.ringTeal.toFixed(2) + ')');
-          this.acquireViaClassifier(best, bestFeat.score);
+          this.acquireViaClassifier(best.b, best.a.score, 'annulus');
           return;
         }
       }
@@ -1347,8 +1346,10 @@ export class TrackingService {
     this.finalizeLockedFrame(phase1.blob, lastReg, holdSec);
   }
 
-  /** Phase 2 success path: snap position, reset velocity, log, fire callback. */
-  private acquireViaClassifier(blob: Blob, clsScore: number): void {
+  /** Phase 2 success path: snap position, reset velocity, log, fire callback.
+   *  `source` labels which gate triggered the reacquire (classifier fallback vs
+   *  template-path annulus) so the log reflects the real signal + score. */
+  private acquireViaClassifier(blob: Blob, score: number, source = 'classifier'): void {
     if (!this.minimapRegion) return;
     const cx = this.minimapRegion.x + blob.cx;
     const cy = this.minimapRegion.y + blob.cy;
@@ -1358,7 +1359,7 @@ export class TrackingService {
     this.velocityX = 0;
     this.velocityY = 0;
     this.lockedTickCount++;
-    console.log('[Tracking] Re-acquired via classifier (cls=' + clsScore.toFixed(2) +
+    console.log('[Tracking] Re-acquired via ' + source + ' (score=' + score.toFixed(2) +
       '): pixel(' + cx + ',' + cy + ')' +
       ' game(' + Math.round(newPos.x) + ',' + Math.round(newPos.y) + ')');
     if (this.onPositionUpdate && this.lastPosition) {
