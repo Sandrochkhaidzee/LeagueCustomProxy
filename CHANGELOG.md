@@ -4,6 +4,36 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.3.0] — 2026-06-02
+
+### Changed
+- **Tiered proximity audio (default-config behavioral change).** Team voice is now always full volume regardless of in-game distance (allies already see each other on the minimap — no info leak). Cross-team voice is capped at ~600 game units by default (auto-attack range) instead of the previous 1200 (champion vision range). A new Settings toggle **"Hear enemies at full vision range"** opts in to the old 1200u behavior for users who want the full social experience. The filter is enforced server-side — a modified client cannot bypass the team or range cap because out-of-toggle peers are simply absent from the `/compute-volumes` response. Volume curve uses the full 1200u falloff in both modes, so a peer at distance X sounds the same loudness regardless of toggle state. Full design rationale in [`docs/plans/2026-06-02-v0.3.0-design.md`](docs/plans/2026-06-02-v0.3.0-design.md).
+- **PTT global hotkey now works in-game (#1).** Replaced `tauri-plugin-global-shortcut` (which used `RegisterHotKey` — intercepted by LoL's DirectInput layer) with a `SetWindowsHookExW(WH_KEYBOARD_LL)` hook on a dedicated message-pump thread. Same technique Discord/Mumble/OBS use. Default PTT key is **Caps Lock** with a synthetic-input-based LED flip-back so the keyboard light doesn't toggle on every press. Both PTT and toggle-self-mute keys are now rebindable from **Settings → PTT Key / Toggle-mute Key**.
+
+### Added
+- **Settings → Hear enemies at full vision range** toggle.
+- **Settings → PTT Key / Toggle-mute Key** rebind UI. Click to capture a key; common LoL bindings (Q/W/E/R/D/F/B/P) and modifier-only keys are rejected with a brief warning.
+- **CV tracking improvements driven by IXAM's v0.1.33 issue #7 logs:**
+  - 5-second cap on continuous holds. Beyond that, the tracker drops back to SCANNING for a full classifier-driven re-acquisition instead of extending the search box. IXAM's logs showed 44-second holds during which the orchestrator was sending phantom coords.
+  - Classifier-EMA recovery: a single confident raw score now snaps the EMA up to that value instead of decaying. Prevents a couple of poisoned-to-0 samples from leaving the EMA stuck at 0 for the rest of a 4-minute session.
+  - `shouldAcceptLocked` gate on SCANNING→LOCKED transitions: requires either confident composite + classifier-EMA agreement OR a high candidate raw classifier score. Refuses the composite-only "wrong-icon LOCK" pattern that IXAM's logs showed (composite=0.42, classifier=0.00, immediately followed by 8s+ holds).
+  - Orchestrator suppresses coords broadcasts for the first 3s after a fresh LOCK if classifier EMA is still near 0 (defense-in-depth against a bad LOCK that holds position without entering the hold-gated path).
+- **Debug thumbnail no longer overflows the Settings panel (#11).** Overlay window now dynamically resizes to fit panel content (Settings expanded / Debug thumbnail visible / peer list grown). Click-through hit-rect updates in lockstep so clicks below the shrunk panel pass through to the game.
+
+### Fixed
+- Per the above CV improvements, the failure modes from #7's most recent v0.1.33 log set (long holds, classifier-poisoned EMA, composite-only false-LOCK) should no longer manifest.
+
+### Removed
+- `tauri-plugin-global-shortcut` dependency (replaced by the custom `WH_KEYBOARD_LL` hook).
+
+### Notes for self-hosters
+- Server is back-compat with v0.2.x clients (a v0.2 client omits `team` on join, server falls back to legacy team-blind 1200u behavior). **Deploy server first**, then release the v0.3 client — same rolling deploy pattern as v0.2.0.
+- `ENCRYPTION_KEY` remains optional (only needed for legacy v0.1.x clients).
+
+### Deferred to v0.3.1
+- Mouse-button PTT binding (`WH_MOUSE_LL`).
+- CV model retrain (fresh scrape + retrained ONNX). Code-side improvements above ship now; the retrain is queued.
+
 ## [v0.2.1] — 2026-06-02
 
 ### Fixed
@@ -198,7 +228,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.3.0...HEAD
+[v0.3.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.3.0
 [v0.2.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.2.1
 [v0.2.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.2.0
 [v0.1.33]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.1.33
