@@ -3,6 +3,7 @@ import { Position, MapType, MAP_DIMENSIONS } from '../core/types';
 import { getMinimapBounds, MinimapBounds } from '../core/map-calibration';
 import { ChampionClassifier } from './champion-classifier';
 import type { ChampionTemplate } from './champion-icons';
+import { classifyMinimapPixel } from './color-detect';
 import {
   cropResizeGray,
   toGrayscale,
@@ -617,13 +618,10 @@ export class TrackingService {
 
   // --- Color classification ---
 
-  /** Classify a pixel as teal (ally border), red (enemy border), or null */
+  /** Classify a pixel as teal (ally border), red (enemy border), or null.
+   *  Thresholds live in color-detect.ts (pure + tested against real crops). */
   private classifyPixel(r: number, g: number, b: number): 0 | 1 | 2 {
-    // Teal/cyan ally border: low red, high green+blue
-    if (r < 100 && g > 120 && b > 120 && (g + b) > 280) return 1;
-    // Red enemy border: high red, low green+blue
-    if (r > 140 && g < 100 && b < 100) return 2;
-    return 0;
+    return classifyMinimapPixel(r, g, b);
   }
 
   // --- Binary mask creation from minimap region ---
