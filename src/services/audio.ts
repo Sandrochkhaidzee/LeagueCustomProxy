@@ -25,6 +25,34 @@ export function computeFinalPeerVolume(proximityVol: number, sliderVol: number):
   return p * s;
 }
 
+/**
+ * Resolve a target proximity volume for every peer that needs one: the union
+ * of peers present in the server response and currently-connected peers.
+ *
+ * Connected peers that are ABSENT from the response are silenced (0). The
+ * v0.3 server omits peers it filtered out (cross-team beyond the hearing cap,
+ * or stale position) from the response entirely, so a missing entry means
+ * "not audible" — NOT "leave unchanged". Without this, a peer once heard
+ * within range stays stuck at its last gain forever after moving out of
+ * range (the "enemy hears me no matter where on the map" bug: the server
+ * correctly drops them, the client failed to act on the absence). In v0.2
+ * the server always included far peers at volume 0, so the client never had
+ * to handle absence.
+ *
+ * Exported for unit testing without AudioService's WebAudio dependencies.
+ */
+export function resolveProximityTargets(
+  responseVolumes: Record<string, number>,
+  connectedPeerNames: Iterable<string>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const [name, v] of Object.entries(responseVolumes)) out.set(name, v);
+  for (const name of connectedPeerNames) {
+    if (!out.has(name)) out.set(name, 0);
+  }
+  return out;
+}
+
 export class AudioService {
   private localStream: MediaStream | null = null;
   private peers: Map<string, PeerConnection> = new Map();
@@ -335,7 +363,10 @@ export class AudioService {
       this.lastVolumeLogMs = now;
     }
 
-    for (const [name, volume] of Object.entries(volumes)) {
+    // Process the union of response peers AND connected peers — connected
+    // peers absent from `volumes` are silenced (0), see resolveProximityTargets.
+    const targets = resolveProximityTargets(volumes, this.peers.keys());
+    for (const [name, volume] of targets) {
       // Remember the proximity volume per peer so setPlayerVolume (the
       // per-row slider in the UI) can recompute finalVol correctly without
       // waiting for the next position tick. Was using a hardcoded 1.0 which
