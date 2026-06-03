@@ -191,3 +191,42 @@ export function shouldForceReacquisition(holdStartMs: number, nowMs: number): bo
 export function nextClassifierEma(currentEma: number, raw: number, decay: number): number {
   return currentEma * decay + raw * (1 - decay);
 }
+
+// ---------- v0.4 ring-annulus detection (champion shape signature) ----------
+
+export interface AnnulusFeatures { ringTeal: number; centerTeal: number; score: number; }
+
+/**
+ * Champion-ring signature on the teal mask, measured around a blob center.
+ * A champion icon is an ally-teal RING with a non-teal portrait CENTER; a turret
+ * is teal-FILLED (high center); minions/terrain have little teal in the ring.
+ * Bands are relative to the icon radius r: center < 0.55r, ring 0.70r–1.05r.
+ * Validated on real crops (scripts/annulus_separation.py): champion score >0,
+ * turret score <0. `mask[i]===1` means teal/ally.
+ */
+export function annulusFeatures(
+  mask: Uint8Array, w: number, h: number, cx: number, cy: number, r: number,
+): AnnulusFeatures {
+  const cR = 0.55 * r, inner = 0.70 * r, outer = 1.05 * r;
+  const cR2 = cR * cR, in2 = inner * inner, out2 = outer * outer;
+  const x0 = Math.max(0, Math.floor(cx - outer)), x1 = Math.min(w - 1, Math.ceil(cx + outer));
+  const y0 = Math.max(0, Math.floor(cy - outer)), y1 = Math.min(h - 1, Math.ceil(cy + outer));
+  let cT = 0, cN = 0, rT = 0, rN = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+      const teal = mask[y * w + x] === 1 ? 1 : 0;
+      if (d2 <= cR2) { cN++; cT += teal; }
+      else if (d2 >= in2 && d2 <= out2) { rN++; rT += teal; }
+    }
+  }
+  const ringTeal = rN ? rT / rN : 0;
+  const centerTeal = cN ? cT / cN : 0;
+  return { ringTeal, centerTeal, score: ringTeal - centerTeal };
+}
+
+/** Min ally-teal fraction in the ring band to consider a blob a champion ring.
+ *  Provisional (Garen 90%/93% point); re-tuned in Phase 5 on more harvested data. */
+export const RING_TEAL_MIN = 0.10;
+/** Min annulus score (ringTeal − centerTeal) to accept; rejects teal-filled turrets. Provisional. */
+export const ANNULUS_MIN = 0.05;

@@ -9,8 +9,18 @@ import {
   shouldForceReacquisition,
   FORCED_REACQUIRE_HOLD_MS,
   nextClassifierEma,
+  annulusFeatures,
+  RING_TEAL_MIN,
+  ANNULUS_MIN,
 } from '../../src/services/tracking-helpers';
 import type { Blob } from '../../src/services/blob-types';
+
+// Build a w×h Uint8Array; set teal(=1) where pred(x,y) is true.
+function mkMask(w: number, h: number, pred: (x: number, y: number) => boolean): Uint8Array {
+  const m = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (pred(x, y)) m[y * w + x] = 1;
+  return m;
+}
 
 function mkBlob(cx: number, cy: number): Blob {
   return {
@@ -249,5 +259,45 @@ describe('nextClassifierEma (symmetric EMA — v0.3.0 snap-up reverted in v0.3.1
     let ema = 0;
     for (let i = 0; i < 5; i++) ema = nextClassifierEma(ema, 0.9, 0.7);
     expect(ema).toBeGreaterThan(0.6); // recovers without single-frame latching
+  });
+});
+
+// ---------- v0.4 ring-annulus detection (champion shape signature) ----------
+
+describe('annulusFeatures', () => {
+  const W = 40, H = 40, cx = 20, cy = 20, r = 12;
+  const ringOf = (x: number, y: number) => {
+    const d = Math.hypot(x - cx, y - cy); return d >= 0.78 * r && d <= 1.0 * r; // a thin ring at the edge
+  };
+  const discOf = (x: number, y: number) => Math.hypot(x - cx, y - cy) <= r; // filled
+
+  test('a teal RING scores strongly positive (champion)', () => {
+    const f = annulusFeatures(mkMask(W, H, ringOf), W, H, cx, cy, r);
+    expect(f.ringTeal).toBeGreaterThan(0.5);
+    expect(f.centerTeal).toBeLessThan(0.1);
+    expect(f.score).toBeGreaterThan(0.4);
+  });
+
+  test('a teal FILLED disc scores negative (turret)', () => {
+    const f = annulusFeatures(mkMask(W, H, discOf), W, H, cx, cy, r);
+    expect(f.centerTeal).toBeGreaterThan(0.8);
+    expect(f.score).toBeLessThan(0); // center >> ring
+  });
+
+  test('empty mask scores ~0', () => {
+    const f = annulusFeatures(mkMask(W, H, () => false), W, H, cx, cy, r);
+    expect(f.ringTeal).toBe(0);
+    expect(f.score).toBe(0);
+  });
+});
+
+describe('ring-annulus thresholds', () => {
+  test('RING_TEAL_MIN is a tight fraction in (0, 0.5)', () => {
+    expect(RING_TEAL_MIN).toBeGreaterThan(0);
+    expect(RING_TEAL_MIN).toBeLessThan(0.5);
+  });
+  test('ANNULUS_MIN is a tight margin in (0, 0.3)', () => {
+    expect(ANNULUS_MIN).toBeGreaterThan(0);
+    expect(ANNULUS_MIN).toBeLessThan(0.3);
   });
 });
