@@ -37,8 +37,16 @@
         <label>Input Mode</label>
         <select id="input-mode">
           <option value="always">Always Open</option>
-          <option value="ptt">Push to Talk (F8)</option>
+          <option value="ptt">Push to Talk</option>
         </select>
+      </div>
+      <div class="setting-row">
+        <label title="Push-to-talk key. Default Caps Lock. The LED won't toggle (Discord-style synthetic flip-back).">PTT Key</label>
+        <button id="btn-bind-ptt" class="icon-btn">Caps Lock</button>
+      </div>
+      <div class="setting-row">
+        <label title="Optional toggle-self-mute hotkey. Click to bind a key; click again to clear.">Toggle-mute Key</label>
+        <button id="btn-bind-toggle" class="icon-btn">(unbound)</button>
       </div>
       <div class="setting-row">
         <label>Mic Volume</label>

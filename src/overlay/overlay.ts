@@ -16,6 +16,7 @@ import {
 } from '../services/devices';
 import { getForceTurnRelay, setForceTurnRelay } from '../services/privacy';
 import { computeDesiredHeight } from './resize-helpers';
+import { browserKeyToWin32Vk, humanizeVk } from '../core/keymap';
 import '../core/window-globals';
 
 // v0.3 (#11): dynamic overlay-window resize so the panel grows to fit
@@ -253,6 +254,82 @@ btnHearCrossTeam.addEventListener('click', () => {
   localStorage.setItem(HEAR_CROSS_TEAM_KEY, String(enabled));
   syncHearCrossTeamButton();
   sendToBackground('setHearCrossTeam', { enabled });
+});
+
+// v0.3 (#1): PTT + toggle-mute key rebind. The Rust WH_KEYBOARD_LL hook
+// reads the bound VK code from atomics it exposes via set_ptt_key /
+// set_toggle_key Tauri commands. UI pattern: click the button → "Press a
+// key..." prompt → capture next keydown → translate to Win32 VK → persist
+// + push to Rust.
+const PTT_VK_KEY = 'lolproxchat.pttVk';
+const TOGGLE_VK_KEY = 'lolproxchat.toggleVk';
+const DEFAULT_PTT_VK = 0x14;  // Caps Lock — matches Rust default
+const FORBIDDEN_CODES = new Set([
+  'Escape', 'Tab',
+  // Common LoL bindings — would conflict with gameplay even though our
+  // hook fires first.
+  'KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyD', 'KeyF', 'KeyB', 'KeyP',
+  // Modifier-only is bad UX (always pressed during typing combos)
+  'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight',
+  'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight',
+]);
+
+function setupBindButton(buttonId: string, storageKey: string, backgroundCmd: string, defaultVk: number | null): void {
+  const btn = document.getElementById(buttonId) as HTMLButtonElement;
+  if (!btn) return;
+  const stored = localStorage.getItem(storageKey);
+  const initialVk = stored !== null ? parseInt(stored, 10) : defaultVk;
+  if (initialVk !== null && !Number.isNaN(initialVk) && initialVk > 0) {
+    btn.textContent = humanizeVk(initialVk);
+  } else {
+    btn.textContent = '(unbound)';
+  }
+
+  btn.addEventListener('click', () => {
+    const originalText = btn.textContent || '(unbound)';
+    btn.textContent = 'Press a key…';
+    btn.classList.add('active');
+    btn.disabled = true;
+    const restore = (text: string) => {
+      btn.textContent = text;
+      btn.classList.remove('active');
+      btn.disabled = false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.removeEventListener('keydown', onKey, true);
+      if (e.code === 'Escape') {
+        restore(originalText);
+        return;
+      }
+      if (FORBIDDEN_CODES.has(e.code)) {
+        restore('(LoL/system key — pick another)');
+        setTimeout(() => restore(originalText), 1500);
+        return;
+      }
+      const vk = browserKeyToWin32Vk(e.code);
+      if (vk === null) {
+        restore('(key not supported)');
+        setTimeout(() => restore(originalText), 1500);
+        return;
+      }
+      localStorage.setItem(storageKey, String(vk));
+      sendToBackground(backgroundCmd, { vk });
+      restore(humanizeVk(vk));
+    };
+    window.addEventListener('keydown', onKey, true);
+  });
+}
+
+queueMicrotask(() => {
+  setupBindButton('btn-bind-ptt', PTT_VK_KEY, 'setPttKey', DEFAULT_PTT_VK);
+  setupBindButton('btn-bind-toggle', TOGGLE_VK_KEY, 'setToggleKey', null);
+  // Push any stored bindings to Rust on startup so user prefs survive restart.
+  const ptt = localStorage.getItem(PTT_VK_KEY);
+  if (ptt !== null) sendToBackground('setPttKey', { vk: parseInt(ptt, 10) });
+  const toggle = localStorage.getItem(TOGGLE_VK_KEY);
+  if (toggle !== null) sendToBackground('setToggleKey', { vk: parseInt(toggle, 10) });
 });
 
 btnDebug.addEventListener('click', () => {

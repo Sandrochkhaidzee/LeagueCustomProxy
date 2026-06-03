@@ -44,6 +44,14 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
     case 'setHearCrossTeam':
       orchestrator.setHearCrossTeamPref(payload.enabled === true);
       break;
+    case 'setPttKey':
+      invoke('set_ptt_key', { vk: payload.vk })
+        .catch((e) => console.warn('[Background] set_ptt_key failed:', e));
+      break;
+    case 'setToggleKey':
+      invoke('set_toggle_key', { vk: payload.vk })
+        .catch((e) => console.warn('[Background] set_toggle_key failed:', e));
+      break;
     case 'calibrationBounds':
       orchestrator.setMinimapCalibration(payload);
       break;
