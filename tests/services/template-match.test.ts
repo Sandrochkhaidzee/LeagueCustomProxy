@@ -3,6 +3,8 @@ import {
   circularMaskIndices,
   ncc,
   templateMatchScore,
+  ssim,
+  bestChampionMatch,
 } from '../../src/services/template-match';
 
 // Build a size×size RGBA array from a grayscale fill function f(x,y)->0..255.
@@ -101,5 +103,50 @@ describe('templateMatchScore', () => {
     const s = templateMatchScore(a, b, size);
     expect(s).toBeGreaterThanOrEqual(0);
     expect(s).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('ssim', () => {
+  const size = 16;
+  const idx = circularMaskIndices(size, 0);
+  const gray = (f: (x: number, y: number) => number) => toGrayscale(rgbaFrom(size, f), size, size);
+
+  test('identical patches → 1', () => {
+    const a = gray((x, y) => (x * 7 + y * 11) % 256);
+    expect(ssim(a, a, idx)).toBeCloseTo(1, 5);
+  });
+  test('a structured icon vs a flat minion dot scores low', () => {
+    const champ = gray((x, y) => (x * 13 + y * 5) % 256);
+    const minion = gray(() => 100);
+    expect(ssim(champ, minion, idx)).toBeLessThan(0.3);
+  });
+  test('mild brightness drop (fog) on the same structure stays well above 0.3', () => {
+    const a = gray((x, y) => 60 + ((x + y) * 6) % 180);
+    const darker = new Float32Array(a.length);
+    for (let i = 0; i < a.length; i++) darker[i] = a[i] * 0.6; // fog-of-war darkening
+    expect(ssim(a, darker, idx)).toBeGreaterThan(0.3);
+  });
+});
+
+describe('bestChampionMatch', () => {
+  const size = 16;
+  const idx = circularMaskIndices(size, 0);
+  const gray = (f: (x: number, y: number) => number) => toGrayscale(rgbaFrom(size, f), size, size);
+
+  test('picks the correct champion among several templates', () => {
+    const teemo = gray((x, y) => (x * 17) % 256);
+    const ahri = gray((x, y) => (y * 17) % 256);
+    const zed = gray((x, y) => ((x ^ y) * 9) % 256);
+    const templates = new Map([['Teemo', teemo], ['Ahri', ahri], ['Zed', zed]]);
+    // A blob that is Teemo's icon, slightly darkened
+    const blob = new Float32Array(teemo.length);
+    for (let i = 0; i < teemo.length; i++) blob[i] = teemo[i] * 0.7;
+    const m = bestChampionMatch(blob, templates, idx);
+    expect(m?.name).toBe('Teemo');
+    expect(m!.score).toBeGreaterThan(0.3);
+  });
+
+  test('returns null for empty template set', () => {
+    expect(bestChampionMatch(gray(() => 1), new Map(), idx)).toBeNull();
   });
 });

@@ -111,3 +111,65 @@ export function templateMatchScore(
   const r = ncc(a, b, idx);
   return (r + 1) / 2;
 }
+
+// SSIM constants for 8-bit dynamic range (L=255): c1=(0.01L)², c2=(0.03L)².
+const SSIM_C1 = (0.01 * 255) ** 2; // 6.5025
+const SSIM_C2 = (0.03 * 255) ** 2; // 58.5225
+
+/**
+ * Global structural similarity (SSIM) between two grayscale arrays over the
+ * given indices. This is the metric the shipped LOL_Minimap_Tracker uses
+ * (skimage `structural_similarity` on grayscale); we compute a single global
+ * window over the circular mask, which is a good approximation for small
+ * (~32px) icons. Range ≈ [-1, 1], 1 = identical.
+ *
+ * SSIM combines luminance, contrast and structure terms and is more
+ * discriminative than raw NCC for icon matching, while staying brightness/
+ * contrast tolerant — important under fog-of-war darkening.
+ */
+export function ssim(a: Float32Array, b: Float32Array, indices: number[]): number {
+  const n = indices.length;
+  if (n === 0) return 0;
+  let meanA = 0, meanB = 0;
+  for (const i of indices) { meanA += a[i]; meanB += b[i]; }
+  meanA /= n; meanB /= n;
+  let varA = 0, varB = 0, cov = 0;
+  for (const i of indices) {
+    const da = a[i] - meanA;
+    const db = b[i] - meanB;
+    varA += da * da; varB += db * db; cov += da * db;
+  }
+  // Population variance/covariance (divide by n).
+  varA /= n; varB /= n; cov /= n;
+  const num = (2 * meanA * meanB + SSIM_C1) * (2 * cov + SSIM_C2);
+  const den = (meanA * meanA + meanB * meanB + SSIM_C1) * (varA + varB + SSIM_C2);
+  return den === 0 ? 0 : num / den;
+}
+
+export interface ChampionMatch {
+  name: string;
+  score: number; // raw SSIM, ≈[-1,1]
+}
+
+/**
+ * Best champion match for a blob crop: SSIM against every known champion
+ * template, returning the highest-scoring name + score (LOL_Minimap_Tracker's
+ * "highest score wins" selection). The caller applies the acceptance threshold
+ * (~0.3 raw SSIM — real in-game matches are weak under fog/borders/compression)
+ * and/or checks whether the LOCAL champion is the winner for self-tracking.
+ *
+ * `templates` maps champion name → grayscale Float32Array of the same size as
+ * `blobGray`. Pure + testable.
+ */
+export function bestChampionMatch(
+  blobGray: Float32Array,
+  templates: Map<string, Float32Array>,
+  indices: number[],
+): ChampionMatch | null {
+  let best: ChampionMatch | null = null;
+  for (const [name, tpl] of templates) {
+    const s = ssim(blobGray, tpl, indices);
+    if (!best || s > best.score) best = { name, score: s };
+  }
+  return best;
+}
