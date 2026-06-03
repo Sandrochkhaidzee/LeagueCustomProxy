@@ -235,7 +235,7 @@ describe('computeTieredVolumes (v0.3 path)', () => {
     expect(result.peerVolumes.OtherFar).toBeGreaterThan(0);
   });
 
-  it('skips stale and missing positions', () => {
+  it('skips stale and missing positions for CROSS-TEAM peers', () => {
     const result = computeTieredVolumes(
       { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
       makeGetter([
@@ -246,6 +246,23 @@ describe('computeTieredVolumes (v0.3 path)', () => {
     );
     expect(result.peerVolumes.NoPos).toBeUndefined();
     expect(result.peerVolumes.StalePos).toBeUndefined();
+  });
+
+  it('ALLIES stay at 1.0 even with stale or missing positions (by design — no team-voice proximity)', () => {
+    // Allies in SCANNING or long-hold haven't reported coords recently but
+    // are still actively transmitting voice. The "team voice always full"
+    // design intent is to keep them audible regardless. See comment in
+    // computeTieredVolumes for the full reasoning.
+    const result = computeTieredVolumes(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      makeGetter([
+        { name: 'Me', team: 'ORDER', hearCrossTeam: false, position: { x: 0, y: 0, updatedMs: Date.now() } },
+        { name: 'AllyNoPos',    team: 'ORDER' },
+        { name: 'AllyStalePos', team: 'ORDER', position: { x: 100, y: 0, updatedMs: Date.now() - 30_000 } },
+      ]),
+    );
+    expect(result.peerVolumes.AllyNoPos).toBe(1.0);
+    expect(result.peerVolumes.AllyStalePos).toBe(1.0);
   });
 
   it('returns empty myBlob (v0.2+ shape)', () => {

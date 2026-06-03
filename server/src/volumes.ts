@@ -285,6 +285,13 @@ export function computeTieredVolumes(
     if (peer.name === me.name) continue;
 
     if (!legacy && peer.team === me.team) {
+      // INTENTIONAL: skip the staleness check for allies. Team voice is
+      // "always full volume, no proximity" by design (allies already see
+      // each other on the minimap, and an ally in SCANNING / long-hold
+      // hasn't reported coords recently but is still actively transmitting
+      // audio — we want them audible). A peer who's truly gone is removed
+      // from the room by RoomManager.leave on socket close; until then,
+      // 1.0 is harmless because no audio is flowing from a dead WebRTC peer.
       peerVolumes[peer.name] = 1.0;
       continue;
     }
