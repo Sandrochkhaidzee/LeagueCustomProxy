@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.4.3] — 2026-06-03
+
+### Fixed
+- **Champion tracking dropped the icon intermittently ("clinging" / loss-of-lock), and was fragile across different in-game display settings.** The minimap color detection that finds your champion's ring was tuned with absolute RGB thresholds that assumed a *dark* teal — but analysis of real harvested icon crops showed the ally ring is actually a *bright* cyan, so the old test rejected ~80% of the ring and left the tracker frequently losing it. Rewrote detection in **HSV**, keying on the cyan/red *hue* (which is stable under brightness/contrast/gamma) with loose saturation/value floors. On the real crops this detects ~4-5× more of the ring per frame and stays robust across simulated gamma (0.7–1.5) and saturation (60%) shifts, where the old RGB threshold collapsed. This should noticeably reduce loss-of-lock for everyone, regardless of their League brightness/contrast/gamma settings.
+
 ## [v0.4.2] — 2026-06-03
 
 ### Added
@@ -273,7 +278,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.3...HEAD
+[v0.4.3]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.3
 [v0.4.2]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.2
 [v0.4.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.0
