@@ -8,6 +8,11 @@ import {
   pickBestBlobInRange,
   pickClassifierReacquisition,
   ScoreFns,
+  // v0.3: CV tracking tweaks driven by IXAM's v0.1.33 issue #7 logs
+  nextClassifierEma,
+  shouldForceReacquisition,
+  FORCED_REACQUIRE_HOLD_MS,
+  shouldAcceptLocked,
 } from './tracking-helpers';
 
 export enum TrackingState {
@@ -112,6 +117,28 @@ export class TrackingService {
 
   getState(): TrackingState { return this.state; }
   getLastPosition(): Position | null { return this.lastPosition; }
+  /**
+   * v0.3: ms since the last SCANNING→LOCKED transition (0 if currently
+   * SCANNING). Used by orchestrator.positionTickInner to suppress coords
+   * broadcasts for the first few seconds after a fresh lock — better silent
+   * than broadcasting fountain coords for a LOCK that turned out wrong.
+   */
+  getMsSinceLocked(): number {
+    if (this.state !== TrackingState.LOCKED) return 0;
+    return performance.now() - this.scanStartMs;
+  }
+  /**
+   * v0.3: highest classifier-EMA score across all currently-known blobs.
+   * Used as a confidence signal — if it's near 0 right after a LOCK,
+   * the LOCK is probably wrong (composite agreed but classifier didn't).
+   */
+  getClassifierEma(): number {
+    let max = 0;
+    for (const v of this.classifierScores.values()) {
+      if (v > max) max = v;
+    }
+    return max;
+  }
 
   // Single chokepoint for lastPosition writes so we can flag impossible
   // jumps (recall/TP is fine; CV mis-tracking the icon to a wrong location
@@ -332,7 +359,7 @@ export class TrackingService {
         }
 
         const smoothed = priorSmoothed >= 0
-          ? priorSmoothed * (1 - EMA_ALPHA) + norm * EMA_ALPHA
+          ? nextClassifierEma(priorSmoothed, norm, 1 - EMA_ALPHA)
           : norm; // first observation: use raw normalized
         this.classifierScores.set(key, smoothed);
       }
@@ -866,6 +893,8 @@ export class TrackingService {
 
     let bestBlob = tealBlobs[0];
     let bestScore = -Infinity;
+    let bestRawCls = 0;
+    let bestEmaCls = 0;
 
     for (const b of tealBlobs) {
       const peerScore = this.peerAvoidanceScore(b);
@@ -880,7 +909,31 @@ export class TrackingService {
       if (score > bestScore) {
         bestScore = score;
         bestBlob = b;
+        bestEmaCls = clsScore;
+        // Raw score isn't tracked separately at this site; the EMA value IS
+        // the smoothed-from-raw signal we have. For the LOCKED-accept gate,
+        // pass it through as both candidateRawScore and classifierEma so a
+        // first-frame high score (priorSmoothed=-1 → norm path) still
+        // satisfies the "confident raw" branch.
+        bestRawCls = clsScore;
       }
+    }
+
+    // v0.3: refuse SCANNING→LOCKED on a candidate the classifier doesn't
+    // back up. IXAM's v0.1.33 logs (issue #7) showed composite=0.42 +
+    // classifier=0.00 transitions that immediately held for 8+ seconds —
+    // the LOCK was on the wrong icon. Without classifier (e.g. ONNX load
+    // failed), fall through to the legacy composite-only path so we don't
+    // freeze the user out entirely.
+    if (hasClassifier && !shouldAcceptLocked({
+      compositeScore: bestScore,
+      classifierEma: bestEmaCls,
+      candidateRawScore: bestRawCls,
+    })) {
+      if (this.onPositionUpdate && this.lastPosition) {
+        this.onPositionUpdate(this.lastPosition);
+      }
+      return;
     }
 
     this.lockOnBlob(bestBlob, 'composite(score=' + bestScore.toFixed(2) + ')');
@@ -931,6 +984,21 @@ export class TrackingService {
     region: { x: number; y: number; width: number; height: number },
   ): void {
     if (!this.lastPixelPos || !this.minimapRegion) return;
+
+    // v0.3: bail out of LOCKED if we've been holding too long. Extrapolated
+    // position past ~5s is essentially noise; better to drop back to SCANNING
+    // and let the classifier re-acquire from scratch. IXAM's v0.1.33 logs
+    // (issue #7) showed holds up to 44s with phantom coords flowing the
+    // whole time.
+    if (shouldForceReacquisition(this.holdStartMs, performance.now())) {
+      console.warn('[Tracking] Hold exceeded ' + FORCED_REACQUIRE_HOLD_MS +
+        'ms — forcing re-acquisition (back to SCANNING)');
+      this.state = TrackingState.SCANNING;
+      this.holdStartMs = 0;
+      this.scanFrameCount = 0;
+      this.scanStartMs = performance.now();
+      return;
+    }
 
     const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
     const hasClassifier = !!(this.classifier && this.classifier.isLoaded());

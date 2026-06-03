@@ -127,3 +127,59 @@ export function pickClassifierReacquisition(
   }
   return best;
 }
+
+// ---------- v0.3 tracking tweaks (driven by IXAM's v0.1.33 issue #7 logs) ----------
+
+/**
+ * After this many ms of continuous hold, extrapolated position is essentially
+ * noise — the player could be anywhere. Force a drop back to SCANNING-style
+ * classifier-driven full-minimap search rather than continuing to extend the
+ * search box. IXAM's v0.1.33 logs showed 44-second holds during which the
+ * orchestrator was sending phantom coords; 5s is the budget for "tracking
+ * should have recovered by now or it's time to start over."
+ */
+export const FORCED_REACQUIRE_HOLD_MS = 5000;
+
+export function shouldForceReacquisition(holdStartMs: number, nowMs: number): boolean {
+  if (holdStartMs === 0) return false;
+  return (nowMs - holdStartMs) >= FORCED_REACQUIRE_HOLD_MS;
+}
+
+/**
+ * Classifier-EMA with recovery. Standard EMA decays current toward raw, but
+ * if `raw` exceeds `current` we snap to `raw` instead. Prevents a couple of
+ * poisoned-to-0 samples from leaving the EMA stuck at 0 for the rest of the
+ * session (IXAM v0.1.33 logs: classifier ema stayed at 0.00 for a full
+ * 4-minute game). A single confident hit can pull the EMA all the way back up.
+ */
+export function nextClassifierEma(currentEma: number, raw: number, decay: number): number {
+  if (raw > currentEma) return raw;
+  return currentEma * decay + raw * (1 - decay);
+}
+
+// Thresholds for accepting a SCANNING→LOCKED transition. Tuned so a
+// reasonable composite score alone isn't enough — IXAM's v0.1.33 logs
+// showed composite=0.42 + classifier=0.00 transitions immediately followed
+// by long holds (the LOCK was on the wrong icon).
+const MIN_COMPOSITE_FOR_LOCKED = 0.3;
+const MIN_CLASSIFIER_EMA_FOR_LOCKED = 0.3;
+const CONFIDENT_RAW_FOR_LOCKED = 0.6;
+
+export interface LockedCandidate {
+  compositeScore: number;
+  classifierEma: number;
+  candidateRawScore: number;
+}
+
+/**
+ * Accept SCANNING→LOCKED transition only when both heuristic (composite)
+ * and classifier evidence agree, OR when the candidate has a high raw
+ * classifier score (which validates this specific blob regardless of
+ * EMA history — e.g. on first lock-in of the session before the EMA has
+ * accumulated).
+ */
+export function shouldAcceptLocked(c: LockedCandidate): boolean {
+  if (c.compositeScore < MIN_COMPOSITE_FOR_LOCKED) return false;
+  if (c.candidateRawScore >= CONFIDENT_RAW_FOR_LOCKED) return true;
+  return c.classifierEma >= MIN_CLASSIFIER_EMA_FOR_LOCKED;
+}

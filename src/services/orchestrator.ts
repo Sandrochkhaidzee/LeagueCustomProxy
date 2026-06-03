@@ -335,6 +335,19 @@ export class Orchestrator {
       return;
     }
 
+    // v0.3: also suppress coords for the first 3s after a fresh LOCK when
+    // classifier EMA is near zero. The shouldAcceptLocked gate in tracking.ts
+    // catches the obvious "wrong-blob LOCK" case, but if it slips through
+    // (e.g. classifier just hadn't accumulated yet) we still don't want to
+    // broadcast fountain coords for 30s while the player's actual position
+    // diverges. IXAM v0.1.33 (#7) showed this happening even with the
+    // hold-gate in place because a bad LOCK can hold position without
+    // entering the hold state.
+    if (this.tracking.getMsSinceLocked() < 3000 && this.tracking.getClassifierEma() < 0.1) {
+      this.broadcastOverlayState();
+      return;
+    }
+
     // Push our latest XY to server-side room state. /compute-volumes reads
     // every peer's stored position from there — no more P2P blob exchange.
     this.signaling.sendCoords(position.x, position.y);

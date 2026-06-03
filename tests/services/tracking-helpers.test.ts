@@ -5,6 +5,10 @@ import {
   pickBestBlobInRange,
   pickClassifierReacquisition,
   CLS_FOLLOW_THRESHOLD,
+  shouldForceReacquisition,
+  FORCED_REACQUIRE_HOLD_MS,
+  nextClassifierEma,
+  shouldAcceptLocked,
 } from '../../src/services/tracking-helpers';
 import type { Blob } from '../../src/services/blob-types';
 
@@ -168,5 +172,62 @@ describe('pickClassifierReacquisition', () => {
 
   test('empty input returns null', () => {
     expect(pickClassifierReacquisition([], 0.5, () => 1.0)).toBeNull();
+  });
+});
+
+// ---------- v0.3 tracking tweaks (issue #7 root-cause fixes) ----------
+
+describe('shouldForceReacquisition', () => {
+  test('returns false when no hold is active (holdStartMs === 0)', () => {
+    expect(shouldForceReacquisition(0, 1_000_000)).toBe(false);
+  });
+  test('returns false for hold below the threshold', () => {
+    expect(shouldForceReacquisition(1000, 1000 + FORCED_REACQUIRE_HOLD_MS - 1)).toBe(false);
+  });
+  test('returns true at exactly the threshold', () => {
+    expect(shouldForceReacquisition(1000, 1000 + FORCED_REACQUIRE_HOLD_MS)).toBe(true);
+  });
+  test('returns true for hold far past threshold (44-second IXAM-log case)', () => {
+    expect(shouldForceReacquisition(1000, 1000 + 44_000)).toBe(true);
+  });
+});
+
+describe('nextClassifierEma', () => {
+  test('decays toward 0 on a 0 sample (existing EMA behavior)', () => {
+    // 0.5 * 0.7 + 0 * 0.3 = 0.35
+    expect(nextClassifierEma(0.5, 0, 0.7)).toBeCloseTo(0.35, 5);
+  });
+  test('snaps to raw when raw exceeds current (recovery from poisoned EMA)', () => {
+    // The IXAM-log case: EMA stuck at 0, a confident raw arrives — must jump,
+    // not crawl back over many ticks.
+    expect(nextClassifierEma(0, 0.8, 0.7)).toBe(0.8);
+  });
+  test('snaps to raw even on tiny exceedance', () => {
+    expect(nextClassifierEma(0.5, 0.5001, 0.7)).toBe(0.5001);
+  });
+  test('standard EMA when raw is below current', () => {
+    // 0.6 * 0.7 + 0.4 * 0.3 = 0.42 + 0.12 = 0.54
+    expect(nextClassifierEma(0.6, 0.4, 0.7)).toBeCloseTo(0.54, 5);
+  });
+});
+
+describe('shouldAcceptLocked', () => {
+  test('accepts when both composite and classifier EMA are confident', () => {
+    expect(shouldAcceptLocked({ compositeScore: 0.6, classifierEma: 0.5, candidateRawScore: 0.7 })).toBe(true);
+  });
+  test('accepts on high candidate raw score even with low EMA (first-lock case)', () => {
+    expect(shouldAcceptLocked({ compositeScore: 0.4, classifierEma: 0.0, candidateRawScore: 0.8 })).toBe(true);
+  });
+  test('rejects composite-only when classifier says no (IXAM-log case)', () => {
+    // composite=0.42 (above min), classifier=0.0, raw=0.0 → reject.
+    // This is the "v0.1.33 LOCKED on the wrong icon then held for 8s" pattern.
+    expect(shouldAcceptLocked({ compositeScore: 0.42, classifierEma: 0.0, candidateRawScore: 0.0 })).toBe(false);
+  });
+  test('rejects when composite is too low even with confident classifier', () => {
+    expect(shouldAcceptLocked({ compositeScore: 0.1, classifierEma: 0.5, candidateRawScore: 0.7 })).toBe(false);
+  });
+  test('rejects when composite is exactly at the floor (use > not >=)', () => {
+    // 0.299 is below 0.3 floor — must reject
+    expect(shouldAcceptLocked({ compositeScore: 0.299, classifierEma: 0.5, candidateRawScore: 0.0 })).toBe(false);
   });
 });
