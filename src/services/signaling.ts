@@ -27,6 +27,11 @@ export class SignalingService {
   private localName: string = '';
   // Saved so reconnect can rejoin the same room with the same identity
   private currentRoomId: string | null = null;
+  // v0.3: team + hearCrossTeam preference. team is fixed for the session
+  // (sent on join); hearCrossTeam piggybacks on every coords message so
+  // toggle changes pick up within ~100ms without a separate WSS message.
+  private currentTeam: 'ORDER' | 'CHAOS' | null = null;
+  private currentHearCrossTeam = false;
   private currentHandlers: {
     onPeerPosition: OnPeerPosition;
     onSignal: OnSignal;
@@ -40,6 +45,8 @@ export class SignalingService {
   joinRoom(
     roomId: string,
     localName: string,
+    team: 'ORDER' | 'CHAOS',
+    hearCrossTeam: boolean,
     onPeerPosition: OnPeerPosition,
     onSignal: OnSignal,
     onPeerLeave: OnPeerLeave,
@@ -47,6 +54,8 @@ export class SignalingService {
   ): void {
     this.localName = localName;
     this.currentRoomId = roomId;
+    this.currentTeam = team;
+    this.currentHearCrossTeam = hearCrossTeam;
     this.currentHandlers = { onPeerPosition, onSignal, onPeerLeave, onPeerJoined };
     this.intentionallyClosed = false;
     this.reconnectAttempt = 0;
@@ -66,10 +75,13 @@ export class SignalingService {
     const ws = new WebSocket(WS_URL);
     this.ws = ws;
 
+    const team = this.currentTeam;
+
     ws.addEventListener('open', () => {
       console.log('[Signaling] WebSocket connected');
       this.reconnectAttempt = 0;
-      ws.send(JSON.stringify({ type: 'join', room: roomId, name: localName }));
+      // v0.3: include team in join. Older servers ignore the extra field.
+      ws.send(JSON.stringify({ type: 'join', room: roomId, name: localName, team }));
     });
 
     ws.addEventListener('message', (event) => {
@@ -167,12 +179,24 @@ export class SignalingService {
   /**
    * v0.2: send the local player's XY coordinates to the server, where they
    * land in the room state and feed the next /compute-volumes request.
-   * Replaces the encrypted-blob-over-WebRTC-data-channel exchange.
+   * v0.3: also carries `hearCrossTeam` so the server picks up Settings
+   * toggle changes within one tick. Older servers ignore the extra field.
    */
   sendCoords(x: number, y: number): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'coords', x, y }));
+      this.ws.send(JSON.stringify({
+        type: 'coords', x, y,
+        hearCrossTeam: this.currentHearCrossTeam,
+      }));
     }
+  }
+
+  /**
+   * v0.3: update the cross-team-hearing preference. Takes effect on the
+   * next coords tick (~100ms). No-op if not in a room.
+   */
+  setHearCrossTeam(enabled: boolean): void {
+    this.currentHearCrossTeam = enabled;
   }
 
   /** Current room ID + local player name, for HTTP requests that need them
@@ -199,6 +223,8 @@ export class SignalingService {
       this.reconnectTimer = null;
     }
     this.currentRoomId = null;
+    this.currentTeam = null;
+    this.currentHearCrossTeam = false;
     this.currentHandlers = null;
     if (this.ws) {
       try { this.ws.close(); } catch { /* ignore */ }
