@@ -180,6 +180,18 @@ echo "" | openssl s_client -connect turn.your-domain.com:5349 \
 #   Verification: OK
 ```
 
+## Updating an existing deployment
+
+If your remote is a hand-synced directory of `server/` files (rather than a `git` checkout on the host), **updates are a file-sync, not a `git pull`** — and a partial sync silently runs stale code. This bit us in production: the v0.2.0 / v0.2.1 server upgrades never landed because the sync missed the new files, so every v0.2.x client talked to a v0.1 server and got empty proximity volumes with no error.
+
+Use [`scripts/deploy-server.sh`](../scripts/deploy-server.sh) to do it safely. It builds + tests locally first, backs up the remote source, syncs **all** of `server/src/` plus the build files, rebuilds the container, and then verifies the new code is actually serving (a v0.3+ server returns `myBlob:""` for a room-shaped `/compute-volumes` request; a stale v0.1 server would return a non-empty blob — the exact tell that hid the missed upgrade). It never touches the remote `docker-compose.yml`, so your secrets stay put.
+
+```bash
+PROXCHAT_DEPLOY_HOST=root@your-host \
+PROXCHAT_DEPLOY_PATH=/path/to/proxchat-server \
+./scripts/deploy-server.sh
+```
+
 ## Operational notes
 
 - **The encryption key (if you set one) is unrotatable in practice while v0.1.x clients are connected.** Treat it like a password manager secret. Rotating it breaks every legacy client's in-flight position blob the moment the new key is live; v0.2+ clients are unaffected since they don't use it.
