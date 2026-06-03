@@ -76,7 +76,7 @@ For the rest — every Settings toggle, troubleshooting, log-grab flow, uninstal
 ## How it works (in 5 bullets)
 
 1. **Game detection** — reads the LCU and Live Client Data APIs for game phase + player roster. No memory reads, no injection.
-2. **Position** — Win32 BitBlt of the minimap region + HSV color filter + blob detection + ONNX champion classifier locates your champion icon. Position is in game coordinates.
+2. **Position** — Win32 BitBlt of the minimap region + HSV color filter + blob detection locates champion icons; since v0.4 each blob is identified by **SSIM template matching** against the 10 actual champion icons in your game (fetched from Riot's Data Dragon at game start), with the older ONNX classifier kept only as an offline fallback. Position is in game coordinates.
 3. **Signaling** — players in the same match join a deterministic WebSocket room (room ID = hash of sorted player names) on a self-hosted Node server.
 4. **Voice** — WebRTC peer-to-peer audio between players (Opus 128 kbps, DTLS-SRTP). No audio touches any server.
 5. **Proximity volume** — each client streams its XY coordinates to the signaling server (over the same WebSocket used for presence/signaling); the server computes pairwise volumes for everyone in the room. Since v0.3: **team voice is always full volume** (no proximity), **cross-team voice is capped at ~600 game units** (auto-attack range) by default — Settings has a toggle to extend it to ~1200 (champion vision range). Server-enforced — a modified client cannot bypass the team filter or range cap. Clients only ever receive `{ peerName: volume }`, never another peer's raw position.
@@ -101,8 +101,9 @@ Champion icon assets from the [League of Legends Wiki](https://wiki.leagueoflege
 
 ## Acknowledgements
 
+- [LOL_Minimap_Tracker](https://github.com/Quinntana/LOL_Minimap_Tracker) — the SSIM template-matching approach the v0.4 champion tracker is based on
 - [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) — reference code for minimap detection
-- [League of Legends Wiki](https://wiki.leagueoflegends.com) — champion icon assets used for classifier training
+- [League of Legends Wiki](https://wiki.leagueoflegends.com) — champion icon assets used to train the ONNX classifier (retained only as an offline fallback since v0.4; primary tracking now matches Riot Data Dragon icons)
 - [Tauri](https://tauri.app) — desktop app framework
 - Cloudflare Realtime TURN — managed TURN relay infrastructure
 - Every user who's filed an issue or attached a log — your reports made this app actually work.
