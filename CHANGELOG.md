@@ -4,6 +4,23 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.4.0] — 2026-06-03
+
+### Changed
+- **Champion tracking now matches against the actual champions in your game instead of a trained classifier.** At game start the app fetches the 10 match champions' icons from Riot's Data Dragon CDN and identifies minimap blobs by **SSIM template matching** against them, rather than running a 172-class neural classifier on every frame. This is the v0.4 CV overhaul ([research + rationale](docs/plans/2026-06-03-cv-tracking-research.md)), and it directly targets the failures seen in real games:
+  - **No more clinging to minions and structures** — a minion dot or turret icon has essentially zero structural similarity to a champion portrait, so it's rejected outright. The old classifier had to actively distinguish them and often failed.
+  - **No per-champion weak spots** — every champion is matched against its own real icon, so there's no "the classifier is bad at Teemo" failure. (The tricky names that broke the old classifier — Nunu & Willump, Dr. Mundo, Wukong — resolve natively.)
+  - **Closes the synthetic-to-real gap** — matching against the real in-game-derived icon removes the "trained on clean wiki art" mismatch entirely.
+  - **Lighter** — SSIM against 10 templates is far cheaper than a 172-class CNN per frame; the neural model is off the hot path.
+- Approach ported from the open-source [LOL_Minimap_Tracker](https://github.com/Quinntana/LOL_Minimap_Tracker) (grayscale SSIM, best-of-N selection, low acceptance threshold).
+
+### Fixed
+- (carried in v0.3.1) Stuck-gain proximity bug + reverted CV-tuning regressions.
+
+### Notes
+- The 172-class ONNX classifier is retained only as a **fallback** for when the icon fetch fails (offline / CDN down). It will be removed in a future release once template matching is proven in the wild — please report tracking behavior.
+- Requires a one-time per-game fetch of ~10 small icons from `ddragon.leagueoflegends.com`.
+
 ## [v0.3.1] — 2026-06-03
 
 ### Fixed
@@ -243,7 +260,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.0...HEAD
+[v0.4.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.0
 [v0.3.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.3.1
 [v0.3.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.3.0
 [v0.2.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.2.1
