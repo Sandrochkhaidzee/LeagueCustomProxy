@@ -13,20 +13,6 @@ html, body {
   height: 100%;
 }
 
-/* Tracking dot — shows where CV thinks the local player is on the minimap */
-#tracking-dot {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  background: rgba(255, 40, 40, 0.9);
-  border: 1px solid #fff;
-  border-radius: 50%;
-  z-index: 15;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-  display: none;
-}
-
 /* Resize handles — currently visual-only, not wired to JS drag yet */
 .corner {
   position: absolute;

@@ -1,0 +1,14 @@
+{
+  "_comment": "Hand-labeled champion-vs-clutter crops from the 2026-06-03 CLEAN re-test (no red dot). Indices are into each champion's clean-session PNG list, sorted ascending by integer filename (epoch-ms), filtered to filename >= min_ts. Labeled by visual inspection of the contact sheets. Dead-timer / black / ambiguous crops are intentionally omitted from both sets. See docs/plans/2026-06-03-cv-ssim-primary-detection.md Phase 1.",
+  "Garen": {
+    "source": { "local_appdata": "com.proxchat.app/harvest/Garen", "min_ts": 1780472840333 },
+    "champion": [0, 1, 5, 6, 7, 8, 11, 24, 35, 36, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
+    "clutter":  [2, 12, 13, 25, 26, 27, 28, 29, 38, 39, 52, 53, 54, 55]
+  },
+  "Mordekaiser": {
+    "_relabel_note": "Re-labeled 2026-06-03 via teal/red ring+center breakdown. Earlier 'champion' guesses 1,2,15,29,30,31 were wrong: 2/15/29/30/31 carry red in the ring/center = ENEMY lock-ons; 1 is a turret. Only 0 (ring26/cen18) and 12 (ring15/cen8) are genuine ally-Morde crops — the tracker almost never found him (data-starved). Clutter folds in turrets (teal-filled), minion waves, terrain, and enemy-ring crops (all correctly score low on teal-annulus).",
+    "source": { "unc": "//192.168.0.220/Users/dant123/AppData/Local/com.proxchat.app/harvest/Mordekaiser", "min_ts": 1780472850554 },
+    "champion": [0, 12],
+    "clutter":  [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44]
+  }
+}
