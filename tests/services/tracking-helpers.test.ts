@@ -10,6 +10,7 @@ import {
   FORCED_REACQUIRE_HOLD_MS,
   nextClassifierEma,
   annulusFeatures,
+  bestRingInBlob,
   RING_TEAL_MIN,
   ANNULUS_MIN,
   FOLLOW_ANNULUS_FLOOR,
@@ -309,6 +310,45 @@ describe('annulusFeatures', () => {
     };
     const f = annulusFeatures(mkMask(W, H, ringOfFrac), W, H, fcx, fcy, fr);
     expect(f.score).toBeGreaterThan(0.3);
+  });
+});
+
+describe('bestRingInBlob', () => {
+  const W = 56, H = 44, iconR = 12;
+
+  // Blob whose bbox spans x:8..40, y:8..32 → centroid ~(24,20), but the teal RING
+  // is centered OFF that centroid at (28,20). The centroid sits inside the ring's
+  // hollow, so a centroid-only annulus would miss; scanning the bbox must land the
+  // best center on the actual ring (the merged-blob recovery case).
+  const ringCx = 28, ringCy = 20;
+  const ringOf = (x: number, y: number) => {
+    const d = Math.hypot(x - ringCx, y - ringCy);
+    return d >= 0.78 * iconR && d <= 1.0 * iconR; // thin teal ring at icon-radius edge
+  };
+  const offsetBlob: Blob = {
+    color: 'teal', pixels: 200, fillRatio: 0.3,
+    cx: 24, cy: 20, minX: 8, maxX: 40, minY: 8, maxY: 32,
+  };
+
+  test('finds the champion ring centered off the blob centroid', () => {
+    const m = mkMask(W, H, ringOf);
+    const r = bestRingInBlob(m, W, H, offsetBlob, iconR);
+    const step = Math.max(2, Math.round(iconR / 3)); // 4
+    expect(Math.abs(r.cx - ringCx)).toBeLessThanOrEqual(step);
+    expect(Math.abs(r.cy - ringCy)).toBeLessThanOrEqual(step);
+    expect(r.score).toBeGreaterThan(0.4);
+  });
+
+  test('a fully teal-FILLED blob yields no champion ring (best score <= 0)', () => {
+    // Turret core: a solid teal disc that fully encloses every candidate window in
+    // the blob's bbox. Every center band AND ring band is 100% teal, so ringTeal -
+    // centerTeal = 0 for all candidates — the scan can never fabricate a positive
+    // ring out of filled teal. Best score is exactly 0, far below the acquire gate
+    // (ANNULUS_MIN), so a filled turret is correctly rejected as "not a champion".
+    const disc = (x: number, y: number) => Math.hypot(x - offsetBlob.cx, y - offsetBlob.cy) <= 30;
+    const r = bestRingInBlob(mkMask(W, H, disc), W, H, offsetBlob, iconR);
+    expect(r.score).toBeLessThanOrEqual(0);
+    expect(r.score).toBeLessThan(ANNULUS_MIN);
   });
 });
 

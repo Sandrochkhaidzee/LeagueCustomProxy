@@ -24,8 +24,8 @@ import {
   FORCED_REACQUIRE_HOLD_MS,
   // v0.4 (Phase 2): champion ring/annulus shape signature — the primary
   // identity gate on the template path (replaces the dead SSIM/template gate).
-  annulusFeatures,
-  AnnulusFeatures,
+  bestRingInBlob,
+  RingMatch,
   RING_TEAL_MIN,
   ANNULUS_MIN,
   FOLLOW_ANNULUS_FLOOR,
@@ -92,7 +92,7 @@ export class TrackingService {
   // re-acquisition / lock so a wrong blob can't yank position across the map.
   private templateRawScores: Map<string, number> = new Map();
   // v0.4 (Phase 2): the RAW (un-dilated) teal classifier mask + its dims,
-  // captured each tick before dilation. annulusFeatures reads this — dilation
+  // captured each tick before dilation. bestRingInBlob/annulusFeatures read this — dilation
   // fills the ring's hollow center and wrecks the center-contrast signal, and
   // the Python validation used the raw classifier mask. mask[i]===1 means teal.
   private currentTealMask: Uint8Array | null = null;
@@ -637,17 +637,18 @@ export class TrackingService {
   }
 
   /**
-   * Champion ring/annulus shape features for a blob, measured on the RAW
+   * Best champion ring/annulus match WITHIN a blob, measured on the RAW
    * (un-dilated) teal mask captured this tick. A champion icon is a teal RING
    * with a non-teal portrait center (positive score); a turret is teal-filled
    * (negative score); minions/terrain have little ring teal. This is the
-   * primary identity gate on the template path (Phase 2). Radius is derived
-   * from the blob's bounding box (max side / 2), which may be fractional.
+   * primary identity gate on the template path (Phase 2). Scans candidate centers
+   * across the blob's bbox at the EXPECTED icon radius (not the blob's own,
+   * possibly-merged radius) — the returned cx/cy is the best ring center, which
+   * recovers a champion ring from a blob that merged with an adjacent icon/turret.
    */
-  private getAnnulus(b: Blob): AnnulusFeatures {
-    if (!this.currentTealMask) return { ringTeal: 0, centerTeal: 0, score: 0 };
-    const r = Math.max(b.maxX - b.minX + 1, b.maxY - b.minY + 1) / 2;
-    return annulusFeatures(this.currentTealMask, this.currentMaskW, this.currentMaskH, b.cx, b.cy, r);
+  private getRing(b: Blob): RingMatch {
+    if (!this.currentTealMask) return { cx: b.cx, cy: b.cy, ringTeal: 0, centerTeal: 0, score: 0 };
+    return bestRingInBlob(this.currentTealMask, this.currentMaskW, this.currentMaskH, b, this.expectedIconDiam / 2);
   }
 
   /**
@@ -1181,19 +1182,20 @@ export class TrackingService {
     // The composite path below is the classifier fallback (no templates loaded).
     if (this.hasTemplates()) {
       let best: Blob | null = null;
-      let bestAnn = -Infinity;
+      let bestRing: RingMatch | null = null;
       for (const b of tealBlobs) {
-        const a = this.getAnnulus(b);
-        if (a.ringTeal < RING_TEAL_MIN || a.score < ANNULUS_MIN) continue;
-        if (a.score > bestAnn) { bestAnn = a.score; best = b; }
-      }
-      if (!best) {
-        if (this.onPositionUpdate && this.lastPosition) {
-          this.onPositionUpdate(this.lastPosition);
+        const ring = this.getRing(b);
+        if (ring.ringTeal < RING_TEAL_MIN || ring.score < ANNULUS_MIN) continue;
+        if (!bestRing || ring.score > bestRing.score) {
+          bestRing = ring;
+          best = { ...b, cx: ring.cx, cy: ring.cy }; // lock at the ring center, not the (maybe merged) centroid
         }
+      }
+      if (!best || !bestRing) {
+        if (this.onPositionUpdate && this.lastPosition) this.onPositionUpdate(this.lastPosition);
         return;
       }
-      this.lockOnBlob(best, 'annulus(score=' + bestAnn.toFixed(2) + ')');
+      this.lockOnBlob(best, 'annulus(score=' + bestRing.score.toFixed(2) + ')');
       return;
     }
 
@@ -1328,8 +1330,17 @@ export class TrackingService {
     // minions/terrain (little ring teal) are filtered out entirely. This replaces
     // the dead SSIM/template-confidence gate on the hot path.
     if (this.hasTemplates()) {
-      // Annulus features per teal blob (reused for follow + reacquire).
-      const feats = tealBlobs.map(b => ({ b, a: this.getAnnulus(b) }));
+      // Refine each teal blob to its best champion-ring sub-match — recovers the
+      // ring from blobs merged with an adjacent icon/turret. The refined blob's
+      // cx/cy is the RING center, so follow distance + lock position use the ring,
+      // not the (possibly merged) centroid.
+      const ringOf = new Map<Blob, RingMatch>();
+      const refined: Blob[] = tealBlobs.map(b => {
+        const ring = this.getRing(b);
+        const rb: Blob = { ...b, cx: ring.cx, cy: ring.cy };
+        ringOf.set(rb, ring);
+        return rb;
+      });
 
       // Phase 1 (follow, LENIENT): once locked, the champion is near where it was
       // a frame ago. Track the nearest teal blob within the (bounded) jump radius
@@ -1338,10 +1349,10 @@ export class TrackingService {
       // break into arcs). FOLLOW_ANNULUS_FLOOR rejects only teal-FILLED turrets /
       // minion clumps, so if the champion truly leaves (recall/teleport/death) we
       // won't latch a turret nearby — we fall through to the strict reacquire.
-      const followable = feats.filter(c => c.a.score > FOLLOW_ANNULUS_FLOOR).map(c => c.b);
+      const followable = refined.filter(rb => ringOf.get(rb)!.score > FOLLOW_ANNULUS_FLOOR);
       const follow = pickBestBlobInRange(followable, lastReg, predicted, maxJumpPx, false, scoreFns);
       if (follow) {
-        const fa = feats.find(c => c.b === follow.blob)!.a;
+        const fr = ringOf.get(follow.blob)!;
         // Coasting guard: if we've trailed sub-acquire-confidence blobs for too
         // many frames in a row, the champion probably left — stop following and
         // let the strict reacquire below re-find it. A confident frame resets it.
@@ -1353,7 +1364,7 @@ export class TrackingService {
         // Mitigated (not solved) by nearest-to-PREDICTED + the capped jump radius (a
         // stationary decoy won't match a moving champion's velocity-projected point);
         // the real fix is viewport-anchored self-ID.
-        this.weakFollowFrames = fa.score >= ANNULUS_MIN ? 0 : this.weakFollowFrames + 1;
+        this.weakFollowFrames = fr.score >= ANNULUS_MIN ? 0 : this.weakFollowFrames + 1;
         if (this.weakFollowFrames < WEAK_FOLLOW_DROP) {
           this.finalizeLockedFrame(follow.blob, lastReg, holdSec);
           return;
@@ -1368,13 +1379,15 @@ export class TrackingService {
       // the intended follow-up for the recall-to-base / clustered case.
       this.weakFollowFrames = 0;
       if (this.holdStartMs === 0) this.holdStartMs = performance.now();
-      let best: { b: Blob; a: AnnulusFeatures } | null = null;
-      for (const c of feats) {
-        if (c.a.ringTeal < RING_TEAL_MIN || c.a.score < ANNULUS_MIN) continue;
-        if (!best || c.a.score > best.a.score) best = c;
+      let best: Blob | null = null;
+      let bestRing: RingMatch | null = null;
+      for (const rb of refined) {
+        const ring = ringOf.get(rb)!;
+        if (ring.ringTeal < RING_TEAL_MIN || ring.score < ANNULUS_MIN) continue;
+        if (!bestRing || ring.score > bestRing.score) { bestRing = ring; best = rb; }
       }
-      if (best) {
-        this.acquireViaClassifier(best.b, best.a.score, 'annulus');
+      if (best && bestRing) {
+        this.acquireViaClassifier(best, bestRing.score, 'annulus');
         return;
       }
 
