@@ -289,6 +289,20 @@ describe('annulusFeatures', () => {
     expect(f.ringTeal).toBe(0);
     expect(f.score).toBe(0);
   });
+
+  // Phase 2 derives r from a blob's bounding box: max(bw,bh)/2 frequently ends
+  // in .5 (e.g. a 23px box → r=11.5), and the blob center can be fractional too.
+  // Lock in the float-radius contract: a teal ring around a fractional center
+  // must still score clearly positive.
+  test('fractional radius + center: teal ring still scores strongly positive', () => {
+    const fcx = 20.5, fcy = 20.5, fr = 11.5;
+    const ringOfFrac = (x: number, y: number) => {
+      const d = Math.hypot(x - fcx, y - fcy);
+      return d >= 0.78 * fr && d <= 1.0 * fr;
+    };
+    const f = annulusFeatures(mkMask(W, H, ringOfFrac), W, H, fcx, fcy, fr);
+    expect(f.score).toBeGreaterThan(0.3);
+  });
 });
 
 describe('ring-annulus thresholds', () => {

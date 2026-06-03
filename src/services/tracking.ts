@@ -22,6 +22,12 @@ import {
   nextClassifierEma,
   shouldForceReacquisition,
   FORCED_REACQUIRE_HOLD_MS,
+  // v0.4 (Phase 2): champion ring/annulus shape signature — the primary
+  // identity gate on the template path (replaces the dead SSIM/template gate).
+  annulusFeatures,
+  AnnulusFeatures,
+  RING_TEAL_MIN,
+  ANNULUS_MIN,
 } from './tracking-helpers';
 
 export enum TrackingState {
@@ -83,6 +89,13 @@ export class TrackingService {
   // meaningful "is this really the champion?" signal — used to gate far
   // re-acquisition / lock so a wrong blob can't yank position across the map.
   private templateRawScores: Map<string, number> = new Map();
+  // v0.4 (Phase 2): the RAW (un-dilated) teal classifier mask + its dims,
+  // captured each tick before dilation. annulusFeatures reads this — dilation
+  // fills the ring's hollow center and wrecks the center-contrast signal, and
+  // the Python validation used the raw classifier mask. mask[i]===1 means teal.
+  private currentTealMask: Uint8Array | null = null;
+  private currentMaskW = 0;
+  private currentMaskH = 0;
   // EMA-smoothed scores to dampen single-frame misidentifications
   private smoothedClassifierScores: Map<string, number> = new Map();
   private lastClassifierRunMs = 0;
@@ -579,6 +592,20 @@ export class TrackingService {
   }
 
   /**
+   * Champion ring/annulus shape features for a blob, measured on the RAW
+   * (un-dilated) teal mask captured this tick. A champion icon is a teal RING
+   * with a non-teal portrait center (positive score); a turret is teal-filled
+   * (negative score); minions/terrain have little ring teal. This is the
+   * primary identity gate on the template path (Phase 2). Radius is derived
+   * from the blob's bounding box (max side / 2), which may be fractional.
+   */
+  private getAnnulus(b: Blob): AnnulusFeatures {
+    if (!this.currentTealMask) return { ringTeal: 0, centerTeal: 0, score: 0 };
+    const r = Math.max(b.maxX - b.minX + 1, b.maxY - b.minY + 1) / 2;
+    return annulusFeatures(this.currentTealMask, this.currentMaskW, this.currentMaskH, b.cx, b.cy, r);
+  }
+
+  /**
    * Look up a per-blob score, exact center first, else the closest cached
    * center within icon-diameter tolerance. Blob centers drift a pixel or two
    * frame-to-frame, so an exact key miss is normal.
@@ -999,6 +1026,12 @@ export class TrackingService {
             // Create filtered mask and find blobs
             const region = this.minimapRegion;
             let mask = this.createMask(imageData, region);
+            // Capture the RAW mask ref BEFORE dilation for annulus shape scoring
+            // (Task 2.2). dilate() returns a NEW array, so this stored ref keeps
+            // pointing at the un-dilated mask even after the reassignment below.
+            this.currentTealMask = mask;
+            this.currentMaskW = region.width;
+            this.currentMaskH = region.height;
             mask = this.dilate(mask, region.width, region.height);
             const allBlobs = this.findBlobs(mask, region.width, region.height);
             const iconBlobs = this.filterIconBlobs(allBlobs);
@@ -1088,6 +1121,33 @@ export class TrackingService {
       return;
     }
 
+    // v0.4 (Phase 2): on the template path, select the SCANNING→LOCK target by
+    // the champion RING/annulus shape signature instead of the position-blind
+    // composite. A champion icon is a teal ring with a non-teal portrait center
+    // (positive annulus score); turrets are teal-filled (negative); minions /
+    // terrain have little ring teal. Pick the strongest ring; if no blob clears
+    // the ring/score floors, hold (no champion visible — dead, fog, off-minimap)
+    // rather than locking onto a wrong blob and yanking position across the map.
+    // The composite path below is the classifier fallback (no templates loaded).
+    if (this.hasTemplates()) {
+      let best: Blob | null = null;
+      let bestAnn = -Infinity;
+      for (const b of tealBlobs) {
+        const a = this.getAnnulus(b);
+        if (a.ringTeal < RING_TEAL_MIN || a.score < ANNULUS_MIN) continue;
+        if (a.score > bestAnn) { bestAnn = a.score; best = b; }
+      }
+      if (!best) {
+        if (this.onPositionUpdate && this.lastPosition) {
+          this.onPositionUpdate(this.lastPosition);
+        }
+        return;
+      }
+      this.lockOnBlob(best, 'annulus(score=' + bestAnn.toFixed(2) + ')');
+      return;
+    }
+
+    // Classifier fallback (no per-game templates): position-dominated composite.
     let bestBlob = tealBlobs[0];
     let bestScore = -Infinity;
 
@@ -1112,22 +1172,12 @@ export class TrackingService {
     // the normal case for champions the 172-class classifier is weak on (e.g.
     // Teemo) — so the tracker refused to lock at all and never broadcast a
     // position. The classifier still contributes to the composite score above;
-    // it's just no longer a veto. The whole classifier-confidence path is being
-    // replaced by template matching in v0.4 (docs/plans/2026-06-03-cv-tracking-research.md).
+    // it's just no longer a veto.
     //
-    // v0.4.4: on the template path, refuse to lock onto a blob whose ABSOLUTE
-    // match confidence is too low — i.e. the champion isn't actually visible
-    // (dead, fog, off-minimap). Without this, a forced re-acquire (5s hold →
-    // SCANNING) would immediately re-lock onto whatever wrong blob scored best,
-    // re-introducing the cross-map position jump we just fixed in Phase 2.
-    // Safe here (but not for the old classifier) because template confidence is
-    // reliable — failing the gate means "keep scanning," never a wrong lock.
-    if (this.hasTemplates() && this.getTemplateRawScore(bestBlob) < REACQUIRE_TEMPLATE_MIN) {
-      if (this.onPositionUpdate && this.lastPosition) {
-        this.onPositionUpdate(this.lastPosition);
-      }
-      return;
-    }
+    // v0.4 (Phase 2): the old absolute template-raw-score gate that used to sit
+    // here was replaced by the annulus shape gate at the top of this method (the
+    // template path now returns from there). SSIM/template matching was proven
+    // dead on real 32px crops; ring shape is the validated discriminator.
     this.lockOnBlob(bestBlob, 'composite(score=' + bestScore.toFixed(2) + ')');
   }
 
@@ -1221,6 +1271,54 @@ export class TrackingService {
       peer: (b) => this.peerAvoidanceScore(b),
     };
 
+    // v0.4 (Phase 2): on the template path, the champion RING/annulus shape is
+    // the primary identity gate. Only blobs that look like a champion icon (teal
+    // ring, non-teal portrait center) are eligible — turrets (teal-filled) and
+    // minions/terrain (little ring teal) are filtered out entirely. This replaces
+    // the dead SSIM/template-confidence gate on the hot path.
+    if (this.hasTemplates()) {
+      const champs = tealBlobs.filter(b => {
+        const a = this.getAnnulus(b);
+        return a.ringTeal >= RING_TEAL_MIN && a.score >= ANNULUS_MIN;
+      });
+
+      if (champs.length > 0) {
+        // Phase 1 (follow): nearest champion-ring blob within jump range of the
+        // predicted point. hasClassifier=false → pure nearest-in-range (position
+        // decides among already shape-validated champions; no classifier veto).
+        const follow = pickBestBlobInRange(champs, lastReg, predicted, maxJumpPx, false, scoreFns);
+        if (follow) {
+          this.finalizeLockedFrame(follow.blob, lastReg, holdSec);
+          return;
+        }
+
+        // Phase 2 (reacquire): none in range — snap to the strongest champion
+        // ring anywhere on the minimap (teleport, respawn, camera pan, overlap).
+        if (this.holdStartMs === 0) this.holdStartMs = performance.now();
+        let best: Blob | null = null;
+        let bestFeat: AnnulusFeatures = { ringTeal: 0, centerTeal: 0, score: -Infinity };
+        for (const b of champs) {
+          const a = this.getAnnulus(b);
+          if (a.score > bestFeat.score) { bestFeat = a; best = b; }
+        }
+        if (best) {
+          console.log('[Tracking] Re-acquiring via annulus (score=' + bestFeat.score.toFixed(2) +
+            ', ringTeal=' + bestFeat.ringTeal.toFixed(2) + ')');
+          this.acquireViaClassifier(best, bestFeat.score);
+          return;
+        }
+      }
+
+      // No champion-ring blob this frame → fall through to extrapolate (Phase 3).
+      if (this.lockedTickCount === 0) {
+        console.log('[Tracking] Extrapolating position (no champion-ring blob)');
+        this.holdStartMs = performance.now();
+      }
+      this.extrapolatePosition(region);
+      return;
+    }
+
+    // Classifier fallback (no per-game templates loaded) — original Phase 1/2/3.
     // Phase 1: nearest in-range blob with composite scoring
     const phase1 = pickBestBlobInRange(tealBlobs, lastReg, predicted, maxJumpPx, hasClassifier, scoreFns);
 
@@ -1229,13 +1327,7 @@ export class TrackingService {
       if (this.holdStartMs === 0) this.holdStartMs = performance.now();
       const stationarySec = this.lastMovementMs > 0 ? (now - this.lastMovementMs) / 1000 : 0;
       const reacquireThreshold = computeReacquireThreshold(stationarySec, holdSec);
-      // On the template path, also require absolute match confidence so a far
-      // wrong blob (minion, ally icon) can't win the relative score and yank
-      // position across the map. Classifier fallback keeps the old behavior.
-      const absGate = this.hasTemplates()
-        ? { scoreFn: (b: Blob) => this.getTemplateRawScore(b), min: REACQUIRE_TEMPLATE_MIN }
-        : undefined;
-      const phase2 = pickClassifierReacquisition(tealBlobs, reacquireThreshold, scoreFns.cls, absGate);
+      const phase2 = pickClassifierReacquisition(tealBlobs, reacquireThreshold, scoreFns.cls);
       if (phase2) {
         this.acquireViaClassifier(phase2.blob, phase2.score);
         return;

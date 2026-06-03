@@ -201,8 +201,13 @@ export interface AnnulusFeatures { ringTeal: number; centerTeal: number; score: 
  * A champion icon is an ally-teal RING with a non-teal portrait CENTER; a turret
  * is teal-FILLED (high center); minions/terrain have little teal in the ring.
  * Bands are relative to the icon radius r: center < 0.55r, ring 0.70r–1.05r.
+ * The 0.55r–0.70r gap is an intentional deadband — it skips the fuzzy
+ * portrait/ring boundary so neither band is polluted by transition pixels,
+ * sharpening the center-vs-ring contrast.
  * Validated on real crops (scripts/annulus_separation.py): champion score >0,
- * turret score <0. `mask[i]===1` means teal/ally.
+ * turret score <0. `mask[i]===1` means teal/ally. r/cx/cy may be fractional
+ * (blob radius is max(bw,bh)/2, often ending in .5) — bands are computed in
+ * squared-distance space so fractional inputs work without rounding.
  */
 export function annulusFeatures(
   mask: Uint8Array, w: number, h: number, cx: number, cy: number, r: number,
