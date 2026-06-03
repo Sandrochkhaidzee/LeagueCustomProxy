@@ -71,6 +71,29 @@ fn set_panel_size(width: i32, height: i32) {
     *PANEL_HIT_RECT.lock().unwrap() = (width, height);
 }
 
+/// v0.3: dynamic overlay window height. JS measures panel.scrollHeight whenever
+/// Debug toggles / Settings opens / the peer list grows + shrinks and calls
+/// this so the window fits its content (instead of clipping at the fixed
+/// 400px declared in tauri.conf.json). Also updates PANEL_HIT_RECT height so
+/// clicks below the now-shrunk panel pass through to the game (#11).
+#[tauri::command]
+fn resize_overlay(app: tauri::AppHandle, height: u32) {
+    let Some(window) = app.get_webview_window("overlay") else { return };
+    // Clamp: floor at the collapsed header height, ceiling so we never get
+    // pushed off-screen on huge debug images.
+    let clamped = height.clamp(120, 1200);
+    let current_width = window
+        .outer_size()
+        .ok()
+        .map(|s| s.width)
+        .unwrap_or(260);
+    let _ = window.set_size(tauri::PhysicalSize::new(current_width, clamped));
+    // Mirror the new height into the click-through hit-rect so the cursor
+    // can fall through to the game below the panel after a shrink.
+    let mut rect = PANEL_HIT_RECT.lock().unwrap();
+    rect.1 = clamped as i32;
+}
+
 /// Position the scanner window directly over the minimap region.
 /// `x, y, width, height` are physical screen pixels (from the BitBlt capture).
 /// Also makes the scanner visible on the first call (it starts hidden).
@@ -265,6 +288,7 @@ fn main() {
             hide_scanner,
             get_screen_size,
             set_panel_size,
+            resize_overlay,
             append_log,
             open_log_folder,
             updater::check_for_update,
