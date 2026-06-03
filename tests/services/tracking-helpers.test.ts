@@ -8,7 +8,6 @@ import {
   shouldForceReacquisition,
   FORCED_REACQUIRE_HOLD_MS,
   nextClassifierEma,
-  shouldAcceptLocked,
 } from '../../src/services/tracking-helpers';
 import type { Blob } from '../../src/services/blob-types';
 
@@ -192,42 +191,24 @@ describe('shouldForceReacquisition', () => {
   });
 });
 
-describe('nextClassifierEma', () => {
-  test('decays toward 0 on a 0 sample (existing EMA behavior)', () => {
+describe('nextClassifierEma (symmetric EMA — v0.3.0 snap-up reverted in v0.3.1)', () => {
+  test('decays toward 0 on a 0 sample', () => {
     // 0.5 * 0.7 + 0 * 0.3 = 0.35
     expect(nextClassifierEma(0.5, 0, 0.7)).toBeCloseTo(0.35, 5);
   });
-  test('snaps to raw when raw exceeds current (recovery from poisoned EMA)', () => {
-    // The IXAM-log case: EMA stuck at 0, a confident raw arrives — must jump,
-    // not crawl back over many ticks.
-    expect(nextClassifierEma(0, 0.8, 0.7)).toBe(0.8);
-  });
-  test('snaps to raw even on tiny exceedance', () => {
-    expect(nextClassifierEma(0.5, 0.5001, 0.7)).toBe(0.5001);
+  test('rises gradually toward a higher raw — does NOT snap (anti-clinging)', () => {
+    // A single false-high raw must not latch the EMA to 1.0 (the v0.3.0
+    // snap-up bug that made the tracker cling to minions/structures).
+    // 0 * 0.7 + 0.8 * 0.3 = 0.24, not 0.8.
+    expect(nextClassifierEma(0, 0.8, 0.7)).toBeCloseTo(0.24, 5);
   });
   test('standard EMA when raw is below current', () => {
     // 0.6 * 0.7 + 0.4 * 0.3 = 0.42 + 0.12 = 0.54
     expect(nextClassifierEma(0.6, 0.4, 0.7)).toBeCloseTo(0.54, 5);
   });
-});
-
-describe('shouldAcceptLocked', () => {
-  test('accepts when both composite and classifier EMA are confident', () => {
-    expect(shouldAcceptLocked({ compositeScore: 0.6, classifierEma: 0.5, candidateRawScore: 0.7 })).toBe(true);
-  });
-  test('accepts on high candidate raw score even with low EMA (first-lock case)', () => {
-    expect(shouldAcceptLocked({ compositeScore: 0.4, classifierEma: 0.0, candidateRawScore: 0.8 })).toBe(true);
-  });
-  test('rejects composite-only when classifier says no (IXAM-log case)', () => {
-    // composite=0.42 (above min), classifier=0.0, raw=0.0 → reject.
-    // This is the "v0.1.33 LOCKED on the wrong icon then held for 8s" pattern.
-    expect(shouldAcceptLocked({ compositeScore: 0.42, classifierEma: 0.0, candidateRawScore: 0.0 })).toBe(false);
-  });
-  test('rejects when composite is too low even with confident classifier', () => {
-    expect(shouldAcceptLocked({ compositeScore: 0.1, classifierEma: 0.5, candidateRawScore: 0.7 })).toBe(false);
-  });
-  test('rejects when composite is exactly at the floor (use > not >=)', () => {
-    // 0.299 is below 0.3 floor — must reject
-    expect(shouldAcceptLocked({ compositeScore: 0.299, classifierEma: 0.5, candidateRawScore: 0.0 })).toBe(false);
+  test('a sustained high raw still climbs over a few frames', () => {
+    let ema = 0;
+    for (let i = 0; i < 5; i++) ema = nextClassifierEma(ema, 0.9, 0.7);
+    expect(ema).toBeGreaterThan(0.6); // recovers without single-frame latching
   });
 });

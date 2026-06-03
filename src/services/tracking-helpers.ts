@@ -146,40 +146,20 @@ export function shouldForceReacquisition(holdStartMs: number, nowMs: number): bo
 }
 
 /**
- * Classifier-EMA with recovery. Standard EMA decays current toward raw, but
- * if `raw` exceeds `current` we snap to `raw` instead. Prevents a couple of
- * poisoned-to-0 samples from leaving the EMA stuck at 0 for the rest of the
- * session (IXAM v0.1.33 logs: classifier ema stayed at 0.00 for a full
- * 4-minute game). A single confident hit can pull the EMA all the way back up.
+ * Standard exponential moving average for classifier confidence. `decay` is
+ * the weight kept on the current value; `1 - decay` is the weight of the new
+ * raw sample.
+ *
+ * v0.3.0 added a "snap up to raw on any increase" branch to recover from a
+ * stuck-at-0 EMA (IXAM v0.1.33). That root cause was actually the Nunu/Dr.
+ * Mundo label-mismatch bug (fixed in v0.2.1 — the classifier was returning 0
+ * for every blob), NOT the EMA. The snap-up's real-world effect was harmful:
+ * a single false-high raw on a wrong blob (a minion, a structure) latched the
+ * EMA to 1.0, making the tracker confidently follow it — the "clinging to
+ * minions and structures" failure. Reverted to symmetric EMA in v0.3.1; the
+ * whole classifier-confidence path is replaced by template matching in v0.4
+ * (see docs/plans/2026-06-03-cv-tracking-research.md).
  */
 export function nextClassifierEma(currentEma: number, raw: number, decay: number): number {
-  if (raw > currentEma) return raw;
   return currentEma * decay + raw * (1 - decay);
-}
-
-// Thresholds for accepting a SCANNING→LOCKED transition. Tuned so a
-// reasonable composite score alone isn't enough — IXAM's v0.1.33 logs
-// showed composite=0.42 + classifier=0.00 transitions immediately followed
-// by long holds (the LOCK was on the wrong icon).
-const MIN_COMPOSITE_FOR_LOCKED = 0.3;
-const MIN_CLASSIFIER_EMA_FOR_LOCKED = 0.3;
-const CONFIDENT_RAW_FOR_LOCKED = 0.6;
-
-export interface LockedCandidate {
-  compositeScore: number;
-  classifierEma: number;
-  candidateRawScore: number;
-}
-
-/**
- * Accept SCANNING→LOCKED transition only when both heuristic (composite)
- * and classifier evidence agree, OR when the candidate has a high raw
- * classifier score (which validates this specific blob regardless of
- * EMA history — e.g. on first lock-in of the session before the EMA has
- * accumulated).
- */
-export function shouldAcceptLocked(c: LockedCandidate): boolean {
-  if (c.compositeScore < MIN_COMPOSITE_FOR_LOCKED) return false;
-  if (c.candidateRawScore >= CONFIDENT_RAW_FOR_LOCKED) return true;
-  return c.classifierEma >= MIN_CLASSIFIER_EMA_FOR_LOCKED;
 }

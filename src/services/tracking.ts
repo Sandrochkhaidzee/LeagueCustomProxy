@@ -9,10 +9,10 @@ import {
   pickClassifierReacquisition,
   ScoreFns,
   // v0.3: CV tracking tweaks driven by IXAM's v0.1.33 issue #7 logs
+  // (v0.3.1 reverted the classifier-confidence-dependent ones — see below)
   nextClassifierEma,
   shouldForceReacquisition,
   FORCED_REACQUIRE_HOLD_MS,
-  shouldAcceptLocked,
 } from './tracking-helpers';
 
 export enum TrackingState {
@@ -117,28 +117,6 @@ export class TrackingService {
 
   getState(): TrackingState { return this.state; }
   getLastPosition(): Position | null { return this.lastPosition; }
-  /**
-   * v0.3: ms since the last SCANNING→LOCKED transition (0 if currently
-   * SCANNING). Used by orchestrator.positionTickInner to suppress coords
-   * broadcasts for the first few seconds after a fresh lock — better silent
-   * than broadcasting fountain coords for a LOCK that turned out wrong.
-   */
-  getMsSinceLocked(): number {
-    if (this.state !== TrackingState.LOCKED) return 0;
-    return performance.now() - this.scanStartMs;
-  }
-  /**
-   * v0.3: highest classifier-EMA score across all currently-known blobs.
-   * Used as a confidence signal — if it's near 0 right after a LOCK,
-   * the LOCK is probably wrong (composite agreed but classifier didn't).
-   */
-  getClassifierEma(): number {
-    let max = 0;
-    for (const v of this.classifierScores.values()) {
-      if (v > max) max = v;
-    }
-    return max;
-  }
 
   // Single chokepoint for lastPosition writes so we can flag impossible
   // jumps (recall/TP is fine; CV mis-tracking the icon to a wrong location
@@ -893,8 +871,6 @@ export class TrackingService {
 
     let bestBlob = tealBlobs[0];
     let bestScore = -Infinity;
-    let bestRawCls = 0;
-    let bestEmaCls = 0;
 
     for (const b of tealBlobs) {
       const peerScore = this.peerAvoidanceScore(b);
@@ -909,33 +885,16 @@ export class TrackingService {
       if (score > bestScore) {
         bestScore = score;
         bestBlob = b;
-        bestEmaCls = clsScore;
-        // Raw score isn't tracked separately at this site; the EMA value IS
-        // the smoothed-from-raw signal we have. For the LOCKED-accept gate,
-        // pass it through as both candidateRawScore and classifierEma so a
-        // first-frame high score (priorSmoothed=-1 → norm path) still
-        // satisfies the "confident raw" branch.
-        bestRawCls = clsScore;
       }
     }
 
-    // v0.3: refuse SCANNING→LOCKED on a candidate the classifier doesn't
-    // back up. IXAM's v0.1.33 logs (issue #7) showed composite=0.42 +
-    // classifier=0.00 transitions that immediately held for 8+ seconds —
-    // the LOCK was on the wrong icon. Without classifier (e.g. ONNX load
-    // failed), fall through to the legacy composite-only path so we don't
-    // freeze the user out entirely.
-    if (hasClassifier && !shouldAcceptLocked({
-      compositeScore: bestScore,
-      classifierEma: bestEmaCls,
-      candidateRawScore: bestRawCls,
-    })) {
-      if (this.onPositionUpdate && this.lastPosition) {
-        this.onPositionUpdate(this.lastPosition);
-      }
-      return;
-    }
-
+    // v0.3.1: reverted the v0.3.0 shouldAcceptLocked classifier gate. It hard-
+    // blocked this transition whenever classifier confidence was low, which is
+    // the normal case for champions the 172-class classifier is weak on (e.g.
+    // Teemo) — so the tracker refused to lock at all and never broadcast a
+    // position. The classifier still contributes to the composite score above;
+    // it's just no longer a veto. The whole classifier-confidence path is being
+    // replaced by template matching in v0.4 (docs/plans/2026-06-03-cv-tracking-research.md).
     this.lockOnBlob(bestBlob, 'composite(score=' + bestScore.toFixed(2) + ')');
   }
 
