@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod capture;
+mod global_keys;
 mod lcu;
 mod updater;
 
@@ -131,9 +132,6 @@ fn main() {
     // .exe and renames us from proxchat.exe.new → proxchat.exe.
     updater::handle_complete_update_arg();
 
-    use tauri::Emitter;
-    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-
     tauri::Builder::default()
         .manage(CaptureState {
             bounds: Mutex::new(None),
@@ -141,31 +139,6 @@ fn main() {
         .manage(LogFile {
             file: Mutex::new(None),
         })
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, shortcut, event| {
-                    rust_log(app, format!("shortcut handler fired: state={:?}", event.state()));
-                    // Rebuild shortcuts each call to avoid closure-capture/move issues.
-                    // Comparison is cheap (struct of bitset + enum).
-                    let toggle_mute = Shortcut::new(
-                        Some(Modifiers::CONTROL | Modifiers::SHIFT),
-                        Code::KeyM,
-                    );
-                    let ptt = Shortcut::new(None, Code::F8);
-                    let payload: Option<&'static str> = if shortcut == &toggle_mute {
-                        if event.state() == ShortcutState::Pressed { Some("toggleMute") } else { None }
-                    } else if shortcut == &ptt {
-                        Some(if event.state() == ShortcutState::Pressed { "pttDown" } else { "pttUp" })
-                    } else {
-                        None
-                    };
-                    if let Some(p) = payload {
-                        let result = app.emit("global_shortcut", p);
-                        rust_log(app, format!("emit({}) → {:?}", p, result.map_err(|e| e.to_string())));
-                    }
-                })
-                .build(),
-        )
         .setup(|app| {
             // Open the log file once at startup (truncated each session).
             // The TS layer only writes to it while Debug is on.
@@ -195,16 +168,12 @@ fn main() {
                 }
             }
 
-            // Register the global shortcuts now that the plugin is initialized.
-            // F8 (PTT) and Ctrl+Shift+M (toggle self-mute).
-            let gs = app.global_shortcut();
-            let r1 = gs.register(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyM));
-            let r2 = gs.register(Shortcut::new(None, Code::F8));
-            rust_log(&app.handle(), format!(
-                "register Ctrl+Shift+M → {:?}, F8 → {:?}",
-                r1.as_ref().map(|_| "ok").map_err(|e| e.to_string()),
-                r2.as_ref().map(|_| "ok").map_err(|e| e.to_string()),
-            ));
+            // Install the low-level WH_KEYBOARD_LL hook for in-game PTT (#1).
+            // Replaces the old RegisterHotKey-based plugin which LoL's
+            // DirectInput layer was eating. Default PTT = Caps Lock,
+            // toggle-mute unbound by default (rebind UI ships in a follow-up).
+            global_keys::setup_hook(app.handle().clone());
+            rust_log(&app.handle(), "global_keys: WH_KEYBOARD_LL hook installed (PTT=CapsLock)".to_string());
 
             let Some(window) = app.get_webview_window("overlay") else {
                 return Ok(());
@@ -293,6 +262,8 @@ fn main() {
             open_log_folder,
             updater::check_for_update,
             updater::download_and_apply_update,
+            global_keys::set_ptt_key,
+            global_keys::set_toggle_key,
         ])
         // Closing the panel ("overlay") window should exit the whole app —
         // otherwise the scanner window (which is decorationless and
