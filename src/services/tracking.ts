@@ -1345,6 +1345,14 @@ export class TrackingService {
         // Coasting guard: if we've trailed sub-acquire-confidence blobs for too
         // many frames in a row, the champion probably left — stop following and
         // let the strict reacquire below re-find it. A confident frame resets it.
+        // KNOWN GAP (self-ID, deferred to Phase 3 viewport anchoring): the reset is
+        // on CONSECUTIVE weak frames and a successful follow zeroes holdStartMs (so
+        // the 5s force-reacquire backstop is disarmed while following). A nearby
+        // decoy — a teammate ring within the capped radius that flickers confident
+        // at least once per WEAK_FOLLOW_DROP frames — could be followed indefinitely.
+        // Mitigated (not solved) by nearest-to-PREDICTED + the capped jump radius (a
+        // stationary decoy won't match a moving champion's velocity-projected point);
+        // the real fix is viewport-anchored self-ID.
         this.weakFollowFrames = fa.score >= ANNULUS_MIN ? 0 : this.weakFollowFrames + 1;
         if (this.weakFollowFrames < WEAK_FOLLOW_DROP) {
           this.finalizeLockedFrame(follow.blob, lastReg, holdSec);
