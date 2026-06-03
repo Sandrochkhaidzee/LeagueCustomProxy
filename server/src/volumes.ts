@@ -1,5 +1,12 @@
 const crypto = globalThis.crypto;
 
+// Per-request diagnostic logging for the tiered-volume path. Off unless the
+// server is started with DEBUG_VOLUMES=1. Logs each /compute-volumes
+// decision (requester team/range + per-peer team/distance/result) so
+// cross-client issues (e.g. asymmetric audibility) are diagnosable from the
+// server alone instead of needing both clients' debug logs.
+const DEBUG_VOLUMES = process.env.DEBUG_VOLUMES === '1';
+
 const MAX_HEARING_RANGE = 1200;
 // Max age of an encrypted position blob the server will accept before
 // rejecting it as stale. Tuned to absorb common Windows-clock drift
@@ -271,7 +278,14 @@ export function computeTieredVolumes(
 
   const clients = getRoomClients(body.roomId);
   const me = clients.find(c => c.name === body.name);
-  if (!me) return { myBlob: '', peerVolumes: {} };
+  if (!me) {
+    if (DEBUG_VOLUMES) {
+      console.log('[volumes] req name=' + JSON.stringify(body.name) +
+        ' NOT FOUND in room ' + body.roomId + ' (known: ' +
+        clients.map(c => JSON.stringify(c.name)).join(',') + ')');
+    }
+    return { myBlob: '', peerVolumes: {} };
+  }
 
   const legacy = me.team === undefined;
   const range = legacy
@@ -280,6 +294,7 @@ export function computeTieredVolumes(
 
   const cutoff = Date.now() - STALE_POSITION_MS;
   const peerVolumes: Record<string, number> = {};
+  const trace: string[] = [];
 
   for (const peer of clients) {
     if (peer.name === me.name) continue;
@@ -293,17 +308,35 @@ export function computeTieredVolumes(
       // from the room by RoomManager.leave on socket close; until then,
       // 1.0 is harmless because no audio is flowing from a dead WebRTC peer.
       peerVolumes[peer.name] = 1.0;
+      if (DEBUG_VOLUMES) trace.push(peer.name + '[ally team=' + peer.team + ']=1.0');
       continue;
     }
 
-    if (!peer.position) continue;
-    if (peer.position.updatedMs < cutoff) continue;
+    if (!peer.position) {
+      if (DEBUG_VOLUMES) trace.push(peer.name + '[cross team=' + peer.team + ' NO-POS]=skip');
+      continue;
+    }
+    if (peer.position.updatedMs < cutoff) {
+      if (DEBUG_VOLUMES) trace.push(peer.name + '[cross team=' + peer.team + ' STALE]=skip');
+      continue;
+    }
 
     const dx = body.myPosition.x - peer.position.x;
     const dy = body.myPosition.y - peer.position.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist >= range) continue;
+    if (dist >= range) {
+      if (DEBUG_VOLUMES) trace.push(peer.name + '[cross team=' + peer.team + ' dist=' + Math.round(dist) + ' >= range=' + range + ']=skip');
+      continue;
+    }
     peerVolumes[peer.name] = calculateVolume(dist);
+    if (DEBUG_VOLUMES) trace.push(peer.name + '[cross team=' + peer.team + ' dist=' + Math.round(dist) + ']=' + calculateVolume(dist).toFixed(2));
+  }
+
+  if (DEBUG_VOLUMES) {
+    console.log('[volumes] req me=' + JSON.stringify(me.name) +
+      ' team=' + me.team + ' hearCrossTeam=' + me.hearCrossTeam +
+      ' legacy=' + legacy + ' range=' + range +
+      ' | ' + (trace.length ? trace.join(' ') : '(no peers)'));
   }
 
   return { myBlob: '', peerVolumes };
