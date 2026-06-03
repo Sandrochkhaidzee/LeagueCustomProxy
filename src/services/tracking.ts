@@ -1401,31 +1401,20 @@ export class TrackingService {
         }
       }
 
-      // Phase 2 (reacquire): nothing followable in range (or coasted too long) →
-      // champion jumped (teleport/recall/respawn) or vanished. Re-lock the champion
-      // ring, preferring the one NEAREST the camera viewport (≈ self) so we don't
-      // snap to a teammate's ring across the map; fall back to nearest last-known
-      // position when the camera is panned away (no viewport). This is the Phase 3
-      // self-ID fix — it replaces the old "strongest ring globally" pick that
-      // caused cross-map jumps between self and teammates.
+      // Follow found nothing in range. We deliberately do NOT eagerly reacquire to
+      // the nearest ring anywhere — that was the source of the big full-map jumps:
+      // when follow has a momentary gap and the camera is PANNED, the viewport sits
+      // on a far teammate, and a per-frame reacquire snapped the position there
+      // (in a real game every one of the largest jumps was a reacquire). Instead we
+      // HOLD/extrapolate: short detection gaps recover when self's ring reappears
+      // near last-known and the follow (with its expanding radius) re-locks with
+      // little or no jump. A genuinely sustained gap (teleport / recall / death)
+      // escalates via shouldForceReacquisition → SCANNING (checked at the top of
+      // this method), which re-locks ONCE — nearest the viewport — not every frame.
       this.weakFollowFrames = 0;
-      if (this.holdStartMs === 0) this.holdStartMs = performance.now();
-      const ref = this.viewportCenter() ?? lastReg; // anchor: viewport if seen, else last-known
-      let best: Blob | null = null;
-      let bestRing: RingMatch | null = null;
-      let bestMetric = Infinity; // nearest the anchor wins
-      for (const rb of refined) {
-        const ring = ringOf.get(rb)!;
-        if (ring.ringTeal < RING_TEAL_MIN || ring.score < ANNULUS_MIN) continue;
-        const metric = (rb.cx - ref.x) ** 2 + (rb.cy - ref.y) ** 2;
-        if (metric < bestMetric) { bestMetric = metric; bestRing = ring; best = rb; }
-      }
-      if (best && bestRing) {
-        this.acquireViaClassifier(best, bestRing.score, 'annulus');
-        return;
-      }
 
-      // Phase 3: nothing matched → extrapolate (hold).
+      // Hold: extrapolate from last known position until the ring is seen again or
+      // the hold times out (→ SCANNING).
       if (this.lockedTickCount === 0) {
         console.log('[Tracking] Extrapolating position (no champion-ring blob)');
         this.holdStartMs = performance.now();
