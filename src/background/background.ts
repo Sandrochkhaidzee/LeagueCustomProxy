@@ -41,6 +41,9 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
     case 'updateSettings':
       orchestrator.updateSettings(payload);
       break;
+    case 'setHearCrossTeam':
+      orchestrator.setHearCrossTeamPref(payload.enabled === true);
+      break;
     case 'calibrationBounds':
       orchestrator.setMinimapCalibration(payload);
       break;
