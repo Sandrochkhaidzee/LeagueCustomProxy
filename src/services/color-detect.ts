@@ -2,28 +2,53 @@
 // red enemy ring, or neither. Pure + tested so the thresholds can be tuned
 // against real data.
 //
-// v0.4.3 retuned the teal test from REAL harvested crops (Garen + Mordekaiser
-// self-icons). The ally ring is a BRIGHT cyan — measured r≈170-186, g≈215,
-// b≈225 — not the dark teal the old `r < 100` gate assumed. That gate rejected
-// ~80% of the actual ring pixels (they failed ONLY because red was too high),
-// leaving blobs thin/undersized so the tracker kept dropping the champion
-// ("no teal blobs"). The fix: detect cyan by DOMINANCE (green and blue both
-// clearly exceed red) instead of an absolute red ceiling. This keeps rejecting
-// white/gray (r≈g≈b) and enemy red (red dominant); minions/structures that
-// share the ally color are rejected downstream by the blob size/fill filter
-// and template matching.
+// v0.4.3 moved from RGB thresholds to HSV. Players run different in-game
+// brightness / contrast / gamma / saturation, which shift the icon's raw RGB
+// values — so absolute RGB gates (the old `r < 100`) are fragile across setups.
+// HSV is far more robust: brightness/contrast/gamma mostly move VALUE, leaving
+// HUE stable, so we key the detection on the cyan/red HUE with deliberately
+// loose saturation + value floors. Hue ranges were derived from real harvested
+// self-icon crops (ally ring measured ~185-200° cyan).
+
+/** Convert 8-bit RGB to HSV. h in [0,360), s,v in [0,1]. */
+export function rgbToHsv(r: number, g: number, b: number): { h: number; s: number; v: number } {
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const d = max - min;
+  let h = 0;
+  if (d !== 0) {
+    if (max === rn) h = 60 * (((gn - bn) / d) % 6);
+    else if (max === gn) h = 60 * ((bn - rn) / d + 2);
+    else h = 60 * ((rn - gn) / d + 4);
+  }
+  if (h < 0) h += 360;
+  const s = max === 0 ? 0 : d / max;
+  return { h, s, v: max };
+}
+
+// Cyan ally-ring hue band (measured ~185-200° on real crops; widened for
+// saturation/HUD variation). Saturation floor low enough to catch a
+// desaturated display's faint ring, high enough to reject gray terrain;
+// value floor rejects near-black fog.
+const TEAL_HUE_MIN = 150;
+const TEAL_HUE_MAX = 215;
+// 0.10 floor: a very bright display (gamma ~0.6) desaturates the ring to
+// ~0.117; gray terrain/near-white sit at ≤0.07, so 0.10 still rejects them.
+const TEAL_SAT_MIN = 0.10;
+const TEAL_VAL_MIN = 0.35;
+
+// Enemy red ring sits at the hue wrap-around (~0° / 360°), high saturation.
+const RED_HUE_LO = 18;   // 0..18
+const RED_HUE_HI = 342;  // 342..360
+const RED_SAT_MIN = 0.4;
+const RED_VAL_MIN = 0.3;
 
 /** 0 = neither, 1 = teal (ally), 2 = red (enemy). */
 export function classifyMinimapPixel(r: number, g: number, b: number): 0 | 1 | 2 {
-  // Teal/cyan ally border: green and blue are both bright AND both clearly
-  // exceed red (cyan dominance), at any overall brightness.
-  if (g > 120 && b > 120 && (g + b) > 280 && g > r + CYAN_MARGIN && b > r + CYAN_MARGIN) return 1;
-  // Red enemy border: red dominant, green and blue low.
-  if (r > 140 && g < 100 && b < 100) return 2;
+  const { h, s, v } = rgbToHsv(r, g, b);
+  if (v < 0.2) return 0; // too dark to classify (fog / black)
+  if (h >= TEAL_HUE_MIN && h <= TEAL_HUE_MAX && s >= TEAL_SAT_MIN && v >= TEAL_VAL_MIN) return 1;
+  if ((h <= RED_HUE_LO || h >= RED_HUE_HI) && s >= RED_SAT_MIN && v >= RED_VAL_MIN) return 2;
   return 0;
 }
-
-// How much green and blue must exceed red for a pixel to count as cyan. Tuned
-// from real crops: the bulk of the bright ally ring clears r+~30; 15 catches it
-// with margin while still rejecting near-white (small channel spread).
-const CYAN_MARGIN = 15;

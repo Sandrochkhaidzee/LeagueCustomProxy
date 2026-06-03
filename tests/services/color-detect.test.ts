@@ -1,4 +1,9 @@
-import { classifyMinimapPixel } from '../../src/services/color-detect';
+import { classifyMinimapPixel, rgbToHsv } from '../../src/services/color-detect';
+
+// Apply a gamma shift to RGB to simulate a player's brighter/darker display.
+function gamma(rgb: [number, number, number], gm: number): [number, number, number] {
+  return rgb.map(c => Math.min(255, Math.round(((c / 255) ** gm) * 255))) as [number, number, number];
+}
 
 describe('classifyMinimapPixel', () => {
   // Real measured ally-ring pixel values from harvested Garen/Mordekaiser
@@ -32,5 +37,30 @@ describe('classifyMinimapPixel', () => {
   test('does not confuse red ring for teal or vice versa', () => {
     expect(classifyMinimapPixel(220, 230, 60)).not.toBe(2); // yellow-ish, not enemy red
     expect(classifyMinimapPixel(186, 215, 229)).not.toBe(2);
+  });
+
+  // The whole point of HSV: robust to per-player brightness/contrast/gamma.
+  test('ally ring stays teal across gamma shifts (different display settings)', () => {
+    const ring: [number, number, number] = [186, 215, 229];
+    expect(classifyMinimapPixel(...gamma(ring, 0.6))).toBe(1); // much brighter
+    expect(classifyMinimapPixel(...gamma(ring, 1.0))).toBe(1); // unchanged
+    expect(classifyMinimapPixel(...gamma(ring, 1.6))).toBe(1); // much darker
+  });
+
+  test('ally ring stays teal when desaturated (low-saturation display)', () => {
+    // Pull the ring toward gray but keep the cyan hue.
+    expect(classifyMinimapPixel(150, 190, 200)).toBe(1);
+  });
+});
+
+describe('rgbToHsv', () => {
+  test('pure red → hue 0', () => { expect(rgbToHsv(255, 0, 0).h).toBeCloseTo(0, 1); });
+  test('pure green → hue 120', () => { expect(rgbToHsv(0, 255, 0).h).toBeCloseTo(120, 1); });
+  test('cyan → hue 180', () => { expect(rgbToHsv(0, 255, 255).h).toBeCloseTo(180, 1); });
+  test('gray → saturation 0', () => { expect(rgbToHsv(128, 128, 128).s).toBe(0); });
+  test('real ally-ring sample sits in the cyan band', () => {
+    const { h } = rgbToHsv(186, 215, 229);
+    expect(h).toBeGreaterThan(150);
+    expect(h).toBeLessThan(215);
   });
 });
