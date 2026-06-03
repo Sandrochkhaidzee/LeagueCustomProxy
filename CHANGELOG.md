@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.3.1] — 2026-06-03
+
+### Fixed
+- **Enemy stayed audible at full volume after moving out of range ("hears me no matter where on the map").** The v0.3 server correctly drops cross-team peers beyond the 600u cap (and stale-position peers) from the `/compute-volumes` response entirely, but the client only updated peers *present* in the response — a peer once heard within range kept its last gain forever. Now any connected peer absent from the response is silenced. (In v0.2 the server always returned far peers at volume 0, so the client never had to handle absence.)
+- **Tracking clung to minions and structures / refused to lock on for some champions.** Reverted three v0.3.0 computer-vision tweaks that were tuned narrowly to one user's logs and regressed the general case:
+  - The classifier-confidence EMA "snap-up" latched onto a single false-high frame from a wrong blob (a minion dot, a turret icon), making the tracker confidently follow it. Reverted to a standard smoothed average.
+  - A lock-acceptance gate hard-blocked tracking from locking on whenever classifier confidence was low — normal for champions the classifier is weak on (e.g. Teemo) — so it never locked and never broadcast a position. Removed; the classifier still contributes to scoring, it's just no longer a veto.
+  - A post-lock coordinate-suppression window kept stale positions on the server for weak-classifier champions, so peers couldn't hear them. Removed.
+
+### Changed
+- **MIC / VOL buttons indicate mute via color only** — the label stays "MIC" / "VOL" instead of switching to "MIC OFF" / "ALL OFF", so the button row doesn't reflow.
+
+### Notes
+- A ground-up CV overhaul (per-game template matching against the actual 10 champion icons, replacing the 172-class classifier) is planned for v0.4 — see [`docs/plans/2026-06-03-cv-tracking-research.md`](docs/plans/2026-06-03-cv-tracking-research.md). v0.3.1 stops the regressions in the meantime.
+
 ## [v0.3.0] — 2026-06-02
 
 ### Changed
@@ -228,7 +243,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.3.1...HEAD
+[v0.3.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.3.1
 [v0.3.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.3.0
 [v0.2.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.2.1
 [v0.2.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.2.0
