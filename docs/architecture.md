@@ -136,7 +136,7 @@ Source files:
 | `src/rate-limit.ts` | Token-bucket and concurrency limiters used across endpoints. No external dep. |
 | `src/types.ts` | Shared request/response types |
 
-60 tests under `server/tests/`.
+75 tests under `server/tests/` (v0.3 added tiered-proximity tests + team / hearCrossTeam room-state tests).
 
 **Rate-limit defaults** (all in `src/rate-limit.ts::LIMITS`):
 - `/turn-credentials`: 60 req/min per IP

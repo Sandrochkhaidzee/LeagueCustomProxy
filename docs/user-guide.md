@@ -30,9 +30,12 @@ Each player row has:
 |---|---|
 | **Input Device** | Which microphone to use. "Default" follows Windows' default communications device. Selection persists across launches. Switching mid-game swaps the source in place — no peer reconnection needed. |
 | **Output Device** | Which speaker / headset to send voice to. Same persistence behavior. |
-| **Input Mode** | "Always Open" (default) — mic is always live unless self-muted. "Push to Talk (F8)" — hold F8 to transmit. (Note: F8 currently only fires from outside an active game window. See [issue #1](https://github.com/danthi123/LoLProxChat/issues/1).) |
+| **Input Mode** | "Always Open" (default) — mic is always live unless self-muted. "Push to Talk" — hold the bound PTT key (default Caps Lock) to transmit. PTT works in-game since v0.3 (low-level Windows keyboard hook replaces the prior `RegisterHotKey` which LoL was intercepting). |
+| **PTT Key** *(v0.3+)* | The push-to-talk key. Default Caps Lock (the keyboard LED is auto-flipped back so it doesn't toggle on every press). Click the button to capture a new key; the app rejects common LoL bindings (Q/W/E/R/D/F/B/P) and modifier-only keys. |
+| **Toggle-mute Key** *(v0.3+)* | Optional global hotkey to flip self-mute on/off. Unbound by default — click the button to bind. |
 | **Mic Volume** | Pre-transmission gain on your mic, 0-100%. Useful if your hardware mic is too quiet or too hot. |
 | **Hide IP (Force TURN)** | Routes all voice through the TURN relay so peers in your match never see your public IP. Defends against DDoS / port-scan attempts from random players. Adds ~20-100 ms latency. Default off; takes effect on the next peer connection. See [`threat-model.md`](threat-model.md) for the full discussion. |
+| **Hear enemies at full vision range** *(v0.3+)* | Default off: only enemies within ~600 game units (auto-attack range) are audible — minimal information leak versus stock gameplay. Toggle on to hear enemies anywhere within ~1200 game units (champion vision range). Server-enforced, so a modified client cannot bypass. Allies are always full volume regardless of this toggle. |
 | **Debug** | Toggles diagnostic mode — paints the HSV-filtered minimap and the tracking dot, exposes the Scan Rate slider, and starts writing a debug log to disk. Off by default; turn on only when investigating a problem or asked by a maintainer. |
 | **Debug Logs → OPEN** | Launches Explorer at `%LOCALAPPDATA%\com.proxchat.app\` so you can grab `lolproxchat.log` to attach to a GitHub issue. |
 | **Auto-update** | When on, the app checks GitHub Releases ~5 seconds after launch and applies any newer version automatically (process exits cleanly, new binary takes over, old one is deleted). Off by default. The setting persists. |
@@ -41,10 +44,12 @@ Each player row has:
 
 ## Global keyboard shortcuts
 
-These work even while LoL has focus, *provided LoL is in Borderless mode*:
+These work even while LoL has focus and have worked in-game since v0.3 (low-level Windows keyboard hook):
 
-- **Ctrl+Shift+M** — toggle self-mute
-- **F8** *(hold)* — push-to-talk (only effective when **Input Mode** is set to "Push to Talk")
+- **Caps Lock** *(hold, default)* — push-to-talk. Rebindable in **Settings → PTT Key**. Caps Lock won't toggle the LED — the app cancels the toggle via synthetic input (Discord trick).
+- **Toggle-mute** — unbound by default. Bind in **Settings → Toggle-mute Key**.
+
+PTT is only effective when **Input Mode** is set to "Push to Talk".
 
 ## Reporting bugs
 
@@ -76,6 +81,9 @@ The log is plain text. It contains your summoner name and nearby players' summon
 | Logs get wiped when you restart the app | You're on a pre-v0.1.25 build. Update — the app now keeps three rolling sessions instead of truncating. |
 | Voice doesn't work when you (or your friend) play **Nunu & Willump** or **Dr. Mundo** | You're on a pre-v0.2.1 build. Update — the champion classifier was failing to match those display names against the model labels, so CV never locked on for that player and they couldn't broadcast a useful position. |
 | Voice cut out intermittently or felt laggy for one peer specifically on v0.1.x | Fixed in v0.2.0 — the old peer-to-peer encrypted-blob round trip was sensitive to clock skew and data-channel delays. v0.2 sends positions client→server directly. Update both peers. |
+| PTT key (F8 or Caps Lock) doesn't fire while LoL has focus | You're on a pre-v0.3 build. Update — v0.3 uses a low-level Windows keyboard hook that runs ahead of LoL's input layer (same technique Discord/Mumble/OBS use). Also lets you rebind both PTT and toggle-mute keys from Settings. |
+| Can't hear enemies you used to hear at vision range | Default cross-team range tightened to ~600u (auto-attack range) in v0.3. Toggle **Settings → Hear enemies at full vision range** to restore the old 1200u behavior. |
+| Debug thumbnail clipped at the bottom of the panel | You're on a pre-v0.3 build. Update — the overlay window now dynamically resizes to fit panel content. |
 
 ## Updating
 

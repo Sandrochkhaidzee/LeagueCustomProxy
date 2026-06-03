@@ -72,8 +72,8 @@ docs/                  — User guide, architecture, self-hosting, threat model,
 
 ## Testing
 
-- **Client tests** live under `tests/` (separate root from `src/`). Run with `npm test`. The existing 74 tests cover core logic, tracking state machine, audio EMA math + slider×proximity math, device list filtering, tracking-helper scoring math, the position-jump warning gates, the session-flow integration, and the champion-classifier label resolver (including the Nunu / Dr. Mundo display-name normalization added in v0.2.1).
-- **Server tests** live under `server/tests/`. Run with `cd server && npm test`. 60 tests cover room management (including server-side coords storage + staleness pruning added in v0.2.0), TURN credential generation (both coturn-HMAC and Cloudflare paths), volume math (both the legacy v0.1 encrypted-blob path and the v0.2 room-state path), and rate-limiting (`TokenBucket`, `ConcurrencyLimiter`, `clientIp`).
+- **Client tests** live under `tests/` (separate root from `src/`). Run with `npm test`. The existing 100 tests cover core logic, tracking state machine, audio EMA math + slider×proximity math, device list filtering, tracking-helper scoring math (including v0.3 hold-cap + classifier-EMA recovery + LOCKED-acceptance gate), the position-jump warning gates, the session-flow integration, the champion-classifier label resolver (Nunu / Dr. Mundo display-name normalization from v0.2.1), the v0.3 dynamic overlay resize helpers, and the v0.3 PTT-rebind keymap (browser key code ↔ Win32 vk).
+- **Server tests** live under `server/tests/`. Run with `cd server && npm test`. 75 tests cover room management (including v0.3 team + hearCrossTeam fields and v0.2 coords storage), TURN credential generation (both coturn-HMAC and Cloudflare paths), volume math (v0.3 tiered proximity + legacy v0.2 room-state + legacy v0.1 encrypted-blob path), and rate-limiting (`TokenBucket`, `ConcurrencyLimiter`, `clientIp`).
 - New features should land with tests where the logic is testable (pure functions, state machines). DOM-heavy or Tauri-IPC-heavy code can skip tests; mock surfaces are too brittle to be worth maintaining.
 
 ## Commit conventions

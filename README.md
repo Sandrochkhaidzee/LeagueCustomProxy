@@ -79,7 +79,7 @@ For the rest — every Settings toggle, troubleshooting, log-grab flow, uninstal
 2. **Position** — Win32 BitBlt of the minimap region + HSV color filter + blob detection + ONNX champion classifier locates your champion icon. Position is in game coordinates.
 3. **Signaling** — players in the same match join a deterministic WebSocket room (room ID = hash of sorted player names) on a self-hosted Node server.
 4. **Voice** — WebRTC peer-to-peer audio between players (Opus 128 kbps, DTLS-SRTP). No audio touches any server.
-5. **Proximity volume** — each client streams its XY coordinates to the signaling server (over the same WebSocket used for presence/signaling); the server computes pairwise volumes for everyone in the room (continuous quadratic falloff up to 1200 game units). Clients only ever receive `{ peerName: volume }` — never another peer's raw position.
+5. **Proximity volume** — each client streams its XY coordinates to the signaling server (over the same WebSocket used for presence/signaling); the server computes pairwise volumes for everyone in the room. Since v0.3: **team voice is always full volume** (no proximity), **cross-team voice is capped at ~600 game units** (auto-attack range) by default — Settings has a toggle to extend it to ~1200 (champion vision range). Server-enforced — a modified client cannot bypass the team filter or range cap. Clients only ever receive `{ peerName: volume }`, never another peer's raw position.
 
 For depth, see [`docs/architecture.md`](docs/architecture.md).
 
