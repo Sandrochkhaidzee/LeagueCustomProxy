@@ -313,6 +313,10 @@ export class TrackingService {
   private harvestLabel = '';
   private lastHarvestMs = 0;
   private harvestCanvas: HTMLCanvasElement | null = null;
+  // Debug: full native-resolution minimap-region frames (not just the 32px self
+  // crop) for offline detection/annulus calibration. Captured in ALL states.
+  private frameCanvas: HTMLCanvasElement | null = null;
+  private lastFrameMs = 0;
   onHarvestCrop: ((dataUrl: string, label: string) => void) | null = null;
 
   setHarvest(enabled: boolean, label: string): void {
@@ -359,6 +363,41 @@ export class TrackingService {
     }
     ctx.putImageData(dst, 0, 0);
     try { this.onHarvestCrop(this.harvestCanvas.toDataURL('image/png'), this.harvestLabel); } catch { /* ignore */ }
+  }
+
+  /** Debug: while harvesting, periodically save the FULL native minimap region
+   *  (region.width × region.height, raw pixels) so the detection + annulus
+   *  pipeline can be replayed/calibrated OFFLINE on real native-resolution data —
+   *  crucially including frames where tracking FAILED (NOT gated on LOCKED).
+   *  Saved under a "_frames_<champ>" label, separate from the 32px self-crops. */
+  private maybeHarvestFrame(
+    imageData: ImageData,
+    region: { x: number; y: number; width: number; height: number },
+    nowMs: number,
+  ): void {
+    if (!this.harvestEnabled || !this.onHarvestCrop) return;
+    if (nowMs - this.lastFrameMs < 2000) return;
+    this.lastFrameMs = nowMs;
+    const w = region.width, h = region.height;
+    if (!this.frameCanvas) this.frameCanvas = document.createElement('canvas');
+    this.frameCanvas.width = w;
+    this.frameCanvas.height = h;
+    const ctx = this.frameCanvas.getContext('2d');
+    if (!ctx) return;
+    const dst = ctx.createImageData(w, h);
+    const W = imageData.width;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const si = ((region.y + y) * W + (region.x + x)) * 4;
+        const di = (y * w + x) * 4;
+        dst.data[di] = imageData.data[si];
+        dst.data[di + 1] = imageData.data[si + 1];
+        dst.data[di + 2] = imageData.data[si + 2];
+        dst.data[di + 3] = 255;
+      }
+    }
+    ctx.putImageData(dst, 0, 0);
+    try { this.onHarvestCrop(this.frameCanvas.toDataURL('image/png'), '_frames_' + this.harvestLabel); } catch { /* ignore */ }
   }
 
   /**
@@ -1078,6 +1117,9 @@ export class TrackingService {
             // v0.4 (Phase C): opt-in harvest of the self-blob crop while LOCKED,
             // to build a REAL labeled dataset for measuring tracking accuracy.
             this.maybeHarvestSelfCrop(imageData, nowMs);
+            // Debug calibration: also save full native frames in ALL states
+            // (incl. tracking failures) for offline annulus tuning.
+            this.maybeHarvestFrame(imageData, region, nowMs);
           } finally {
             this.tickRunning = false;
           }
