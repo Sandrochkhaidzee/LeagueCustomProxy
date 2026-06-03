@@ -79,17 +79,18 @@ const playerVolumes: Map<string, number> = new Map();
 // (set in the HTML). No manual drag/resize logic needed.
 
 // --- Controls ---
+// MIC / VOL buttons signal their muted state via the `.active` color only —
+// the label stays "MIC" / "VOL" (no "OFF" suffix) so the button width doesn't
+// jump and the icon-button row stays visually stable.
 btnSelfMute.addEventListener('click', () => {
   const nowMuted = !btnSelfMute.classList.contains('active');
   btnSelfMute.classList.toggle('active', nowMuted);
-  btnSelfMute.textContent = nowMuted ? 'MIC OFF' : 'MIC';
   sendToBackground('toggleSelfMute', {});
 });
 
 btnMuteAll.addEventListener('click', () => {
   const nowMuted = !btnMuteAll.classList.contains('active');
   btnMuteAll.classList.toggle('active', nowMuted);
-  btnMuteAll.textContent = nowMuted ? 'ALL OFF' : 'VOL';
   sendToBackground('toggleMuteAll', {});
 });
 
@@ -519,10 +520,9 @@ function updatePlayerRow(peer: NearbyPeer): void {
 
 // --- Render state ---
 function renderState(state: OverlayState): void {
+  // Color-only mute indication (see the click handlers) — label stays static.
   btnSelfMute.classList.toggle('active', state.selfMuted);
-  btnSelfMute.textContent = state.selfMuted ? 'MIC OFF' : 'MIC';
   btnMuteAll.classList.toggle('active', state.muteAll);
-  btnMuteAll.textContent = state.muteAll ? 'ALL OFF' : 'VOL';
 
   // Sort: allies first, then by champion name
   const localTeam = state.localTeam ?? null;
