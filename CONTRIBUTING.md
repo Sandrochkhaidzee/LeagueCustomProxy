@@ -82,7 +82,6 @@ Synthetic accuracy metrics don't predict real tracking performance (see [`docs/p
 
 1. **Harvest** (opt-in, Debug-only): set `localStorage.setItem('lolproxchat.harvest', 'true')` and turn Debug on, then play games. While the tracker is LOCKED it saves ~1 crop/2s of your champion's icon to `%LOCALAPPDATA%\com.proxchat.app\harvest\<champion>\`. The label (your champion) is reliable ground truth, independent of either identifier. Off by default; zero cost otherwise. (Harvest tooling lands in builds after v0.4.0 — rebuild from `main` to use it.)
 2. **Evaluate**: `python scripts/eval_real_crops.py` (needs `scikit-image`). It auto-detects the harvest folder and compares the 172-class ONNX classifier against SSIM template matching on those real crops, reporting top-1 accuracy (full + restricted to the harvested champion pool), mean winning score, and a per-champion breakdown.
-3. The synthetic harness `scripts/eval_cv_models.py` remains for quick checks, but trust the real-crop numbers over it.
 
 ## Commit conventions
 

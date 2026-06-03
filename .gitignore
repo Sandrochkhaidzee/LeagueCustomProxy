@@ -31,3 +31,4 @@ package-lock.json
 
 # Git worktrees (per-feature isolated checkouts)
 .worktrees/
+.playwright-mcp/
