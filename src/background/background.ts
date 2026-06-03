@@ -52,6 +52,12 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
       invoke('set_panel_size', { width: payload.width, height: payload.height })
         .catch(() => { /* ignore — loop falls back to last value */ });
       break;
+    case 'resizeOverlay':
+      // v0.3 (#11): dynamic overlay window height based on measured panel
+      // scrollHeight. Rust clamps + updates the hit-rect.
+      invoke('resize_overlay', { height: payload.height })
+        .catch((e) => console.warn('[Background] resize_overlay failed:', e));
+      break;
     case 'setInputDevice':
       orchestrator.applyInputDevice(payload.id);
       break;

@@ -15,7 +15,25 @@ import {
   probeMicPermission,
 } from '../services/devices';
 import { getForceTurnRelay, setForceTurnRelay } from '../services/privacy';
+import { computeDesiredHeight } from './resize-helpers';
 import '../core/window-globals';
+
+// v0.3 (#11): dynamic overlay-window resize so the panel grows to fit
+// debug-thumbnail / settings content and shrinks back when they collapse.
+// requestAnimationFrame-batched so we don't ping Rust at full frame rate
+// when ResizeObserver fires rapidly (image load, etc).
+let resizeQueued = false;
+function syncOverlayHeight(): void {
+  if (resizeQueued) return;
+  resizeQueued = true;
+  requestAnimationFrame(() => {
+    resizeQueued = false;
+    const panel = document.querySelector('.panel') as HTMLElement | null;
+    if (!panel) return;
+    const desired = computeDesiredHeight(Math.ceil(panel.scrollHeight));
+    sendToBackground('resizeOverlay', { height: desired });
+  });
+}
 
 interface NearbyPeer {
   summonerName: string;
@@ -79,6 +97,7 @@ btnSettings.addEventListener('click', () => {
   if (!settingsPanel.classList.contains('hidden')) {
     refreshDeviceLists();
   }
+  syncOverlayHeight();
 });
 
 // --- Audio device pickers ---
@@ -250,6 +269,8 @@ btnDebug.addEventListener('click', () => {
     debugFilterThumb.classList.add('hidden');
     debugFilterThumb.removeAttribute('src');
   }
+  // v0.3 (#11): re-fit window for new debug-row visibility
+  syncOverlayHeight();
 });
 
 // HSV-filtered minimap preview — shown only while Debug is on. Listens to the
@@ -268,6 +289,16 @@ listen<{ filteredImageUrl: string | null; debugEnabled: boolean }>('scanner:scen
     if (!filteredImageUrl) debugFilterThumb.removeAttribute('src');
   }
 }).catch((e) => console.warn('[Overlay] scanner:scene listen failed:', e));
+
+// v0.3 (#11): also re-fit when the thumbnail finishes loading (async image
+// load can change scrollHeight after the toggle click already fired) and on
+// every overlayUpdate (peer list grows / shrinks).
+debugFilterThumb.addEventListener('load', syncOverlayHeight);
+const panelEl = document.querySelector('.panel');
+if (panelEl) {
+  new ResizeObserver(syncOverlayHeight).observe(panelEl);
+}
+window.addEventListener('DOMContentLoaded', syncOverlayHeight);
 
 document.getElementById('input-mode')!.addEventListener('change', (e) => {
   const mode = (e.target as HTMLSelectElement).value;
