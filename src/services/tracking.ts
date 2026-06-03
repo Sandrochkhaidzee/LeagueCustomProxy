@@ -306,7 +306,9 @@ export class TrackingService {
   private maybeHarvestSelfCrop(imageData: ImageData, nowMs: number): void {
     if (!this.harvestEnabled || !this.onHarvestCrop) return;
     if (this.state !== TrackingState.LOCKED || !this.lastPixelPos) return;
-    if (nowMs - this.lastHarvestMs < 2000) return;
+    // Sane rate: ~1 crop / 3s while locked (~600 tiny PNGs over a 30-min game,
+    // ~1 MB). Enough variety to tune detection without spamming the disk.
+    if (nowMs - this.lastHarvestMs < 3000) return;
     this.lastHarvestMs = nowMs;
     const half = Math.max(8, Math.round(this.expectedIconDiam * 0.7));
     const cx = Math.round(this.lastPixelPos.x);

@@ -12,10 +12,19 @@ import '../core/window-globals';
 import { isStreamerMode } from '../core/streamer-detect';
 
 const HEAR_CROSS_TEAM_KEY = 'lolproxchat.hearCrossTeam';
+const HARVEST_KEY = 'lolproxchat.harvest';
 
 function readHearCrossTeamPref(): boolean {
   try {
     return window.localStorage.getItem(HEAR_CROSS_TEAM_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function readHarvestPref(): boolean {
+  try {
+    return window.localStorage.getItem(HARVEST_KEY) === 'true';
   } catch {
     return false;
   }
@@ -224,17 +233,14 @@ export class Orchestrator {
 
       // v0.4 Phase C: opt-in harvest of labeled self-crops (Debug-only tooling
       // for building a real accuracy test set). Saves to
-      // %LOCALAPPDATA%\com.proxchat.app\harvest\<champion>\. Off unless the
-      // localStorage flag is set.
-      let harvestOn = false;
-      try { harvestOn = window.localStorage.getItem('lolproxchat.harvest') === 'true'; } catch { /* ignore */ }
-      if (harvestOn) {
-        this.tracking.setHarvest(true, session.localPlayer.championName);
-        this.tracking.onHarvestCrop = (dataUrl, label) => {
-          invoke('save_harvest_crop', { label, dataUrl, ts: Date.now() })
-            .catch((e) => console.warn('[LoLProxChat] harvest save failed:', e));
-        };
-      }
+      // %LOCALAPPDATA%\com.proxchat.app\harvest\<champion>\. The callback is
+      // always wired (cheap); the Settings → Debug "Harvest CV crops" toggle
+      // flips it on/off live via setHarvestPref / tracking.setHarvest.
+      this.tracking.onHarvestCrop = (dataUrl, label) => {
+        invoke('save_harvest_crop', { label, dataUrl, ts: Date.now() })
+          .catch((e) => console.warn('[LoLProxChat] harvest save failed:', e));
+      };
+      this.tracking.setHarvest(readHarvestPref(), session.localPlayer.championName);
 
       // Set capture bounds in Tauri backend
       await this.tracking.initCaptureBounds();
@@ -553,6 +559,12 @@ export class Orchestrator {
   setHearCrossTeamPref(enabled: boolean): void {
     try { window.localStorage.setItem(HEAR_CROSS_TEAM_KEY, String(enabled)); } catch { /* ignore */ }
     this.signaling.setHearCrossTeam(enabled);
+  }
+  /** v0.4.2: live toggle for the Debug "Harvest CV crops" tool. Persists the
+   *  pref and applies it to the running tracker (label = current champion). */
+  setHarvestPref(enabled: boolean): void {
+    try { window.localStorage.setItem(HARVEST_KEY, String(enabled)); } catch { /* ignore */ }
+    this.tracking?.setHarvest(enabled, this.session?.localPlayer.championName ?? '');
   }
   setScanRate(fps: number): void {
     if (!this.tracking) return;
