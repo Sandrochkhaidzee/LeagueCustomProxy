@@ -5,6 +5,7 @@ import { SignalingService, SignalMessage, PositionBroadcast } from './signaling'
 import { AudioService } from './audio';
 import { TrackingService, TrackingState } from './tracking';
 import { ChampionClassifier } from './champion-classifier';
+import { loadChampionTemplates } from './champion-icons';
 import { VolumeClient } from './volume-client';
 import { PeerState } from '../core/types';
 import '../core/window-globals';
@@ -224,7 +225,23 @@ export class Orchestrator {
       // Set capture bounds in Tauri backend
       await this.tracking.initCaptureBounds();
 
-      // Load champion classifier (async, non-blocking — tracking works without it)
+      // v0.4: fetch this match's actual champion icons from Data Dragon and
+      // install them as SSIM templates — the primary identity signal. We know
+      // the exact champions from the roster, so this is a tiny bounded fetch.
+      // Non-blocking; tracking runs on color/blob detection until they arrive.
+      const rosterNames = session.allPlayers.map(p => p.championName);
+      loadChampionTemplates(rosterNames, 32)
+        .then(templates => {
+          if (this.tracking && templates.length > 0) {
+            this.tracking.setChampionTemplates(templates, session.localPlayer.championName);
+            console.log('[LoLProxChat] Champion templates loaded (' + templates.length + '/' + new Set(rosterNames).size + ')');
+          }
+        })
+        .catch(err => console.warn('[LoLProxChat] Champion template fetch failed (using classifier fallback):', err));
+
+      // Load champion classifier as a FALLBACK (async, non-blocking) for when
+      // the template fetch fails (offline, CDN down). Template matching is
+      // preferred when available.
       const classifier = new ChampionClassifier();
       classifier.load(
         '../models/champion_classifier.onnx',
@@ -233,7 +250,7 @@ export class Orchestrator {
       ).then(() => {
         if (this.tracking) {
           this.tracking.setClassifier(classifier);
-          console.log('[LoLProxChat] Champion classifier loaded');
+          console.log('[LoLProxChat] Champion classifier loaded (fallback)');
         }
       }).catch(err => {
         console.warn('[LoLProxChat] Champion classifier failed to load (tracking continues without it):', err);

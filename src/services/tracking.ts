@@ -2,6 +2,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { Position, MapType, MAP_DIMENSIONS } from '../core/types';
 import { getMinimapBounds, MinimapBounds } from '../core/map-calibration';
 import { ChampionClassifier } from './champion-classifier';
+import type { ChampionTemplate } from './champion-icons';
+import {
+  cropResizeGray,
+  toGrayscale,
+  circularMaskIndices,
+  ssim,
+} from './template-match';
 import {
   computeMaxJumpPx,
   computeReacquireThreshold,
@@ -61,15 +68,29 @@ export class TrackingService {
   private filteredImageUrl: string | null = null;
   private lastDebugImageMs = 0;
 
-  // Champion classifier (ONNX model)
+  // Champion classifier (ONNX model). v0.4: kept only as a FALLBACK for when
+  // the per-game template fetch fails — template matching is the primary
+  // identity signal (see championTemplates below).
   private classifier: ChampionClassifier | null = null;
-  // Cached classifier scores per blob (refreshed periodically, not every frame)
+  // Cached identity scores per blob (refreshed periodically, not every frame).
+  // Populated by either the template-match path (v0.4 primary) or the
+  // classifier path (fallback); getClassifierScore reads whichever ran.
   private classifierScores: Map<string, number> = new Map();
-  // EMA-smoothed classifier scores to dampen single-frame misclassifications
+  // EMA-smoothed scores to dampen single-frame misidentifications
   private smoothedClassifierScores: Map<string, number> = new Map();
   private lastClassifierRunMs = 0;
   private lastClassifierLogMs = 0;
   private classifierRunning = false;
+
+  // v0.4: per-game champion icon templates (grayscale, circular-masked) for
+  // SSIM template matching, keyed by champion display name. When set, the
+  // tracker matches blobs against the actual 10 champions in this match
+  // instead of running the 172-class ONNX classifier. See template-match.ts
+  // and docs/plans/2026-06-03-cv-tracking-research.md.
+  private championTemplates: Map<string, Float32Array> | null = null;
+  private localChampForTemplates = '';
+  private readonly templateSize = 32;
+  private templateMask: number[] = [];
 
   // Debug canvas (reused to avoid allocation per frame)
   private debugCanvas: HTMLCanvasElement | null = null;
@@ -234,6 +255,119 @@ export class TrackingService {
   setClassifier(classifier: ChampionClassifier): void {
     this.classifier = classifier;
     console.log('[Tracking] Champion classifier set');
+  }
+
+  /**
+   * v0.4: install the per-game champion icon templates. Once set, the tracker
+   * identifies blobs by SSIM template matching against the actual champions in
+   * this match instead of the 172-class classifier. `localChampionName` is the
+   * display name of the local player's champion (the one we self-track).
+   */
+  setChampionTemplates(templates: ChampionTemplate[], localChampionName: string): void {
+    if (templates.length === 0) {
+      console.warn('[Tracking] No champion templates loaded — falling back to classifier');
+      return;
+    }
+    const map = new Map<string, Float32Array>();
+    for (const t of templates) {
+      // Templates arrive at the fetched size; resample to our templateSize via
+      // grayscale (they're already square + circular-cropped).
+      const gray = t.size === this.templateSize
+        ? toGrayscale(t.rgba, t.size, t.size)
+        : cropResizeGray(t.rgba, t.size, t.size, 0, 0, t.size, t.size, this.templateSize);
+      map.set(t.name, gray);
+    }
+    this.championTemplates = map;
+    this.localChampForTemplates = localChampionName;
+    this.templateMask = circularMaskIndices(this.templateSize);
+    console.log('[Tracking] Champion templates set: ' + templates.map(t => t.name).join(', ') +
+      ' (self=' + localChampionName + ')');
+  }
+
+  hasTemplates(): boolean {
+    return this.championTemplates !== null && this.championTemplates.has(this.localChampForTemplates);
+  }
+
+  /**
+   * v0.4 identity scoring via SSIM template matching. For each teal blob, crop
+   * + grayscale it and score how strongly it matches the LOCAL champion's icon,
+   * disambiguated by the best OTHER-champion match (a blob that looks more like
+   * an enemy than like us is penalised — kills minion/structure clinging and
+   * enemy confusion). Populates the same `classifierScores` cache the composite
+   * scorer reads, so the rest of the pipeline is unchanged.
+   */
+  private updateTemplateScores(
+    tealBlobs: Blob[],
+    imageData: ImageData,
+    region: { x: number; y: number; width: number; height: number },
+  ): void {
+    const templates = this.championTemplates;
+    if (!templates) return;
+    const myTpl = templates.get(this.localChampForTemplates);
+    if (!myTpl) return;
+
+    const raw: number[] = [];
+    for (const b of tealBlobs) {
+      const cropX = region.x + b.minX - 1;
+      const cropY = region.y + b.minY - 1;
+      const cropW = b.maxX - b.minX + 3;
+      const cropH = b.maxY - b.minY + 3;
+      const gray = cropResizeGray(
+        imageData.data, imageData.width, imageData.height,
+        cropX, cropY, cropW, cropH, this.templateSize,
+      );
+      const mine = ssim(gray, myTpl, this.templateMask);
+      // Best competing (other-champion) match
+      let other = -1;
+      for (const [name, tpl] of templates) {
+        if (name === this.localChampForTemplates) continue;
+        const s = ssim(gray, tpl, this.templateMask);
+        if (s > other) other = s;
+      }
+      // Identity score: my SSIM, penalised if another champ matches better.
+      // Remap from raw SSIM (~[-1,1], real matches ~0.3) to [0,1].
+      const margin = mine - Math.max(0, other);
+      raw.push(Math.max(0, Math.min(1, (margin + 1) / 2)));
+    }
+
+    // Normalize across blobs + EMA-smooth, mirroring the classifier path so
+    // downstream scoring behaves identically.
+    const MIN_RAW = 0.5; // remapped: SSIM≈0 → 0.5; below this = no real match
+    const maxRaw = Math.max(0, ...raw);
+    const normalized = maxRaw >= MIN_RAW ? raw.map(s => s / maxRaw) : raw.map(() => 0);
+
+    const EMA_ALPHA = 0.4;
+    const tolerance = Math.max(5, this.expectedIconDiam * 0.6);
+    const toleranceSq = tolerance * tolerance;
+
+    this.classifierScores.clear();
+    for (let i = 0; i < tealBlobs.length; i++) {
+      const key = tealBlobs[i].cx + ',' + tealBlobs[i].cy;
+      let priorSmoothed = -1;
+      let bestDistSq = Infinity;
+      for (const [sKey, sVal] of this.smoothedClassifierScores) {
+        const [sx, sy] = sKey.split(',').map(Number);
+        const dx = tealBlobs[i].cx - sx;
+        const dy = tealBlobs[i].cy - sy;
+        const dSq = dx * dx + dy * dy;
+        if (dSq < toleranceSq && dSq < bestDistSq) { bestDistSq = dSq; priorSmoothed = sVal; }
+      }
+      const smoothed = priorSmoothed >= 0
+        ? nextClassifierEma(priorSmoothed, normalized[i], 1 - EMA_ALPHA)
+        : normalized[i];
+      this.classifierScores.set(key, smoothed);
+    }
+    this.smoothedClassifierScores = new Map(this.classifierScores);
+
+    const now = performance.now();
+    if (now - this.lastClassifierLogMs >= 30000) {
+      this.lastClassifierLogMs = now;
+      const details = tealBlobs.map((b, i) =>
+        '(' + b.cx + ',' + b.cy + ')ssim=' + raw[i].toFixed(2) +
+        '/ema=' + (this.classifierScores.get(b.cx + ',' + b.cy) ?? 0).toFixed(2)
+      ).join(' | ');
+      console.log('[Tracking] Template scores: ' + details);
+    }
   }
 
   /**
@@ -806,19 +940,23 @@ export class TrackingService {
             // Build white pixel masks (separating movement path from viewport rectangle)
             const { whiteMask, viewportMask } = this.buildWhiteMasks(imageData, region);
 
-            // Run classifier at most every 500ms (scan-rate independent)
+            // Identity scoring at most every 500ms (scan-rate independent).
+            // v0.4: prefer SSIM template matching against this game's actual
+            // champions; fall back to the ONNX classifier only when templates
+            // failed to load. Template matching is synchronous + cheap (no
+            // ONNX), so it runs inline.
             const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
-            if (
-              this.classifier &&
-              tealBlobs.length > 0 &&
-              !this.classifierRunning &&
-              nowMs - this.lastClassifierRunMs >= 500
-            ) {
-              this.classifierRunning = true;
-              this.lastClassifierRunMs = nowMs;
-              this.updateClassifierScores(tealBlobs, imageData, region).finally(() => {
-                this.classifierRunning = false;
-              });
+            if (tealBlobs.length > 0 && nowMs - this.lastClassifierRunMs >= 500) {
+              if (this.hasTemplates()) {
+                this.lastClassifierRunMs = nowMs;
+                this.updateTemplateScores(tealBlobs, imageData, region);
+              } else if (this.classifier && !this.classifierRunning) {
+                this.classifierRunning = true;
+                this.lastClassifierRunMs = nowMs;
+                this.updateClassifierScores(tealBlobs, imageData, region).finally(() => {
+                  this.classifierRunning = false;
+                });
+              }
             }
 
             if (this.state === TrackingState.SCANNING) {

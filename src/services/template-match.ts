@@ -112,6 +112,36 @@ export function templateMatchScore(
   return (r + 1) / 2;
 }
 
+/**
+ * Crop a sub-rectangle of a packed-RGBA image and resize it to outSize×outSize
+ * grayscale (nearest-neighbour — fine for tiny icons). Pure + testable. Used to
+ * turn a detected minimap blob into a comparable patch for SSIM/NCC matching,
+ * the same crop the ONNX classifier used.
+ */
+export function cropResizeGray(
+  data: Uint8ClampedArray | Uint8Array | number[],
+  imgW: number,
+  imgH: number,
+  cropX: number,
+  cropY: number,
+  cropW: number,
+  cropH: number,
+  outSize: number,
+): Float32Array {
+  const out = new Float32Array(outSize * outSize);
+  for (let oy = 0; oy < outSize; oy++) {
+    for (let ox = 0; ox < outSize; ox++) {
+      let sx = Math.round(cropX + (ox + 0.5) * cropW / outSize);
+      let sy = Math.round(cropY + (oy + 0.5) * cropH / outSize);
+      if (sx < 0) sx = 0; else if (sx >= imgW) sx = imgW - 1;
+      if (sy < 0) sy = 0; else if (sy >= imgH) sy = imgH - 1;
+      const i = (sy * imgW + sx) * 4;
+      out[oy * outSize + ox] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    }
+  }
+  return out;
+}
+
 // SSIM constants for 8-bit dynamic range (L=255): c1=(0.01L)², c2=(0.03L)².
 const SSIM_C1 = (0.01 * 255) ** 2; // 6.5025
 const SSIM_C2 = (0.03 * 255) ** 2; // 58.5225

@@ -5,6 +5,7 @@ import {
   templateMatchScore,
   ssim,
   bestChampionMatch,
+  cropResizeGray,
 } from '../../src/services/template-match';
 
 // Build a size×size RGBA array from a grayscale fill function f(x,y)->0..255.
@@ -148,5 +149,33 @@ describe('bestChampionMatch', () => {
 
   test('returns null for empty template set', () => {
     expect(bestChampionMatch(gray(() => 1), new Map(), idx)).toBeNull();
+  });
+});
+
+describe('cropResizeGray', () => {
+  test('extracts a sub-rect and resizes to the target grayscale size', () => {
+    // 4×4 image: left half black (0), right half white (255).
+    const w = 4, h = 4;
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const v = x < 2 ? 0 : 255;
+        const i = (y * w + x) * 4;
+        data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255;
+      }
+    }
+    // Crop the right half (x 2..4) → all white → 2×2 grayscale all ~255.
+    const g = cropResizeGray(data, w, h, 2, 0, 2, 4, 2);
+    expect(g.length).toBe(4);
+    for (const v of g) expect(v).toBeCloseTo(255, 1);
+  });
+
+  test('clamps out-of-bounds crop coordinates', () => {
+    const w = 2, h = 2;
+    const data = new Uint8ClampedArray([10, 10, 10, 255, 20, 20, 20, 255, 30, 30, 30, 255, 40, 40, 40, 255]);
+    // Crop starting off the left/top edge — must not read out of bounds.
+    const g = cropResizeGray(data, w, h, -5, -5, 4, 4, 2);
+    expect(g.length).toBe(4);
+    for (const v of g) expect(Number.isFinite(v)).toBe(true);
   });
 });
