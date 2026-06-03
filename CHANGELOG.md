@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.4.2] — 2026-06-03
+
+### Added
+- **Settings → Debug → "Harvest CV crops" toggle.** Makes the crop harvester (added in v0.4.1) actually usable without devtools — flip it on from the UI when Debug is on, and it applies to the running game immediately. Saves ~1 labeled crop / 3s of your champion icon to `%LOCALAPPDATA%\com.proxchat.app\harvest\` for tuning CV detection. Off by default.
+
 ## [v0.4.1] — 2026-06-03
 
 ### Fixed
@@ -268,7 +273,8 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
-[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.2...HEAD
+[v0.4.2]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.2
 [v0.4.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.0
 [v0.3.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.3.1
