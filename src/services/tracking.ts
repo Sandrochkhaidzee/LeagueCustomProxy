@@ -917,6 +917,28 @@ export class TrackingService {
   }
 
   /**
+   * Region-relative center of the minimap's camera-view rectangle (bbox center of
+   * the detected viewport pixels), or null if too few were found this frame. The
+   * camera is mostly on the local player, so this is a strong "where am I" anchor
+   * for self-ID — used to pick the champion ring that is actually SELF among
+   * several ally rings, instead of the strongest ring anywhere (which jumps to
+   * teammates). Falls back to last-known position when the camera is panned away.
+   */
+  private viewportCenter(): { x: number; y: number } | null {
+    const m = this.viewportMask;
+    if (!m || !this.minimapRegion) return null;
+    const w = this.minimapRegion.width, h = this.minimapRegion.height;
+    let minX = w, maxX = -1, minY = h, maxY = -1, n = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (m[y * w + x] === 1) { n++; if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+      }
+    }
+    if (n < 8) return null; // too few viewport pixels to trust
+    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  }
+
+  /**
    * Count non-viewport white pixels in an annular region around a teal blob.
    * Excludes white pixels that are part of the camera viewport rectangle.
    */
@@ -1181,12 +1203,20 @@ export class TrackingService {
     // rather than locking onto a wrong blob and yanking position across the map.
     // The composite path below is the classifier fallback (no templates loaded).
     if (this.hasTemplates()) {
+      // Self-ID: among champion-ring blobs, prefer the one NEAREST the camera
+      // viewport (≈ self) rather than the strongest-scoring ring anywhere — the
+      // latter snaps to a teammate's ring. No viewport detected (panned away) →
+      // fall back to the strongest ring.
+      const vp = this.viewportCenter();
       let best: Blob | null = null;
       let bestRing: RingMatch | null = null;
+      let bestMetric = Infinity; // lower is better
       for (const b of tealBlobs) {
         const ring = this.getRing(b);
         if (ring.ringTeal < RING_TEAL_MIN || ring.score < ANNULUS_MIN) continue;
-        if (!bestRing || ring.score > bestRing.score) {
+        const metric = vp ? (ring.cx - vp.x) ** 2 + (ring.cy - vp.y) ** 2 : -ring.score;
+        if (metric < bestMetric) {
+          bestMetric = metric;
           bestRing = ring;
           best = { ...b, cx: ring.cx, cy: ring.cy }; // lock at the ring center, not the (maybe merged) centroid
         }
@@ -1195,7 +1225,7 @@ export class TrackingService {
         if (this.onPositionUpdate && this.lastPosition) this.onPositionUpdate(this.lastPosition);
         return;
       }
-      this.lockOnBlob(best, 'annulus(score=' + bestRing.score.toFixed(2) + ')');
+      this.lockOnBlob(best, 'annulus(score=' + bestRing.score.toFixed(2) + (vp ? ',vp' : '') + ')');
       return;
     }
 
@@ -1371,20 +1401,24 @@ export class TrackingService {
         }
       }
 
-      // Phase 2 (reacquire, STRICT): nothing followable in range (or coasted too
-      // long) → champion jumped (teleport/recall/respawn) or vanished. Re-lock the
-      // confident champion ring anywhere via the strict annulus gate. NOTE: this
-      // picks the strongest ring globally; among several ally rings it cannot yet
-      // distinguish self from a teammate — viewport-anchored self-ID (Phase 3) is
-      // the intended follow-up for the recall-to-base / clustered case.
+      // Phase 2 (reacquire): nothing followable in range (or coasted too long) →
+      // champion jumped (teleport/recall/respawn) or vanished. Re-lock the champion
+      // ring, preferring the one NEAREST the camera viewport (≈ self) so we don't
+      // snap to a teammate's ring across the map; fall back to nearest last-known
+      // position when the camera is panned away (no viewport). This is the Phase 3
+      // self-ID fix — it replaces the old "strongest ring globally" pick that
+      // caused cross-map jumps between self and teammates.
       this.weakFollowFrames = 0;
       if (this.holdStartMs === 0) this.holdStartMs = performance.now();
+      const ref = this.viewportCenter() ?? lastReg; // anchor: viewport if seen, else last-known
       let best: Blob | null = null;
       let bestRing: RingMatch | null = null;
+      let bestMetric = Infinity; // nearest the anchor wins
       for (const rb of refined) {
         const ring = ringOf.get(rb)!;
         if (ring.ringTeal < RING_TEAL_MIN || ring.score < ANNULUS_MIN) continue;
-        if (!bestRing || ring.score > bestRing.score) { bestRing = ring; best = rb; }
+        const metric = (rb.cx - ref.x) ** 2 + (rb.cy - ref.y) ** 2;
+        if (metric < bestMetric) { bestMetric = metric; bestRing = ring; best = rb; }
       }
       if (best && bestRing) {
         this.acquireViaClassifier(best, bestRing.score, 'annulus');
