@@ -51,6 +51,12 @@ static EVENT_TX: OnceLock<mpsc::UnboundedSender<KeyEvent>> = OnceLock::new();
 /// Holds the HHOOK once installed. Only accessed from the dedicated hook
 /// thread, but Rust needs a `Sync` static so we wrap accordingly.
 struct HookSlot(UnsafeCell<HHOOK>);
+// SAFETY: HOOK is only ever written once on the dedicated hook thread
+// (inside setup_hook's std::thread::spawn) and only read by hook_proc which
+// itself only runs on that same thread (the WH_KEYBOARD_LL callback fires
+// on the thread that installed the hook). No cross-thread access in practice,
+// so the missing data-race protection is moot — the unsafe impl Sync exists
+// only to satisfy the type checker for use in a `static`.
 unsafe impl Sync for HookSlot {}
 static HOOK: HookSlot = HookSlot(UnsafeCell::new(HHOOK(std::ptr::null_mut())));
 
@@ -66,6 +72,15 @@ enum KeyEvent {
 unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+
+        // Ignore synthetic / injected events so our own SendInput-based
+        // Caps Lock LED workaround doesn't recursively re-enter the hook
+        // (would produce 2-3 spurious PttDown/PttUp pairs per physical
+        // keypress). LLKHF_INJECTED = 0x10 in KBDLLHOOKSTRUCT.flags.
+        if kb.flags.0 & 0x10 != 0 {
+            return CallNextHookEx(*HOOK.0.get(), code, wparam, lparam);
+        }
+
         let msg = wparam.0 as u32;
         let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
@@ -83,6 +98,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                 // LED flip-back: send synthetic down+up to cancel the OS's
                 // pending toggle of the Caps Lock light. Has to fire on BOTH
                 // edges — pressing AND releasing the key both toggle the LED.
+                // The injected-filter above keeps this from recursing.
                 if ptt == VK_CAPITAL && (is_down || is_up) {
                     flip_caps_lock_back();
                 }
