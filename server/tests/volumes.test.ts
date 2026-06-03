@@ -6,6 +6,7 @@ import {
   computeVolumes,
   computeVolumesFromRoom,
 } from '../src/volumes.js';
+import { computeTieredVolumes, DEFAULT_CROSS_TEAM_RANGE } from '../src/volumes.js';
 
 // 64 hex chars = 256-bit test key
 const TEST_KEY = 'a'.repeat(64);
@@ -163,5 +164,104 @@ describe('computeVolumesFromRoom (v0.2 path)', () => {
       getter,
     );
     expect(calls).toEqual([['r1', 'Me', 5_000]]);
+  });
+});
+
+describe('computeTieredVolumes (v0.3 path)', () => {
+  // getRoomClients signature: (roomId) => TieredRoomClient[]
+  // Returns ALL clients in the room including the requester — the function
+  // filters out self by name.
+  const makeGetter = (clients: Array<{ name: string; team?: 'ORDER' | 'CHAOS'; hearCrossTeam?: boolean; position?: { x: number; y: number; updatedMs: number } }>) =>
+    () => clients;
+
+  it('returns ally at 1.0 regardless of distance', () => {
+    const result = computeTieredVolumes(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      makeGetter([
+        { name: 'Me', team: 'ORDER', hearCrossTeam: false, position: { x: 0, y: 0, updatedMs: Date.now() } },
+        { name: 'AllyFarAway', team: 'ORDER', position: { x: 9999, y: 9999, updatedMs: Date.now() } },
+      ]),
+    );
+    expect(result.peerVolumes.AllyFarAway).toBe(1.0);
+  });
+
+  it('omits cross-team peers beyond 600u when hearCrossTeam is false', () => {
+    const result = computeTieredVolumes(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      makeGetter([
+        { name: 'Me', team: 'ORDER', hearCrossTeam: false, position: { x: 0, y: 0, updatedMs: Date.now() } },
+        { name: 'EnemyClose', team: 'CHAOS', position: { x: 400, y: 0, updatedMs: Date.now() } },
+        { name: 'EnemyFar',   team: 'CHAOS', position: { x: 800, y: 0, updatedMs: Date.now() } },
+      ]),
+    );
+    expect(result.peerVolumes.EnemyClose).toBeGreaterThan(0);
+    expect(result.peerVolumes.EnemyFar).toBeUndefined();
+  });
+
+  it('extends to 1200u when hearCrossTeam is true', () => {
+    const result = computeTieredVolumes(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      makeGetter([
+        { name: 'Me', team: 'ORDER', hearCrossTeam: true, position: { x: 0, y: 0, updatedMs: Date.now() } },
+        { name: 'EnemyMid',  team: 'CHAOS', position: { x: 800, y: 0, updatedMs: Date.now() } },
+        { name: 'EnemyEdge', team: 'CHAOS', position: { x: 1300, y: 0, updatedMs: Date.now() } },
+      ]),
+    );
+    expect(result.peerVolumes.EnemyMid).toBeGreaterThan(0);
+    expect(result.peerVolumes.EnemyEdge).toBeUndefined();
+  });
+
+  it('uses the full 1200u falloff curve regardless of cutoff (consistent loudness)', () => {
+    const at500 = (hearCrossTeam: boolean) => computeTieredVolumes(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      makeGetter([
+        { name: 'Me', team: 'ORDER', hearCrossTeam, position: { x: 0, y: 0, updatedMs: Date.now() } },
+        { name: 'Enemy', team: 'CHAOS', position: { x: 500, y: 0, updatedMs: Date.now() } },
+      ]),
+    ).peerVolumes.Enemy;
+    expect(at500(false)).toBeCloseTo(at500(true), 5);
+  });
+
+  it('falls back to team-blind 1200u when requester has no team (legacy v0.2)', () => {
+    const result = computeTieredVolumes(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      makeGetter([
+        { name: 'Me', position: { x: 0, y: 0, updatedMs: Date.now() } },
+        { name: 'OtherClose', team: 'CHAOS', position: { x: 400, y: 0, updatedMs: Date.now() } },
+        { name: 'OtherFar',   team: 'ORDER', position: { x: 1000, y: 0, updatedMs: Date.now() } },
+      ]),
+    );
+    expect(result.peerVolumes.OtherClose).toBeGreaterThan(0);
+    expect(result.peerVolumes.OtherFar).toBeGreaterThan(0);
+  });
+
+  it('skips stale and missing positions', () => {
+    const result = computeTieredVolumes(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      makeGetter([
+        { name: 'Me', team: 'ORDER', hearCrossTeam: true, position: { x: 0, y: 0, updatedMs: Date.now() } },
+        { name: 'NoPos',    team: 'CHAOS' },
+        { name: 'StalePos', team: 'CHAOS', position: { x: 100, y: 0, updatedMs: Date.now() - 30_000 } },
+      ]),
+    );
+    expect(result.peerVolumes.NoPos).toBeUndefined();
+    expect(result.peerVolumes.StalePos).toBeUndefined();
+  });
+
+  it('returns empty myBlob (v0.2+ shape)', () => {
+    const result = computeTieredVolumes(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },
+      makeGetter([{ name: 'Me', team: 'ORDER', position: { x: 0, y: 0, updatedMs: Date.now() } }]),
+    );
+    expect(result.myBlob).toBe('');
+  });
+
+  it('throws on invalid myPosition', () => {
+    expect(() =>
+      computeTieredVolumes(
+        { myPosition: { x: NaN, y: 0 }, roomId: 'r1', name: 'Me' },
+        makeGetter([{ name: 'Me', team: 'ORDER', position: { x: 0, y: 0, updatedMs: Date.now() } }]),
+      ),
+    ).toThrow('Invalid position');
   });
 });

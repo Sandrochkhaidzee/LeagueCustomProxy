@@ -230,3 +230,74 @@ export function computeVolumesFromRoom(
   // with the legacy response.
   return { myBlob: '', peerVolumes };
 }
+
+// ---------- v0.3 path: tiered proximity (team-aware) ----------
+
+export const DEFAULT_CROSS_TEAM_RANGE = 600;
+
+export interface TieredRoomClient {
+  name: string;
+  team?: 'ORDER' | 'CHAOS';
+  hearCrossTeam?: boolean;
+  position?: { x: number; y: number; updatedMs: number };
+}
+
+/**
+ * v0.3 tiered proximity. Server-authoritative team filter + cross-team
+ * range cap. The full 1200u falloff curve (calculateVolume) is used in
+ * both modes — only the cutoff changes, so distance X sounds the same
+ * regardless of toggle.
+ *
+ * Allies (same team as requester) always come back at 1.0 regardless
+ * of distance. Cross-team peers come back at their distance-based
+ * volume if and only if they are within `range`; out-of-range peers
+ * are absent from the response entirely (the server simply doesn't
+ * tell the requester they exist — a modified client cannot bypass).
+ *
+ * When the requester has no team set (legacy v0.2 client), falls back
+ * to team-blind 1200u behavior — every peer audible at distance falloff.
+ */
+export function computeTieredVolumes(
+  body: VolumeRequestV2,
+  getRoomClients: (roomId: string) => TieredRoomClient[],
+): VolumeResponse {
+  if (!body.myPosition ||
+      typeof body.myPosition.x !== 'number' || typeof body.myPosition.y !== 'number' ||
+      !isFinite(body.myPosition.x) || !isFinite(body.myPosition.y)) {
+    throw new Error('Invalid position');
+  }
+  if (typeof body.roomId !== 'string' || !body.roomId) throw new Error('Invalid roomId');
+  if (typeof body.name !== 'string' || !body.name) throw new Error('Invalid name');
+
+  const clients = getRoomClients(body.roomId);
+  const me = clients.find(c => c.name === body.name);
+  if (!me) return { myBlob: '', peerVolumes: {} };
+
+  const legacy = me.team === undefined;
+  const range = legacy
+    ? MAX_HEARING_RANGE
+    : (me.hearCrossTeam ? MAX_HEARING_RANGE : DEFAULT_CROSS_TEAM_RANGE);
+
+  const cutoff = Date.now() - STALE_POSITION_MS;
+  const peerVolumes: Record<string, number> = {};
+
+  for (const peer of clients) {
+    if (peer.name === me.name) continue;
+
+    if (!legacy && peer.team === me.team) {
+      peerVolumes[peer.name] = 1.0;
+      continue;
+    }
+
+    if (!peer.position) continue;
+    if (peer.position.updatedMs < cutoff) continue;
+
+    const dx = body.myPosition.x - peer.position.x;
+    const dy = body.myPosition.y - peer.position.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist >= range) continue;
+    peerVolumes[peer.name] = calculateVolume(dist);
+  }
+
+  return { myBlob: '', peerVolumes };
+}
