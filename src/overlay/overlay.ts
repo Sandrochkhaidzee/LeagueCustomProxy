@@ -31,8 +31,15 @@ function syncOverlayHeight(): void {
     resizeQueued = false;
     const panel = document.querySelector('.panel') as HTMLElement | null;
     if (!panel) return;
+    // scrollHeight is in logical CSS px; the Rust side sizes the window in
+    // PHYSICAL px (and so does the click-through hit-rect, which is compared
+    // against physical Win32 cursor coords). Multiply by devicePixelRatio so
+    // the window fits its content on scaled displays — without this a 125/150%
+    // laptop got a too-short window and clipped the debug thumbnail, while a
+    // 100% ultrawide looked fine. Matches the panelResize convention below.
+    const dpr = window.devicePixelRatio || 1;
     const desired = computeDesiredHeight(Math.ceil(panel.scrollHeight));
-    sendToBackground('resizeOverlay', { height: desired });
+    sendToBackground('resizeOverlay', { height: Math.round(desired * dpr) });
   });
 }
 
