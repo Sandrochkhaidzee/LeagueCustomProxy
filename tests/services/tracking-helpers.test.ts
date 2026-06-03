@@ -12,6 +12,8 @@ import {
   annulusFeatures,
   RING_TEAL_MIN,
   ANNULUS_MIN,
+  FOLLOW_ANNULUS_FLOOR,
+  WEAK_FOLLOW_DROP,
 } from '../../src/services/tracking-helpers';
 import type { Blob } from '../../src/services/blob-types';
 
@@ -43,8 +45,13 @@ describe('computeMaxJumpPx', () => {
   });
 
   test('expands by ~1 icon-diameter per second of hold', () => {
-    // hold for 2 seconds, icon = 12 → base 24 + (12 * 2) = 48
-    expect(computeMaxJumpPx(12, /*hold start*/ 1000, /*now*/ 3000)).toBe(48);
+    // hold for 2 seconds, icon = 12 → base 24 + min(12*1.5, 12*2) = 24 + 18 = 42
+    expect(computeMaxJumpPx(12, /*hold start*/ 1000, /*now*/ 3000)).toBe(42);
+  });
+
+  test('caps hold expansion at 1.5 icon-diameters', () => {
+    // hold for 5 seconds, icon = 12 → base 24 + min(12*1.5, 12*5) = 24 + 18 = 42
+    expect(computeMaxJumpPx(12, /*hold start*/ 1000, /*now*/ 6000)).toBe(42);
   });
 
   test('zero hold equals no expansion', () => {
@@ -313,5 +320,17 @@ describe('ring-annulus thresholds', () => {
   test('ANNULUS_MIN is a tight margin in (0, 0.3)', () => {
     expect(ANNULUS_MIN).toBeGreaterThan(0);
     expect(ANNULUS_MIN).toBeLessThan(0.3);
+  });
+
+  // Follow-path leniency knobs: the floor is a small negative (only teal-FILLED
+  // clutter is rejected; partial/merged rings near score 0 still follow), and the
+  // coasting bound is a positive integer count of frames.
+  test('FOLLOW_ANNULUS_FLOOR is a small negative in (-0.5, 0)', () => {
+    expect(FOLLOW_ANNULUS_FLOOR).toBeGreaterThan(-0.5);
+    expect(FOLLOW_ANNULUS_FLOOR).toBeLessThan(0);
+  });
+  test('WEAK_FOLLOW_DROP is a positive integer', () => {
+    expect(WEAK_FOLLOW_DROP).toBeGreaterThan(0);
+    expect(Number.isInteger(WEAK_FOLLOW_DROP)).toBe(true);
   });
 });

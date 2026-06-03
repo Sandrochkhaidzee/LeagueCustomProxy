@@ -28,6 +28,8 @@ import {
   AnnulusFeatures,
   RING_TEAL_MIN,
   ANNULUS_MIN,
+  FOLLOW_ANNULUS_FLOOR,
+  WEAK_FOLLOW_DROP,
 } from './tracking-helpers';
 
 export enum TrackingState {
@@ -127,6 +129,10 @@ export class TrackingService {
   // Used to make Phase 2 re-acquisition stricter when stationary, so we don't
   // teleport the tracking dot onto a minion wave / turret if the icon flickers.
   private lastMovementMs = 0;
+  // Consecutive FOLLOW frames spent trailing a sub-acquire-confidence blob.
+  // Bounds how long we lenient-follow a possibly-wrong blob before dropping the
+  // lock and forcing a strict reacquire (see WEAK_FOLLOW_DROP).
+  private weakFollowFrames = 0;
   private static readonly TUNED_FPS = 8;
 
   // Diagnostics
@@ -1239,6 +1245,7 @@ export class TrackingService {
     this.scanFrameCount = 0;
     this.scanStartMs = performance.now();
     this.holdStartMs = 0;
+    this.weakFollowFrames = 0;
     // Treat the moment of lock as a "movement" so Phase 2 doesn't start in
     // stationary-stickiness mode before we've seen any real movement.
     this.lastMovementMs = performance.now();
@@ -1321,36 +1328,49 @@ export class TrackingService {
     // minions/terrain (little ring teal) are filtered out entirely. This replaces
     // the dead SSIM/template-confidence gate on the hot path.
     if (this.hasTemplates()) {
-      // Retain the annulus features once per champ so Phase 2 can reuse them
-      // instead of recomputing getAnnulus for every candidate.
-      const champs = tealBlobs
-        .map(b => ({ b, a: this.getAnnulus(b) }))
-        .filter(({ a }) => a.ringTeal >= RING_TEAL_MIN && a.score >= ANNULUS_MIN);
+      // Annulus features per teal blob (reused for follow + reacquire).
+      const feats = tealBlobs.map(b => ({ b, a: this.getAnnulus(b) }));
 
-      if (champs.length > 0) {
-        // Phase 1 (follow): nearest champion-ring blob within jump range of the
-        // predicted point. hasClassifier=false → pure nearest-in-range (position
-        // decides among already shape-validated champions; no classifier veto).
-        const follow = pickBestBlobInRange(champs.map(c => c.b), lastReg, predicted, maxJumpPx, false, scoreFns);
-        if (follow) {
+      // Phase 1 (follow, LENIENT): once locked, the champion is near where it was
+      // a frame ago. Track the nearest teal blob within the (bounded) jump radius
+      // that isn't obviously clutter — we do NOT require a perfect ring every
+      // frame (rings merge with neighbors, get crossed by the camera-box line, or
+      // break into arcs). FOLLOW_ANNULUS_FLOOR rejects only teal-FILLED turrets /
+      // minion clumps, so if the champion truly leaves (recall/teleport/death) we
+      // won't latch a turret nearby — we fall through to the strict reacquire.
+      const followable = feats.filter(c => c.a.score > FOLLOW_ANNULUS_FLOOR).map(c => c.b);
+      const follow = pickBestBlobInRange(followable, lastReg, predicted, maxJumpPx, false, scoreFns);
+      if (follow) {
+        const fa = feats.find(c => c.b === follow.blob)!.a;
+        // Coasting guard: if we've trailed sub-acquire-confidence blobs for too
+        // many frames in a row, the champion probably left — stop following and
+        // let the strict reacquire below re-find it. A confident frame resets it.
+        this.weakFollowFrames = fa.score >= ANNULUS_MIN ? 0 : this.weakFollowFrames + 1;
+        if (this.weakFollowFrames < WEAK_FOLLOW_DROP) {
           this.finalizeLockedFrame(follow.blob, lastReg, holdSec);
-          return;
-        }
-
-        // Phase 2 (reacquire): none in range — snap to the strongest champion
-        // ring anywhere on the minimap (teleport, respawn, camera pan, overlap).
-        if (this.holdStartMs === 0) this.holdStartMs = performance.now();
-        let best: { b: Blob; a: AnnulusFeatures } | null = null;
-        for (const c of champs) {
-          if (!best || c.a.score > best.a.score) best = c;
-        }
-        if (best) {
-          this.acquireViaClassifier(best.b, best.a.score, 'annulus');
           return;
         }
       }
 
-      // No champion-ring blob this frame → fall through to extrapolate (Phase 3).
+      // Phase 2 (reacquire, STRICT): nothing followable in range (or coasted too
+      // long) → champion jumped (teleport/recall/respawn) or vanished. Re-lock the
+      // confident champion ring anywhere via the strict annulus gate. NOTE: this
+      // picks the strongest ring globally; among several ally rings it cannot yet
+      // distinguish self from a teammate — viewport-anchored self-ID (Phase 3) is
+      // the intended follow-up for the recall-to-base / clustered case.
+      this.weakFollowFrames = 0;
+      if (this.holdStartMs === 0) this.holdStartMs = performance.now();
+      let best: { b: Blob; a: AnnulusFeatures } | null = null;
+      for (const c of feats) {
+        if (c.a.ringTeal < RING_TEAL_MIN || c.a.score < ANNULUS_MIN) continue;
+        if (!best || c.a.score > best.a.score) best = c;
+      }
+      if (best) {
+        this.acquireViaClassifier(best.b, best.a.score, 'annulus');
+        return;
+      }
+
+      // Phase 3: nothing matched → extrapolate (hold).
       if (this.lockedTickCount === 0) {
         console.log('[Tracking] Extrapolating position (no champion-ring blob)');
         this.holdStartMs = performance.now();
@@ -1400,6 +1420,7 @@ export class TrackingService {
     this.setLastPosition(newPos, 'classifier-reacquire');
     this.velocityX = 0;
     this.velocityY = 0;
+    this.weakFollowFrames = 0;
     this.lockedTickCount++;
     console.log('[Tracking] Re-acquired via ' + source + ' (score=' + score.toFixed(2) +
       '): pixel(' + cx + ',' + cy + ')' +

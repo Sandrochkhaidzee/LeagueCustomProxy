@@ -17,7 +17,9 @@ export function computeMaxJumpPx(
 ): number {
   const base = Math.max(20, Math.round(expectedIconDiam * 2.0));
   const holdSec = holdStartMs > 0 ? (nowMs - holdStartMs) / 1000 : 0;
-  const holdExpansion = holdSec > 0 ? Math.round(expectedIconDiam * holdSec) : 0;
+  const holdExpansion = holdSec > 0
+    ? Math.min(Math.round(expectedIconDiam * 1.5), Math.round(expectedIconDiam * holdSec))
+    : 0;
   return base + holdExpansion;
 }
 
@@ -235,3 +237,15 @@ export function annulusFeatures(
 export const RING_TEAL_MIN = 0.10;
 /** Min annulus score (ringTeal − centerTeal) to accept; rejects teal-filled turrets. Provisional. */
 export const ANNULUS_MIN = 0.05;
+
+/** Follow-path anti-clutter floor (LENIENT): once locked, accept any teal blob
+ *  near the predicted spot whose annulus isn't clearly a filled turret / minion
+ *  clump. Much looser than the acquire gate (RING_TEAL_MIN/ANNULUS_MIN) — partial
+ *  or neighbor-merged champion rings (score ~0) still pass; only strongly-negative
+ *  (teal-FILLED) blobs are rejected, so we don't latch a turret when the champion
+ *  has actually left (recall/teleport/death). */
+export const FOLLOW_ANNULUS_FLOOR = -0.15;
+/** Consecutive frames of trailing a sub-acquire-confidence (score < ANNULUS_MIN)
+ *  blob before dropping the lock and forcing a strict reacquire — bounds how long
+ *  we coast on a possibly-wrong blob when the champion has left. */
+export const WEAK_FOLLOW_DROP = 15;
