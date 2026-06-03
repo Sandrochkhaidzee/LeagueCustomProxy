@@ -288,6 +288,57 @@ export class TrackingService {
     return this.championTemplates !== null && this.championTemplates.has(this.localChampForTemplates);
   }
 
+  // v0.4 Phase C: opt-in harvesting of labeled self-crops.
+  private harvestEnabled = false;
+  private harvestLabel = '';
+  private lastHarvestMs = 0;
+  private harvestCanvas: HTMLCanvasElement | null = null;
+  onHarvestCrop: ((dataUrl: string, label: string) => void) | null = null;
+
+  setHarvest(enabled: boolean, label: string): void {
+    this.harvestEnabled = enabled;
+    this.harvestLabel = label;
+    if (enabled) console.log('[Tracking] Harvest ON — saving self-crops labeled "' + label + '"');
+  }
+
+  /** While LOCKED, periodically emit a crop of the self icon labeled with the
+   *  local champion, for real-data accuracy measurement. ~1 crop / 2s. */
+  private maybeHarvestSelfCrop(imageData: ImageData, nowMs: number): void {
+    if (!this.harvestEnabled || !this.onHarvestCrop) return;
+    if (this.state !== TrackingState.LOCKED || !this.lastPixelPos) return;
+    if (nowMs - this.lastHarvestMs < 2000) return;
+    this.lastHarvestMs = nowMs;
+    const half = Math.max(8, Math.round(this.expectedIconDiam * 0.7));
+    const cx = Math.round(this.lastPixelPos.x);
+    const cy = Math.round(this.lastPixelPos.y);
+    const out = 32;
+    if (!this.harvestCanvas) {
+      this.harvestCanvas = document.createElement('canvas');
+      this.harvestCanvas.width = out;
+      this.harvestCanvas.height = out;
+    }
+    const ctx = this.harvestCanvas.getContext('2d');
+    if (!ctx) return;
+    const dst = ctx.createImageData(out, out);
+    const W = imageData.width, H = imageData.height;
+    for (let oy = 0; oy < out; oy++) {
+      for (let ox = 0; ox < out; ox++) {
+        let sx = cx - half + Math.round((ox + 0.5) * (2 * half) / out);
+        let sy = cy - half + Math.round((oy + 0.5) * (2 * half) / out);
+        if (sx < 0) sx = 0; else if (sx >= W) sx = W - 1;
+        if (sy < 0) sy = 0; else if (sy >= H) sy = H - 1;
+        const si = (sy * W + sx) * 4;
+        const di = (oy * out + ox) * 4;
+        dst.data[di] = imageData.data[si];
+        dst.data[di + 1] = imageData.data[si + 1];
+        dst.data[di + 2] = imageData.data[si + 2];
+        dst.data[di + 3] = 255;
+      }
+    }
+    ctx.putImageData(dst, 0, 0);
+    try { this.onHarvestCrop(this.harvestCanvas.toDataURL('image/png'), this.harvestLabel); } catch { /* ignore */ }
+  }
+
   /**
    * v0.4 identity scoring via SSIM template matching. For each teal blob, crop
    * + grayscale it and score how strongly it matches the LOCAL champion's icon,
@@ -964,6 +1015,10 @@ export class TrackingService {
             } else if (this.state === TrackingState.LOCKED) {
               this.handleLocked(iconBlobs, whiteMask, viewportMask, region);
             }
+
+            // v0.4 (Phase C): opt-in harvest of the self-blob crop while LOCKED,
+            // to build a REAL labeled dataset for measuring tracking accuracy.
+            this.maybeHarvestSelfCrop(imageData, nowMs);
           } finally {
             this.tickRunning = false;
           }

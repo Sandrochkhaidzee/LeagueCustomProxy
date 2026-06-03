@@ -39,6 +39,27 @@ fn open_log_folder(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// v0.4 (Phase C): save a harvested minimap-blob crop to
+/// `<app_local_data>/harvest/<label>/<unix_ms>.png`, decoding a
+/// `data:image/png;base64,...` URL. Used by the opt-in (Debug-only) training-
+/// crop harvester to build a REAL labeled dataset for measuring tracking
+/// accuracy — synthetic metrics don't predict real performance
+/// (docs/plans/2026-06-03-cv-tracking-research.md). Best-effort; off by default.
+#[tauri::command]
+fn save_harvest_crop(app: tauri::AppHandle, label: String, data_url: String, ts: u64) -> Result<(), String> {
+    use base64::Engine;
+    let b64 = data_url.split(",").nth(1).ok_or("malformed data url")?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| e.to_string())?;
+    // Sanitize the label into a safe folder name.
+    let safe: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("harvest").join(&safe);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(format!("{}.png", ts)), &bytes).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn write_log_line(state: &tauri::State<LogFile>, line: String) {
     if let Ok(mut guard) = state.file.lock() {
         if let Some(f) = guard.as_mut() {
@@ -260,6 +281,7 @@ fn main() {
             resize_overlay,
             append_log,
             open_log_folder,
+            save_harvest_crop,
             updater::check_for_update,
             updater::download_and_apply_update,
             global_keys::set_ptt_key,

@@ -222,6 +222,20 @@ export class Orchestrator {
       this.tracking = new TrackingService(gameW, gameH, session.mapType);
       this.tracking.loadChampionTemplate(session.localPlayer.championName);
 
+      // v0.4 Phase C: opt-in harvest of labeled self-crops (Debug-only tooling
+      // for building a real accuracy test set). Saves to
+      // %LOCALAPPDATA%\com.proxchat.app\harvest\<champion>\. Off unless the
+      // localStorage flag is set.
+      let harvestOn = false;
+      try { harvestOn = window.localStorage.getItem('lolproxchat.harvest') === 'true'; } catch { /* ignore */ }
+      if (harvestOn) {
+        this.tracking.setHarvest(true, session.localPlayer.championName);
+        this.tracking.onHarvestCrop = (dataUrl, label) => {
+          invoke('save_harvest_crop', { label, dataUrl, ts: Date.now() })
+            .catch((e) => console.warn('[LoLProxChat] harvest save failed:', e));
+        };
+      }
+
       // Set capture bounds in Tauri backend
       await this.tracking.initCaptureBounds();
 
