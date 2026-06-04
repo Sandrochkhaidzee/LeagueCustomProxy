@@ -4,6 +4,20 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.5.0] — 2026-06-04
+
+### Changed
+- **Champion tracking reverted to the v0.3.1 classifier.** The whole v0.4 line — NCC/SSIM template matching (v0.4.0), then a teal ring/annulus detector with an angular-coverage gate — turned out more brittle in real games than the classifier it replaced: it under-locked (holding/stale between locks) and drifted onto minion lanes, turrets, and the occasional ward/effect ring, especially on the small minimap where dense minion clusters defeat the coverage gate. Real-game testing showed the pre-v0.4 classifier keeps the dot on your champion noticeably better, so tracking is restored to v0.3.1's implementation (its known-bad v0.3.0 confidence gates were already removed). Every non-tracking improvement since v0.4.0 is kept — including the contamination fix below.
+- **Cross-team (enemy) proximity is now a single vision-range falloff.** Enemies fade in very faintly at roughly a champion's sight range (~1350u) and get louder as they close, replacing the old two-tier scheme (audible only within ~600u by default, ~1200u with a toggle) which felt too close. Allies are unchanged (always full volume).
+
+### Fixed
+- **No proximity audio when two or more players shared one network** (a household or premade on a single public IP). The server rate-limited the volume endpoint per IP, so multiple clients behind one NAT blew the limit and *every* request came back 429 — the client never received peer volumes, so everyone was silent. The limit is now keyed per player (IP + name) and sized for the maximum scan rate, with a per-IP backstop against abuse; players sharing a network each get their own budget.
+- **The Debug tracking dot corrupted tracking while Debug was on.** The desktop capture the tracker analyzes included the overlay, so the red position dot was fed back into the computer-vision input as a spurious blob. It no longer renders into the captured region.
+
+### Removed
+- **"Hear enemies at full vision range" setting.** Cross-team hearing is always on at vision range now (see Changed), so the toggle and its plumbing are gone.
+- The v0.4 computer-vision scaffolding (template-matching module, HSV color-detect module, Data Dragon icon templates) and the Debug "Harvest CV crops" tooling, all of which existed to support the now-reverted template/annulus tracker.
+
 ## [v0.4.4] — 2026-06-03
 
 ### Fixed
@@ -284,6 +298,7 @@ All notable changes to this project are documented here. Format adapted from [Ke
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
 [Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.4...HEAD
+[v0.5.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.5.0
 [v0.4.4]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.4
 [v0.4.3]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.3
 [v0.4.2]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.2
