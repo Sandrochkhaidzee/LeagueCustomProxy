@@ -5,26 +5,16 @@ import { SignalingService, SignalMessage, PositionBroadcast } from './signaling'
 import { AudioService } from './audio';
 import { TrackingService, TrackingState } from './tracking';
 import { ChampionClassifier } from './champion-classifier';
-import { loadChampionTemplates } from './champion-icons';
 import { VolumeClient } from './volume-client';
 import { PeerState } from '../core/types';
 import '../core/window-globals';
 import { isStreamerMode } from '../core/streamer-detect';
 
 const HEAR_CROSS_TEAM_KEY = 'lolproxchat.hearCrossTeam';
-const HARVEST_KEY = 'lolproxchat.harvest';
 
 function readHearCrossTeamPref(): boolean {
   try {
     return window.localStorage.getItem(HEAR_CROSS_TEAM_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function readHarvestPref(): boolean {
-  try {
-    return window.localStorage.getItem(HARVEST_KEY) === 'true';
   } catch {
     return false;
   }
@@ -231,37 +221,10 @@ export class Orchestrator {
       this.tracking = new TrackingService(gameW, gameH, session.mapType);
       this.tracking.loadChampionTemplate(session.localPlayer.championName);
 
-      // v0.4 Phase C: opt-in harvest of labeled self-crops (Debug-only tooling
-      // for building a real accuracy test set). Saves to
-      // %LOCALAPPDATA%\com.proxchat.app\harvest\<champion>\. The callback is
-      // always wired (cheap); the Settings → Debug "Harvest CV crops" toggle
-      // flips it on/off live via setHarvestPref / tracking.setHarvest.
-      this.tracking.onHarvestCrop = (dataUrl, label) => {
-        invoke('save_harvest_crop', { label, dataUrl, ts: Date.now() })
-          .catch((e) => console.warn('[LoLProxChat] harvest save failed:', e));
-      };
-      this.tracking.setHarvest(readHarvestPref(), session.localPlayer.championName);
-
       // Set capture bounds in Tauri backend
       await this.tracking.initCaptureBounds();
 
-      // v0.4: fetch this match's actual champion icons from Data Dragon and
-      // install them as SSIM templates — the primary identity signal. We know
-      // the exact champions from the roster, so this is a tiny bounded fetch.
-      // Non-blocking; tracking runs on color/blob detection until they arrive.
-      const rosterNames = session.allPlayers.map(p => p.championName);
-      loadChampionTemplates(rosterNames, 32)
-        .then(templates => {
-          if (this.tracking && templates.length > 0) {
-            this.tracking.setChampionTemplates(templates, session.localPlayer.championName);
-            console.log('[LoLProxChat] Champion templates loaded (' + templates.length + '/' + new Set(rosterNames).size + ')');
-          }
-        })
-        .catch(err => console.warn('[LoLProxChat] Champion template fetch failed (using classifier fallback):', err));
-
-      // Load champion classifier as a FALLBACK (async, non-blocking) for when
-      // the template fetch fails (offline, CDN down). Template matching is
-      // preferred when available.
+      // Load champion classifier (async, non-blocking — tracking works without it)
       const classifier = new ChampionClassifier();
       classifier.load(
         '../models/champion_classifier.onnx',
@@ -270,7 +233,7 @@ export class Orchestrator {
       ).then(() => {
         if (this.tracking) {
           this.tracking.setClassifier(classifier);
-          console.log('[LoLProxChat] Champion classifier loaded (fallback)');
+          console.log('[LoLProxChat] Champion classifier loaded');
         }
       }).catch(err => {
         console.warn('[LoLProxChat] Champion classifier failed to load (tracking continues without it):', err);
@@ -559,12 +522,6 @@ export class Orchestrator {
   setHearCrossTeamPref(enabled: boolean): void {
     try { window.localStorage.setItem(HEAR_CROSS_TEAM_KEY, String(enabled)); } catch { /* ignore */ }
     this.signaling.setHearCrossTeam(enabled);
-  }
-  /** v0.4.2: live toggle for the Debug "Harvest CV crops" tool. Persists the
-   *  pref and applies it to the running tracker (label = current champion). */
-  setHarvestPref(enabled: boolean): void {
-    try { window.localStorage.setItem(HARVEST_KEY, String(enabled)); } catch { /* ignore */ }
-    this.tracking?.setHarvest(enabled, this.session?.localPlayer.championName ?? '');
   }
   setScanRate(fps: number): void {
     if (!this.tracking) return;

@@ -17,9 +17,7 @@ export function computeMaxJumpPx(
 ): number {
   const base = Math.max(20, Math.round(expectedIconDiam * 2.0));
   const holdSec = holdStartMs > 0 ? (nowMs - holdStartMs) / 1000 : 0;
-  const holdExpansion = holdSec > 0
-    ? Math.min(Math.round(expectedIconDiam * 1.5), Math.round(expectedIconDiam * holdSec))
-    : 0;
+  const holdExpansion = holdSec > 0 ? Math.round(expectedIconDiam * holdSec) : 0;
   return base + holdExpansion;
 }
 
@@ -112,47 +110,19 @@ export function pickBestBlobInRange(
 }
 
 /**
- * Minimum *absolute* template-match confidence (raw SSIM-margin remapped to
- * [0,1]) required to lock or re-acquire onto a blob anywhere on the minimap.
- *
- * Both re-acquisition (Phase 2) and the SCANNING→LOCK transition pick the
- * best-scoring blob regardless of distance, scored on the *normalized* (best
- * blob = 1.0) confidence. Normalization is relative, so it can't tell "the real
- * champion" from "the least-bad of a frame full of wrong blobs" — letting a
- * minion/ally icon win and yanking the broadcast position across the map
- * (observed: position teleporting between opposite corners). The *raw* template
- * score is absolute, so we gate on it. Real-game measurement: the true
- * champion's blob scores 0.56-0.65 here; wrong blobs (minions, ally icons) top
- * out at ~0.49. 0.53 sits in that gap. Below it, the tracker holds/extrapolates
- * (or stays SCANNING) rather than chasing a wrong blob.
- *
- * Only applied on the template path. The old 172-class classifier had no
- * meaningful absolute confidence (weak on champions like Teemo), which is why
- * v0.3.1 reverted a similar gate — it refused to lock at all. Template matching
- * is reliable, so the gate fails safe to "no lock," never "wrong lock."
- */
-export const REACQUIRE_TEMPLATE_MIN = 0.53;
-
-/**
  * Phase 2: pick the teal blob with the highest classifier confidence above
  * the (adaptive) reacquire threshold, regardless of distance. Handles
  * teleport, respawn, camera pan, blob-overlap recovery.
- *
- * `absGate` (optional) adds an absolute-confidence floor on top of the relative
- * `threshold` — a blob must clear BOTH to be eligible. Used on the template
- * path to reject far wrong-blob jumps; omitted on the classifier fallback.
  */
 export function pickClassifierReacquisition(
   tealBlobs: Blob[],
   threshold: number,
   clsScoreFn: (b: Blob) => number,
-  absGate?: { scoreFn: (b: Blob) => number; min: number },
 ): ScoredBlob | null {
   let best: ScoredBlob | null = null;
   for (const b of tealBlobs) {
     const clsScore = clsScoreFn(b);
     if (clsScore < threshold) continue;
-    if (absGate && absGate.scoreFn(b) < absGate.min) continue;
     if (!best || clsScore > best.score) best = { blob: b, score: clsScore };
   }
   return best;
@@ -193,128 +163,3 @@ export function shouldForceReacquisition(holdStartMs: number, nowMs: number): bo
 export function nextClassifierEma(currentEma: number, raw: number, decay: number): number {
   return currentEma * decay + raw * (1 - decay);
 }
-
-// ---------- v0.4 ring-annulus detection (champion shape signature) ----------
-
-export interface AnnulusFeatures { ringTeal: number; centerTeal: number; score: number; }
-
-/**
- * Champion-ring signature on the teal mask, measured around a blob center.
- * A champion icon is an ally-teal RING with a non-teal portrait CENTER; a turret
- * is teal-FILLED (high center); minions/terrain have little teal in the ring.
- * Bands are relative to the icon radius r: center < 0.55r, ring 0.70r–1.05r.
- * The 0.55r–0.70r gap is an intentional deadband — it skips the fuzzy
- * portrait/ring boundary so neither band is polluted by transition pixels,
- * sharpening the center-vs-ring contrast.
- * Validated on real crops (scripts/annulus_separation.py): champion score >0,
- * turret score <0. `mask[i]===1` means teal/ally. r/cx/cy may be fractional
- * (blob radius is max(bw,bh)/2, often ending in .5) — bands are computed in
- * squared-distance space so fractional inputs work without rounding.
- */
-export function annulusFeatures(
-  mask: Uint8Array, w: number, h: number, cx: number, cy: number, r: number,
-): AnnulusFeatures {
-  const cR = 0.55 * r, inner = 0.70 * r, outer = 1.05 * r;
-  const cR2 = cR * cR, in2 = inner * inner, out2 = outer * outer;
-  const x0 = Math.max(0, Math.floor(cx - outer)), x1 = Math.min(w - 1, Math.ceil(cx + outer));
-  const y0 = Math.max(0, Math.floor(cy - outer)), y1 = Math.min(h - 1, Math.ceil(cy + outer));
-  let cT = 0, cN = 0, rT = 0, rN = 0;
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-      const teal = mask[y * w + x] === 1 ? 1 : 0;
-      if (d2 <= cR2) { cN++; cT += teal; }
-      else if (d2 >= in2 && d2 <= out2) { rN++; rT += teal; }
-    }
-  }
-  const ringTeal = rN ? rT / rN : 0;
-  const centerTeal = cN ? cT / cN : 0;
-  return { ringTeal, centerTeal, score: ringTeal - centerTeal };
-}
-
-export interface RingMatch { cx: number; cy: number; ringTeal: number; centerTeal: number; score: number; coverage: number; }
-
-/**
- * Best champion-ring match WITHIN a blob: scan candidate centers across the blob's
- * bbox at the EXPECTED icon radius (not the blob's own radius) and return the
- * highest-scoring annulus. Recovers a champion ring from a blob that merged with
- * an adjacent icon/turret — the merged centroid+radius score "filled" (negative),
- * but an icon-radius window centered on the actual ring still scores positive. For
- * a clean single-icon blob the best center ≈ the centroid. Offline-validated:
- * ~3.5x more frames with a detectable champion ring vs centroid-only.
- */
-export function bestRingInBlob(
-  mask: Uint8Array, w: number, h: number, blob: Blob, iconR: number,
-): RingMatch {
-  const step = Math.max(2, Math.round(iconR / 3));
-  let best: RingMatch = { cx: blob.cx, cy: blob.cy, ringTeal: 0, centerTeal: 0, score: -Infinity, coverage: 0 };
-  for (let cy = blob.minY; cy <= blob.maxY; cy += step) {
-    for (let cx = blob.minX; cx <= blob.maxX; cx += step) {
-      const a = annulusFeatures(mask, w, h, cx, cy, iconR);
-      if (a.score > best.score) best = { cx, cy, ringTeal: a.ringTeal, centerTeal: a.centerTeal, score: a.score, coverage: 0 };
-    }
-  }
-  // Coverage measured once at the chosen center — distinguishes a continuous
-  // champion ring from a minion cluster with the same teal FRACTION but scattered
-  // around only a few sectors (see ringCoverage).
-  if (best.score > -Infinity) best.coverage = ringCoverage(mask, w, h, best.cx, best.cy, iconR);
-  return best;
-}
-
-/**
- * Fraction of angular sectors around the ring band that contain ally-teal — i.e.
- * how COMPLETE the ring is. A champion icon has a continuous ally ring (coverage
- * ≈ 1); a minion cluster forms a "ring" of a few scattered dots that scores the
- * same annulus FRACTION but only spans a few sectors (low coverage). The annulus
- * score alone can't separate them (measured: both ~0.30 ring-teal); coverage can
- * (measured: champion median 1.00, minion-cluster 0.58). `mask[i]===1` = teal.
- */
-export function ringCoverage(
-  mask: Uint8Array, w: number, h: number, cx: number, cy: number, r: number, nSectors = 12,
-): number {
-  const inner = 0.70 * r, outer = 1.05 * r;
-  const in2 = inner * inner, out2 = outer * outer;
-  const x0 = Math.max(0, Math.floor(cx - outer)), x1 = Math.min(w - 1, Math.ceil(cx + outer));
-  const y0 = Math.max(0, Math.floor(cy - outer)), y1 = Math.min(h - 1, Math.ceil(cy + outer));
-  const hit = new Array<boolean>(nSectors).fill(false);
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      if (mask[y * w + x] !== 1) continue;
-      const dx = x - cx, dy = y - cy, d2 = dx * dx + dy * dy;
-      if (d2 < in2 || d2 > out2) continue;
-      let sec = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI)) * nSectors);
-      if (sec >= nSectors) sec = nSectors - 1; else if (sec < 0) sec = 0;
-      hit[sec] = true;
-    }
-  }
-  let covered = 0;
-  for (const s of hit) if (s) covered++;
-  return covered / nSectors;
-}
-
-/** Min ally-teal fraction in the ring band to consider a blob a champion ring.
- *  Provisional (Garen 90%/93% point); re-tuned in Phase 5 on more harvested data. */
-export const RING_TEAL_MIN = 0.10;
-/** Min annulus score (ringTeal − centerTeal) to accept; rejects teal-filled turrets. Provisional. */
-export const ANNULUS_MIN = 0.05;
-/** Min ring angular coverage (fraction of sectors with ally-teal) to accept a ring.
- *  Rejects minion clusters that form a scattered "ring" with the same teal fraction
- *  as a champion but cover only a few sectors. Offline-validated: champion median
- *  1.00 (91% ≥ 0.75), minion-cluster median 0.58 (12% ≥ 0.75). */
-export const RING_COVERAGE_MIN = 0.75;
-
-/** Follow-path floor: once locked, follow the nearest in-range blob with a
- *  POSITIVE ring score (ring teal exceeds center teal). Under the scan-max getRing
- *  (bestRingInBlob), a teal-FILLED turret/minion clump scores ~0 (the scan finds a
- *  fully-enclosed center where ring ≈ center), while a real champion ring — even
- *  partial or neighbor-merged — scores clearly positive (~0.14+ measured on real
- *  frames). So a small positive floor rejects filled clutter yet stays lenient vs
- *  the acquire gate (it drops the RING_TEAL_MIN requirement). Frames in
- *  (0, ANNULUS_MIN) are still followed but counted by the WEAK_FOLLOW_DROP guard.
- *  (Was -0.15 for the old centroid scoring, where filled blobs scored strongly
- *  negative; scan-max shifted them to ~0, so the floor had to move up.) */
-export const FOLLOW_ANNULUS_FLOOR = 0.0;
-/** Consecutive frames of trailing a sub-acquire-confidence (score < ANNULUS_MIN)
- *  blob before dropping the lock and forcing a strict reacquire — bounds how long
- *  we coast on a possibly-wrong blob when the champion has left. */
-export const WEAK_FOLLOW_DROP = 15;

@@ -2,35 +2,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { Position, MapType, MAP_DIMENSIONS } from '../core/types';
 import { getMinimapBounds, MinimapBounds } from '../core/map-calibration';
 import { ChampionClassifier } from './champion-classifier';
-import type { ChampionTemplate } from './champion-icons';
-import { classifyMinimapPixel } from './color-detect';
-import {
-  cropResizeGray,
-  toGrayscale,
-  circularMaskIndices,
-  ssim,
-} from './template-match';
 import {
   computeMaxJumpPx,
   computeReacquireThreshold,
   pickBestBlobInRange,
   pickClassifierReacquisition,
-  REACQUIRE_TEMPLATE_MIN,
   ScoreFns,
   // v0.3: CV tracking tweaks driven by IXAM's v0.1.33 issue #7 logs
   // (v0.3.1 reverted the classifier-confidence-dependent ones — see below)
   nextClassifierEma,
   shouldForceReacquisition,
   FORCED_REACQUIRE_HOLD_MS,
-  // v0.4 (Phase 2): champion ring/annulus shape signature — the primary
-  // identity gate on the template path (replaces the dead SSIM/template gate).
-  bestRingInBlob,
-  RingMatch,
-  RING_TEAL_MIN,
-  RING_COVERAGE_MIN,
-  ANNULUS_MIN,
-  FOLLOW_ANNULUS_FLOOR,
-  WEAK_FOLLOW_DROP,
 } from './tracking-helpers';
 
 export enum TrackingState {
@@ -79,41 +61,15 @@ export class TrackingService {
   private filteredImageUrl: string | null = null;
   private lastDebugImageMs = 0;
 
-  // Champion classifier (ONNX model). v0.4: kept only as a FALLBACK for when
-  // the per-game template fetch fails — template matching is the primary
-  // identity signal (see championTemplates below).
+  // Champion classifier (ONNX model)
   private classifier: ChampionClassifier | null = null;
-  // Cached identity scores per blob (refreshed periodically, not every frame).
-  // Populated by either the template-match path (v0.4 primary) or the
-  // classifier path (fallback); getClassifierScore reads whichever ran.
+  // Cached classifier scores per blob (refreshed periodically, not every frame)
   private classifierScores: Map<string, number> = new Map();
-  // Raw (un-normalized, un-EMA'd) template-match scores per blob, in absolute
-  // [0,1] confidence. Unlike classifierScores (relative), these survive as a
-  // meaningful "is this really the champion?" signal — used to gate far
-  // re-acquisition / lock so a wrong blob can't yank position across the map.
-  private templateRawScores: Map<string, number> = new Map();
-  // v0.4 (Phase 2): the RAW (un-dilated) teal classifier mask + its dims,
-  // captured each tick before dilation. bestRingInBlob/annulusFeatures read this — dilation
-  // fills the ring's hollow center and wrecks the center-contrast signal, and
-  // the Python validation used the raw classifier mask. mask[i]===1 means teal.
-  private currentTealMask: Uint8Array | null = null;
-  private currentMaskW = 0;
-  private currentMaskH = 0;
-  // EMA-smoothed scores to dampen single-frame misidentifications
+  // EMA-smoothed classifier scores to dampen single-frame misclassifications
   private smoothedClassifierScores: Map<string, number> = new Map();
   private lastClassifierRunMs = 0;
   private lastClassifierLogMs = 0;
   private classifierRunning = false;
-
-  // v0.4: per-game champion icon templates (grayscale, circular-masked) for
-  // SSIM template matching, keyed by champion display name. When set, the
-  // tracker matches blobs against the actual 10 champions in this match
-  // instead of running the 172-class ONNX classifier. See template-match.ts
-  // and docs/plans/2026-06-03-cv-tracking-research.md.
-  private championTemplates: Map<string, Float32Array> | null = null;
-  private localChampForTemplates = '';
-  private readonly templateSize = 32;
-  private templateMask: number[] = [];
 
   // Debug canvas (reused to avoid allocation per frame)
   private debugCanvas: HTMLCanvasElement | null = null;
@@ -130,10 +86,6 @@ export class TrackingService {
   // Used to make Phase 2 re-acquisition stricter when stationary, so we don't
   // teleport the tracking dot onto a minion wave / turret if the icon flickers.
   private lastMovementMs = 0;
-  // Consecutive FOLLOW frames spent trailing a sub-acquire-confidence blob.
-  // Bounds how long we lenient-follow a possibly-wrong blob before dropping the
-  // lock and forcing a strict reacquire (see WEAK_FOLLOW_DROP).
-  private weakFollowFrames = 0;
   private static readonly TUNED_FPS = 8;
 
   // Diagnostics
@@ -285,219 +237,6 @@ export class TrackingService {
   }
 
   /**
-   * v0.4: install the per-game champion icon templates. Once set, the tracker
-   * identifies blobs by SSIM template matching against the actual champions in
-   * this match instead of the 172-class classifier. `localChampionName` is the
-   * display name of the local player's champion (the one we self-track).
-   */
-  setChampionTemplates(templates: ChampionTemplate[], localChampionName: string): void {
-    if (templates.length === 0) {
-      console.warn('[Tracking] No champion templates loaded — falling back to classifier');
-      return;
-    }
-    const map = new Map<string, Float32Array>();
-    for (const t of templates) {
-      // Templates arrive at the fetched size; resample to our templateSize via
-      // grayscale (they're already square + circular-cropped).
-      const gray = t.size === this.templateSize
-        ? toGrayscale(t.rgba, t.size, t.size)
-        : cropResizeGray(t.rgba, t.size, t.size, 0, 0, t.size, t.size, this.templateSize);
-      map.set(t.name, gray);
-    }
-    this.championTemplates = map;
-    this.localChampForTemplates = localChampionName;
-    this.templateMask = circularMaskIndices(this.templateSize);
-    console.log('[Tracking] Champion templates set: ' + templates.map(t => t.name).join(', ') +
-      ' (self=' + localChampionName + ')');
-  }
-
-  hasTemplates(): boolean {
-    return this.championTemplates !== null && this.championTemplates.has(this.localChampForTemplates);
-  }
-
-  // v0.4 Phase C: opt-in harvesting of labeled self-crops.
-  private harvestEnabled = false;
-  private harvestLabel = '';
-  private lastHarvestMs = 0;
-  private harvestCanvas: HTMLCanvasElement | null = null;
-  // Debug: full native-resolution minimap-region frames (not just the 32px self
-  // crop) for offline detection/annulus calibration. Captured in ALL states.
-  private frameCanvas: HTMLCanvasElement | null = null;
-  private lastFrameMs = 0;
-  onHarvestCrop: ((dataUrl: string, label: string) => void) | null = null;
-
-  setHarvest(enabled: boolean, label: string): void {
-    this.harvestEnabled = enabled;
-    this.harvestLabel = label;
-    if (enabled) console.log('[Tracking] Harvest ON — saving self-crops labeled "' + label + '"');
-  }
-
-  /** While LOCKED, periodically emit a crop of the self icon labeled with the
-   *  local champion, for real-data accuracy measurement. ~1 crop / 2s. */
-  private maybeHarvestSelfCrop(imageData: ImageData, nowMs: number): void {
-    if (!this.harvestEnabled || !this.onHarvestCrop) return;
-    if (this.state !== TrackingState.LOCKED || !this.lastPixelPos) return;
-    // Sane rate: ~1 crop / 3s while locked (~600 tiny PNGs over a 30-min game,
-    // ~1 MB). Enough variety to tune detection without spamming the disk.
-    if (nowMs - this.lastHarvestMs < 3000) return;
-    this.lastHarvestMs = nowMs;
-    const half = Math.max(8, Math.round(this.expectedIconDiam * 0.7));
-    const cx = Math.round(this.lastPixelPos.x);
-    const cy = Math.round(this.lastPixelPos.y);
-    const out = 32;
-    if (!this.harvestCanvas) {
-      this.harvestCanvas = document.createElement('canvas');
-      this.harvestCanvas.width = out;
-      this.harvestCanvas.height = out;
-    }
-    const ctx = this.harvestCanvas.getContext('2d');
-    if (!ctx) return;
-    const dst = ctx.createImageData(out, out);
-    const W = imageData.width, H = imageData.height;
-    for (let oy = 0; oy < out; oy++) {
-      for (let ox = 0; ox < out; ox++) {
-        let sx = cx - half + Math.round((ox + 0.5) * (2 * half) / out);
-        let sy = cy - half + Math.round((oy + 0.5) * (2 * half) / out);
-        if (sx < 0) sx = 0; else if (sx >= W) sx = W - 1;
-        if (sy < 0) sy = 0; else if (sy >= H) sy = H - 1;
-        const si = (sy * W + sx) * 4;
-        const di = (oy * out + ox) * 4;
-        dst.data[di] = imageData.data[si];
-        dst.data[di + 1] = imageData.data[si + 1];
-        dst.data[di + 2] = imageData.data[si + 2];
-        dst.data[di + 3] = 255;
-      }
-    }
-    ctx.putImageData(dst, 0, 0);
-    try { this.onHarvestCrop(this.harvestCanvas.toDataURL('image/png'), this.harvestLabel); } catch { /* ignore */ }
-  }
-
-  /** Debug: while harvesting, periodically save the FULL native minimap region
-   *  (region.width × region.height, raw pixels) so the detection + annulus
-   *  pipeline can be replayed/calibrated OFFLINE on real native-resolution data —
-   *  crucially including frames where tracking FAILED (NOT gated on LOCKED).
-   *  Saved under a "_frames_<champ>" label, separate from the 32px self-crops. */
-  private maybeHarvestFrame(
-    imageData: ImageData,
-    region: { x: number; y: number; width: number; height: number },
-    nowMs: number,
-  ): void {
-    if (!this.harvestEnabled || !this.onHarvestCrop) return;
-    if (nowMs - this.lastFrameMs < 2000) return;
-    this.lastFrameMs = nowMs;
-    const w = region.width, h = region.height;
-    if (!this.frameCanvas) this.frameCanvas = document.createElement('canvas');
-    this.frameCanvas.width = w;
-    this.frameCanvas.height = h;
-    const ctx = this.frameCanvas.getContext('2d');
-    if (!ctx) return;
-    const dst = ctx.createImageData(w, h);
-    const W = imageData.width;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const si = ((region.y + y) * W + (region.x + x)) * 4;
-        const di = (y * w + x) * 4;
-        dst.data[di] = imageData.data[si];
-        dst.data[di + 1] = imageData.data[si + 1];
-        dst.data[di + 2] = imageData.data[si + 2];
-        dst.data[di + 3] = 255;
-      }
-    }
-    ctx.putImageData(dst, 0, 0);
-    try { this.onHarvestCrop(this.frameCanvas.toDataURL('image/png'), '_frames_' + this.harvestLabel); } catch { /* ignore */ }
-  }
-
-  /**
-   * v0.4 identity scoring via SSIM template matching. For each teal blob, crop
-   * + grayscale it and score how strongly it matches the LOCAL champion's icon,
-   * disambiguated by the best OTHER-champion match (a blob that looks more like
-   * an enemy than like us is penalised — kills minion/structure clinging and
-   * enemy confusion). Populates the same `classifierScores` cache the composite
-   * scorer reads, so the rest of the pipeline is unchanged.
-   */
-  private updateTemplateScores(
-    tealBlobs: Blob[],
-    imageData: ImageData,
-    region: { x: number; y: number; width: number; height: number },
-  ): void {
-    const templates = this.championTemplates;
-    if (!templates) return;
-    const myTpl = templates.get(this.localChampForTemplates);
-    if (!myTpl) return;
-
-    const raw: number[] = [];
-    for (const b of tealBlobs) {
-      const cropX = region.x + b.minX - 1;
-      const cropY = region.y + b.minY - 1;
-      const cropW = b.maxX - b.minX + 3;
-      const cropH = b.maxY - b.minY + 3;
-      const gray = cropResizeGray(
-        imageData.data, imageData.width, imageData.height,
-        cropX, cropY, cropW, cropH, this.templateSize,
-      );
-      const mine = ssim(gray, myTpl, this.templateMask);
-      // Best competing (other-champion) match
-      let other = -1;
-      for (const [name, tpl] of templates) {
-        if (name === this.localChampForTemplates) continue;
-        const s = ssim(gray, tpl, this.templateMask);
-        if (s > other) other = s;
-      }
-      // Identity score: my SSIM, penalised if another champ matches better.
-      // Remap from raw SSIM (~[-1,1], real matches ~0.3) to [0,1].
-      const margin = mine - Math.max(0, other);
-      raw.push(Math.max(0, Math.min(1, (margin + 1) / 2)));
-    }
-
-    // Stash the raw (absolute) scores before normalization — the lock/re-acquire
-    // gate needs to know "is this actually the champion?", which normalization
-    // (relative, best blob → 1.0) destroys.
-    this.templateRawScores.clear();
-    for (let i = 0; i < tealBlobs.length; i++) {
-      this.templateRawScores.set(tealBlobs[i].cx + ',' + tealBlobs[i].cy, raw[i]);
-    }
-
-    // Normalize across blobs + EMA-smooth, mirroring the classifier path so
-    // downstream scoring behaves identically.
-    const MIN_RAW = 0.5; // remapped: SSIM≈0 → 0.5; below this = no real match
-    const maxRaw = Math.max(0, ...raw);
-    const normalized = maxRaw >= MIN_RAW ? raw.map(s => s / maxRaw) : raw.map(() => 0);
-
-    const EMA_ALPHA = 0.4;
-    const tolerance = Math.max(5, this.expectedIconDiam * 0.6);
-    const toleranceSq = tolerance * tolerance;
-
-    this.classifierScores.clear();
-    for (let i = 0; i < tealBlobs.length; i++) {
-      const key = tealBlobs[i].cx + ',' + tealBlobs[i].cy;
-      let priorSmoothed = -1;
-      let bestDistSq = Infinity;
-      for (const [sKey, sVal] of this.smoothedClassifierScores) {
-        const [sx, sy] = sKey.split(',').map(Number);
-        const dx = tealBlobs[i].cx - sx;
-        const dy = tealBlobs[i].cy - sy;
-        const dSq = dx * dx + dy * dy;
-        if (dSq < toleranceSq && dSq < bestDistSq) { bestDistSq = dSq; priorSmoothed = sVal; }
-      }
-      const smoothed = priorSmoothed >= 0
-        ? nextClassifierEma(priorSmoothed, normalized[i], 1 - EMA_ALPHA)
-        : normalized[i];
-      this.classifierScores.set(key, smoothed);
-    }
-    this.smoothedClassifierScores = new Map(this.classifierScores);
-
-    const now = performance.now();
-    if (now - this.lastClassifierLogMs >= 30000) {
-      this.lastClassifierLogMs = now;
-      const details = tealBlobs.map((b, i) =>
-        '(' + b.cx + ',' + b.cy + ')ssim=' + raw[i].toFixed(2) +
-        '/ema=' + (this.classifierScores.get(b.cx + ',' + b.cy) ?? 0).toFixed(2)
-      ).join(' | ');
-      console.log('[Tracking] Template scores: ' + details);
-    }
-  }
-
-  /**
    * Update known peer positions (from signaling broadcasts).
    * Converts game-unit positions to region-relative minimap pixel coordinates.
    * These are used as a soft penalty: blobs near a known peer are less likely to be "self".
@@ -629,43 +368,16 @@ export class TrackingService {
    * Uses fuzzy matching: finds the closest cached blob center within icon diameter.
    */
   private getClassifierScore(blob: Blob): number {
-    return this.lookupBlobScore(this.classifierScores, blob);
-  }
-
-  /** Absolute template-match confidence for a blob (0 if none cached). */
-  private getTemplateRawScore(blob: Blob): number {
-    return this.lookupBlobScore(this.templateRawScores, blob);
-  }
-
-  /**
-   * Best champion ring/annulus match WITHIN a blob, measured on the RAW
-   * (un-dilated) teal mask captured this tick. A champion icon is a teal RING
-   * with a non-teal portrait center (positive score); a turret is teal-filled
-   * (negative score); minions/terrain have little ring teal. This is the
-   * primary identity gate on the template path (Phase 2). Scans candidate centers
-   * across the blob's bbox at the EXPECTED icon radius (not the blob's own,
-   * possibly-merged radius) — the returned cx/cy is the best ring center, which
-   * recovers a champion ring from a blob that merged with an adjacent icon/turret.
-   */
-  private getRing(b: Blob): RingMatch {
-    if (!this.currentTealMask) return { cx: b.cx, cy: b.cy, ringTeal: 0, centerTeal: 0, score: 0, coverage: 0 };
-    return bestRingInBlob(this.currentTealMask, this.currentMaskW, this.currentMaskH, b, this.expectedIconDiam / 2);
-  }
-
-  /**
-   * Look up a per-blob score, exact center first, else the closest cached
-   * center within icon-diameter tolerance. Blob centers drift a pixel or two
-   * frame-to-frame, so an exact key miss is normal.
-   */
-  private lookupBlobScore(scores: Map<string, number>, blob: Blob): number {
-    const exact = scores.get(blob.cx + ',' + blob.cy);
+    // Exact match first
+    const exact = this.classifierScores.get(blob.cx + ',' + blob.cy);
     if (exact !== undefined) return exact;
 
+    // Fuzzy match: find closest cached center within icon diameter tolerance
     const tolerance = Math.max(5, this.expectedIconDiam * 0.6);
     const toleranceSq = tolerance * tolerance;
     let bestScore = 0;
     let bestDistSq = Infinity;
-    for (const [key, score] of scores) {
+    for (const [key, score] of this.classifierScores) {
       const [kx, ky] = key.split(',').map(Number);
       const dx = blob.cx - kx;
       const dy = blob.cy - ky;
@@ -718,10 +430,13 @@ export class TrackingService {
 
   // --- Color classification ---
 
-  /** Classify a pixel as teal (ally border), red (enemy border), or null.
-   *  Thresholds live in color-detect.ts (pure + tested against real crops). */
+  /** Classify a pixel as teal (ally border), red (enemy border), or null */
   private classifyPixel(r: number, g: number, b: number): 0 | 1 | 2 {
-    return classifyMinimapPixel(r, g, b);
+    // Teal/cyan ally border: low red, high green+blue
+    if (r < 100 && g > 120 && b > 120 && (g + b) > 280) return 1;
+    // Red enemy border: high red, low green+blue
+    if (r > 140 && g < 100 && b < 100) return 2;
+    return 0;
   }
 
   // --- Binary mask creation from minimap region ---
@@ -918,28 +633,6 @@ export class TrackingService {
   }
 
   /**
-   * Region-relative center of the minimap's camera-view rectangle (bbox center of
-   * the detected viewport pixels), or null if too few were found this frame. The
-   * camera is mostly on the local player, so this is a strong "where am I" anchor
-   * for self-ID — used to pick the champion ring that is actually SELF among
-   * several ally rings, instead of the strongest ring anywhere (which jumps to
-   * teammates). Falls back to last-known position when the camera is panned away.
-   */
-  private viewportCenter(): { x: number; y: number } | null {
-    const m = this.viewportMask;
-    if (!m || !this.minimapRegion) return null;
-    const w = this.minimapRegion.width, h = this.minimapRegion.height;
-    let minX = w, maxX = -1, minY = h, maxY = -1, n = 0;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        if (m[y * w + x] === 1) { n++; if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
-      }
-    }
-    if (n < 8) return null; // too few viewport pixels to trust
-    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-  }
-
-  /**
    * Count non-viewport white pixels in an annular region around a teal blob.
    * Excludes white pixels that are part of the camera viewport rectangle.
    */
@@ -1095,12 +788,6 @@ export class TrackingService {
             // Create filtered mask and find blobs
             const region = this.minimapRegion;
             let mask = this.createMask(imageData, region);
-            // Capture the RAW mask ref BEFORE dilation for annulus shape scoring
-            // (Task 2.2). dilate() returns a NEW array, so this stored ref keeps
-            // pointing at the un-dilated mask even after the reassignment below.
-            this.currentTealMask = mask;
-            this.currentMaskW = region.width;
-            this.currentMaskH = region.height;
             mask = this.dilate(mask, region.width, region.height);
             const allBlobs = this.findBlobs(mask, region.width, region.height);
             const iconBlobs = this.filterIconBlobs(allBlobs);
@@ -1119,23 +806,19 @@ export class TrackingService {
             // Build white pixel masks (separating movement path from viewport rectangle)
             const { whiteMask, viewportMask } = this.buildWhiteMasks(imageData, region);
 
-            // Identity scoring at most every 500ms (scan-rate independent).
-            // v0.4: prefer SSIM template matching against this game's actual
-            // champions; fall back to the ONNX classifier only when templates
-            // failed to load. Template matching is synchronous + cheap (no
-            // ONNX), so it runs inline.
+            // Run classifier at most every 500ms (scan-rate independent)
             const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
-            if (tealBlobs.length > 0 && nowMs - this.lastClassifierRunMs >= 500) {
-              if (this.hasTemplates()) {
-                this.lastClassifierRunMs = nowMs;
-                this.updateTemplateScores(tealBlobs, imageData, region);
-              } else if (this.classifier && !this.classifierRunning) {
-                this.classifierRunning = true;
-                this.lastClassifierRunMs = nowMs;
-                this.updateClassifierScores(tealBlobs, imageData, region).finally(() => {
-                  this.classifierRunning = false;
-                });
-              }
+            if (
+              this.classifier &&
+              tealBlobs.length > 0 &&
+              !this.classifierRunning &&
+              nowMs - this.lastClassifierRunMs >= 500
+            ) {
+              this.classifierRunning = true;
+              this.lastClassifierRunMs = nowMs;
+              this.updateClassifierScores(tealBlobs, imageData, region).finally(() => {
+                this.classifierRunning = false;
+              });
             }
 
             if (this.state === TrackingState.SCANNING) {
@@ -1143,13 +826,6 @@ export class TrackingService {
             } else if (this.state === TrackingState.LOCKED) {
               this.handleLocked(iconBlobs, whiteMask, viewportMask, region);
             }
-
-            // v0.4 (Phase C): opt-in harvest of the self-blob crop while LOCKED,
-            // to build a REAL labeled dataset for measuring tracking accuracy.
-            this.maybeHarvestSelfCrop(imageData, nowMs);
-            // Debug calibration: also save full native frames in ALL states
-            // (incl. tracking failures) for offline annulus tuning.
-            this.maybeHarvestFrame(imageData, region, nowMs);
           } finally {
             this.tickRunning = false;
           }
@@ -1183,11 +859,9 @@ export class TrackingService {
     this.scanFrameCount++;
 
     // Wait ~1s for classifier EMA to stabilize (~0.5s without classifier),
-    // independent of scan rate. The template/annulus path needs NO warmup:
-    // the annulus is a per-frame shape signal with no EMA to settle, so it can
-    // lock the instant a valid champion ring appears.
+    // independent of scan rate.
     const hasClassifier = !!(this.classifier && this.classifier.isLoaded());
-    const warmupMs = this.hasTemplates() ? 0 : (hasClassifier ? 1000 : 500);
+    const warmupMs = hasClassifier ? 1000 : 500;
     if (performance.now() - this.scanStartMs < warmupMs) {
       if (this.onPositionUpdate && this.lastPosition) {
         this.onPositionUpdate(this.lastPosition);
@@ -1195,42 +869,6 @@ export class TrackingService {
       return;
     }
 
-    // v0.4 (Phase 2): on the template path, select the SCANNING→LOCK target by
-    // the champion RING/annulus shape signature instead of the position-blind
-    // composite. A champion icon is a teal ring with a non-teal portrait center
-    // (positive annulus score); turrets are teal-filled (negative); minions /
-    // terrain have little ring teal. Pick the strongest ring; if no blob clears
-    // the ring/score floors, hold (no champion visible — dead, fog, off-minimap)
-    // rather than locking onto a wrong blob and yanking position across the map.
-    // The composite path below is the classifier fallback (no templates loaded).
-    if (this.hasTemplates()) {
-      // Self-ID: among champion-ring blobs, prefer the one NEAREST the camera
-      // viewport (≈ self) rather than the strongest-scoring ring anywhere — the
-      // latter snaps to a teammate's ring. No viewport detected (panned away) →
-      // fall back to the strongest ring.
-      const vp = this.viewportCenter();
-      let best: Blob | null = null;
-      let bestRing: RingMatch | null = null;
-      let bestMetric = Infinity; // lower is better
-      for (const b of tealBlobs) {
-        const ring = this.getRing(b);
-        if (ring.ringTeal < RING_TEAL_MIN || ring.score < ANNULUS_MIN || ring.coverage < RING_COVERAGE_MIN) continue;
-        const metric = vp ? (ring.cx - vp.x) ** 2 + (ring.cy - vp.y) ** 2 : -ring.score;
-        if (metric < bestMetric) {
-          bestMetric = metric;
-          bestRing = ring;
-          best = { ...b, cx: ring.cx, cy: ring.cy }; // lock at the ring center, not the (maybe merged) centroid
-        }
-      }
-      if (!best || !bestRing) {
-        if (this.onPositionUpdate && this.lastPosition) this.onPositionUpdate(this.lastPosition);
-        return;
-      }
-      this.lockOnBlob(best, 'annulus(score=' + bestRing.score.toFixed(2) + (vp ? ',vp' : '') + ')');
-      return;
-    }
-
-    // Classifier fallback (no per-game templates): position-dominated composite.
     let bestBlob = tealBlobs[0];
     let bestScore = -Infinity;
 
@@ -1255,12 +893,8 @@ export class TrackingService {
     // the normal case for champions the 172-class classifier is weak on (e.g.
     // Teemo) — so the tracker refused to lock at all and never broadcast a
     // position. The classifier still contributes to the composite score above;
-    // it's just no longer a veto.
-    //
-    // v0.4 (Phase 2): the old absolute template-raw-score gate that used to sit
-    // here was replaced by the annulus shape gate at the top of this method (the
-    // template path now returns from there). SSIM/template matching was proven
-    // dead on real 32px crops; ring shape is the validated discriminator.
+    // it's just no longer a veto. The whole classifier-confidence path is being
+    // replaced by template matching in v0.4 (docs/plans/2026-06-03-cv-tracking-research.md).
     this.lockOnBlob(bestBlob, 'composite(score=' + bestScore.toFixed(2) + ')');
   }
 
@@ -1278,7 +912,6 @@ export class TrackingService {
     this.scanFrameCount = 0;
     this.scanStartMs = performance.now();
     this.holdStartMs = 0;
-    this.weakFollowFrames = 0;
     // Treat the moment of lock as a "movement" so Phase 2 doesn't start in
     // stationary-stickiness mode before we've seen any real movement.
     this.lastMovementMs = performance.now();
@@ -1355,82 +988,6 @@ export class TrackingService {
       peer: (b) => this.peerAvoidanceScore(b),
     };
 
-    // v0.4 (Phase 2): on the template path, the champion RING/annulus shape is
-    // the primary identity gate. Only blobs that look like a champion icon (teal
-    // ring, non-teal portrait center) are eligible — turrets (teal-filled) and
-    // minions/terrain (little ring teal) are filtered out entirely. This replaces
-    // the dead SSIM/template-confidence gate on the hot path.
-    if (this.hasTemplates()) {
-      // Refine each teal blob to its best champion-ring sub-match — recovers the
-      // ring from blobs merged with an adjacent icon/turret. The refined blob's
-      // cx/cy is the RING center, so follow distance + lock position use the ring,
-      // not the (possibly merged) centroid.
-      const ringOf = new Map<Blob, RingMatch>();
-      const refined: Blob[] = tealBlobs.map(b => {
-        const ring = this.getRing(b);
-        const rb: Blob = { ...b, cx: ring.cx, cy: ring.cy };
-        ringOf.set(rb, ring);
-        return rb;
-      });
-
-      // Phase 1 (follow, LENIENT): once locked, the champion is near where it was
-      // a frame ago. Track the nearest teal blob within the (bounded) jump radius
-      // that isn't obviously clutter — we do NOT require a perfect ring every
-      // frame (rings merge with neighbors, get crossed by the camera-box line, or
-      // break into arcs). FOLLOW_ANNULUS_FLOOR rejects only teal-FILLED turrets /
-      // minion clumps, so if the champion truly leaves (recall/teleport/death) we
-      // won't latch a turret nearby — we fall through to the strict reacquire.
-      // Follow only COMPLETE rings (coverage) — this is what stops the dot from
-      // trailing minion-lane clusters, which score the same annulus fraction as a
-      // champion but only cover a few sectors. Still lenient on ringTeal/score.
-      const followable = refined.filter(rb => {
-        const r = ringOf.get(rb)!;
-        return r.score > FOLLOW_ANNULUS_FLOOR && r.coverage >= RING_COVERAGE_MIN;
-      });
-      const follow = pickBestBlobInRange(followable, lastReg, predicted, maxJumpPx, false, scoreFns);
-      if (follow) {
-        const fr = ringOf.get(follow.blob)!;
-        // Coasting guard: if we've trailed sub-acquire-confidence blobs for too
-        // many frames in a row, the champion probably left — stop following and
-        // let the strict reacquire below re-find it. A confident frame resets it.
-        // KNOWN GAP (self-ID, deferred to Phase 3 viewport anchoring): the reset is
-        // on CONSECUTIVE weak frames and a successful follow zeroes holdStartMs (so
-        // the 5s force-reacquire backstop is disarmed while following). A nearby
-        // decoy — a teammate ring within the capped radius that flickers confident
-        // at least once per WEAK_FOLLOW_DROP frames — could be followed indefinitely.
-        // Mitigated (not solved) by nearest-to-PREDICTED + the capped jump radius (a
-        // stationary decoy won't match a moving champion's velocity-projected point);
-        // the real fix is viewport-anchored self-ID.
-        this.weakFollowFrames = fr.score >= ANNULUS_MIN ? 0 : this.weakFollowFrames + 1;
-        if (this.weakFollowFrames < WEAK_FOLLOW_DROP) {
-          this.finalizeLockedFrame(follow.blob, lastReg, holdSec);
-          return;
-        }
-      }
-
-      // Follow found nothing in range. We deliberately do NOT eagerly reacquire to
-      // the nearest ring anywhere — that was the source of the big full-map jumps:
-      // when follow has a momentary gap and the camera is PANNED, the viewport sits
-      // on a far teammate, and a per-frame reacquire snapped the position there
-      // (in a real game every one of the largest jumps was a reacquire). Instead we
-      // HOLD/extrapolate: short detection gaps recover when self's ring reappears
-      // near last-known and the follow (with its expanding radius) re-locks with
-      // little or no jump. A genuinely sustained gap (teleport / recall / death)
-      // escalates via shouldForceReacquisition → SCANNING (checked at the top of
-      // this method), which re-locks ONCE — nearest the viewport — not every frame.
-      this.weakFollowFrames = 0;
-
-      // Hold: extrapolate from last known position until the ring is seen again or
-      // the hold times out (→ SCANNING).
-      if (this.lockedTickCount === 0) {
-        console.log('[Tracking] Extrapolating position (no champion-ring blob)');
-        this.holdStartMs = performance.now();
-      }
-      this.extrapolatePosition(region);
-      return;
-    }
-
-    // Classifier fallback (no per-game templates loaded) — original Phase 1/2/3.
     // Phase 1: nearest in-range blob with composite scoring
     const phase1 = pickBestBlobInRange(tealBlobs, lastReg, predicted, maxJumpPx, hasClassifier, scoreFns);
 
@@ -1459,10 +1016,8 @@ export class TrackingService {
     this.finalizeLockedFrame(phase1.blob, lastReg, holdSec);
   }
 
-  /** Phase 2 success path: snap position, reset velocity, log, fire callback.
-   *  `source` labels which gate triggered the reacquire (classifier fallback vs
-   *  template-path annulus) so the log reflects the real signal + score. */
-  private acquireViaClassifier(blob: Blob, score: number, source = 'classifier'): void {
+  /** Phase 2 success path: snap position, reset velocity, log, fire callback. */
+  private acquireViaClassifier(blob: Blob, clsScore: number): void {
     if (!this.minimapRegion) return;
     const cx = this.minimapRegion.x + blob.cx;
     const cy = this.minimapRegion.y + blob.cy;
@@ -1471,9 +1026,8 @@ export class TrackingService {
     this.setLastPosition(newPos, 'classifier-reacquire');
     this.velocityX = 0;
     this.velocityY = 0;
-    this.weakFollowFrames = 0;
     this.lockedTickCount++;
-    console.log('[Tracking] Re-acquired via ' + source + ' (score=' + score.toFixed(2) +
+    console.log('[Tracking] Re-acquired via classifier (cls=' + clsScore.toFixed(2) +
       '): pixel(' + cx + ',' + cy + ')' +
       ' game(' + Math.round(newPos.x) + ',' + Math.round(newPos.y) + ')');
     if (this.onPositionUpdate && this.lastPosition) {

@@ -184,7 +184,6 @@ btnCollapse.addEventListener('click', () => {
 });
 
 const scanRateRow = document.getElementById('scan-rate-row')!;
-const harvestRow = document.getElementById('harvest-row')!;
 const btnAutoUpdate = document.getElementById('btn-autoupdate') as HTMLButtonElement;
 const btnCheckUpdate = document.getElementById('btn-check-update') as HTMLButtonElement;
 const updateStatus = document.getElementById('update-status')!;
@@ -263,24 +262,6 @@ btnHearCrossTeam.addEventListener('click', () => {
   localStorage.setItem(HEAR_CROSS_TEAM_KEY, String(enabled));
   syncHearCrossTeamButton();
   sendToBackground('setHearCrossTeam', { enabled });
-});
-
-// v0.4.2: Debug-only "Harvest CV crops" toggle. Saves small labeled crops of
-// the local champion icon during games to build a real dataset for tuning CV
-// detection. Lives in the Debug section (no devtools needed). Applies live.
-const btnHarvest = document.getElementById('btn-harvest') as HTMLButtonElement;
-const HARVEST_KEY = 'lolproxchat.harvest';
-function syncHarvestButton(): void {
-  const on = localStorage.getItem(HARVEST_KEY) === 'true';
-  btnHarvest.textContent = on ? 'ON' : 'OFF';
-  btnHarvest.classList.toggle('active', on);
-}
-queueMicrotask(syncHarvestButton);
-btnHarvest.addEventListener('click', () => {
-  const enabled = !(localStorage.getItem(HARVEST_KEY) === 'true');
-  localStorage.setItem(HARVEST_KEY, String(enabled));
-  syncHarvestButton();
-  sendToBackground('setHarvest', { enabled });
 });
 
 // v0.3 (#1): PTT + toggle-mute key rebind. The Rust WH_KEYBOARD_LL hook
@@ -364,7 +345,6 @@ btnDebug.addEventListener('click', () => {
   btnDebug.textContent = debugEnabled ? 'ON' : 'OFF';
   btnDebug.classList.toggle('active', debugEnabled);
   scanRateRow.classList.toggle('hidden', !debugEnabled);
-  harvestRow.classList.toggle('hidden', !debugEnabled);
   setLoggingEnabled(debugEnabled);
   // Read by orchestrator when emitting scanner:scene events so the scanner
   // window only renders the tracking dot while Debug is on.
