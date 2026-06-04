@@ -73,14 +73,11 @@ export class RoomManager {
 
   /**
    * Record a client's latest XY position. No-op if the ws isn't in a room.
-   * v0.3+ piggybacks `hearCrossTeam` here so the toggle picks up within
-   * one position tick (~100ms) without a dedicated message type.
    */
-  setPosition(ws: WebSocket, x: number, y: number, hearCrossTeam?: boolean): void {
+  setPosition(ws: WebSocket, x: number, y: number): void {
     const info = this.clients.get(ws);
     if (!info) return;
     info.position = { x, y, updatedMs: Date.now() };
-    info.hearCrossTeam = hearCrossTeam === true;
   }
 
   /**
@@ -112,9 +109,9 @@ export class RoomManager {
 
   /**
    * v0.3 — snapshot of all clients in a room with just the fields
-   * `computeTieredVolumes` needs (name, team, hearCrossTeam, position).
-   * Includes the requester; the function filters itself out by name.
-   * No staleness filter here — the caller decides per-peer.
+   * `computeTieredVolumes` needs (name, team, position). Includes the
+   * requester; the function filters itself out by name. No staleness filter
+   * here — the caller decides per-peer.
    */
   getRoomClients(roomId: string): TieredRoomClient[] {
     const room = this.rooms.get(roomId);
@@ -122,7 +119,6 @@ export class RoomManager {
     return room.map(c => ({
       name: c.name,
       team: c.team,
-      hearCrossTeam: c.hearCrossTeam,
       position: c.position,
     }));
   }

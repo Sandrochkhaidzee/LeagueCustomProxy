@@ -52,8 +52,8 @@ function joinRoom(room: string, name: string, team: 'ORDER' | 'CHAOS'): Promise<
   });
 }
 
-function sendCoords(ws: WebSocket, x: number, y: number, hearCrossTeam: boolean): void {
-  ws.send(JSON.stringify({ type: 'coords', x, y, hearCrossTeam }));
+function sendCoords(ws: WebSocket, x: number, y: number): void {
+  ws.send(JSON.stringify({ type: 'coords', x, y }));
 }
 
 async function computeVolumes(myPosition: { x: number; y: number }, roomId: string, name: string) {
@@ -87,53 +87,34 @@ describe('tiered proximity — end-to-end against the real server', () => {
     expect(result.peerVolumes).toEqual({});
   });
 
-  it('allies are always audible at 1.0; cross-team obeys the 600u default cap', async () => {
+  it('allies are always audible; cross-team enemies fade out at vision range', async () => {
     const room = 'r-tiered';
     const alice = await joinRoom(room, 'Alice', 'ORDER');
     const ally = await joinRoom(room, 'AllyFar', 'ORDER');
     const enemyClose = await joinRoom(room, 'EnemyClose', 'CHAOS');
-    const enemyFar = await joinRoom(room, 'EnemyFar', 'CHAOS');
+    const enemyEdge = await joinRoom(room, 'EnemyEdge', 'CHAOS');
+    const enemyBeyond = await joinRoom(room, 'EnemyBeyond', 'CHAOS');
 
-    // Alice at origin, toggle OFF (default 600u cross-team cap)
-    sendCoords(alice, 0, 0, false);
+    sendCoords(alice, 0, 0);
     // Ally far away — distance shouldn't matter for same-team
-    sendCoords(ally, 9000, 9000, false);
-    // Enemy within 600u → audible
-    sendCoords(enemyClose, 400, 0, false);
-    // Enemy beyond 600u but within 1200u → NOT audible (toggle off)
-    sendCoords(enemyFar, 800, 0, false);
+    sendCoords(ally, 9000, 9000);
+    // Enemy close → clearly audible
+    sendCoords(enemyClose, 400, 0);
+    // Enemy near the edge of vision range (1350u) → faintly audible
+    sendCoords(enemyEdge, 1300, 0);
+    // Enemy beyond vision range → omitted entirely
+    sendCoords(enemyBeyond, 1500, 0);
 
     await sleep(150); // let the coords WS messages land in room state
 
     const result = await computeVolumes({ x: 0, y: 0 }, room, 'Alice');
-    expect(result.peerVolumes.AllyFar).toBe(1.0);          // ally, always full
-    expect(result.peerVolumes.EnemyClose).toBeGreaterThan(0); // < 600u
-    expect(result.peerVolumes.EnemyFar).toBeUndefined();   // > 600u, toggle off
+    expect(result.peerVolumes.AllyFar).toBe(1.0);               // ally, always full
+    expect(result.peerVolumes.EnemyClose).toBeGreaterThan(0.5);  // close → loud
+    expect(result.peerVolumes.EnemyEdge).toBeGreaterThan(0);     // < 1350u → audible
+    expect(result.peerVolumes.EnemyEdge).toBeLessThan(0.1);      // ...but very quiet
+    expect(result.peerVolumes.EnemyBeyond).toBeUndefined();      // > 1350u → omitted
 
-    alice.close(); ally.close(); enemyClose.close(); enemyFar.close();
-  });
-
-  it('toggling hearCrossTeam ON extends the cross-team range to 1200u', async () => {
-    const room = 'r-toggle';
-    const alice = await joinRoom(room, 'Alice', 'ORDER');
-    const enemyMid = await joinRoom(room, 'EnemyMid', 'CHAOS');
-
-    // Enemy at 800u — beyond the 600u default, inside the 1200u extended range
-    sendCoords(enemyMid, 800, 0, false);
-
-    // First: toggle OFF → not audible
-    sendCoords(alice, 0, 0, false);
-    await sleep(150);
-    let result = await computeVolumes({ x: 0, y: 0 }, room, 'Alice');
-    expect(result.peerVolumes.EnemyMid).toBeUndefined();
-
-    // Now: toggle ON via a fresh coords message → audible on next compute
-    sendCoords(alice, 0, 0, true);
-    await sleep(150);
-    result = await computeVolumes({ x: 0, y: 0 }, room, 'Alice');
-    expect(result.peerVolumes.EnemyMid).toBeGreaterThan(0);
-
-    alice.close(); enemyMid.close();
+    alice.close(); ally.close(); enemyClose.close(); enemyEdge.close(); enemyBeyond.close();
   });
 
   it('legacy v0.1 clients (no team on join) still get team-blind volumes', async () => {
@@ -148,10 +129,10 @@ describe('tiered proximity — end-to-end against the real server', () => {
     });
     const other = await joinRoom(room, 'OtherTeamless', 'CHAOS');
 
-    sendCoords(a, 0, 0, false);
-    // Teamless requester: legacy fallback uses 1200u team-blind. Place the
-    // other peer at 1000u — within 1200u, beyond the 600u tiered default.
-    sendCoords(other, 1000, 0, false);
+    sendCoords(a, 0, 0);
+    // Teamless requester: legacy fallback uses team-blind vision-range falloff.
+    // Place the other peer at 1000u — within the 1350u range.
+    sendCoords(other, 1000, 0);
     await sleep(150);
 
     const result = await computeVolumes({ x: 0, y: 0 }, room, 'Legacy');

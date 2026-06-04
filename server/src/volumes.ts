@@ -7,7 +7,10 @@ const crypto = globalThis.crypto;
 // server alone instead of needing both clients' debug logs.
 const DEBUG_VOLUMES = process.env.DEBUG_VOLUMES === '1';
 
-const MAX_HEARING_RANGE = 1200;
+// Max cross-team hearing distance ≈ a champion's standard sight range, so an
+// enemy fades in (very faintly) about when they'd enter your vision and grows
+// louder as they close. Game units (Summoner's Rift is ~14870x14980).
+const MAX_HEARING_RANGE = 1350;
 // Max age of an encrypted position blob the server will accept before
 // rejecting it as stale. Tuned to absorb common Windows-clock drift
 // (NTP service can lag 10-30s in the wild — we saw this in issue #7
@@ -240,29 +243,25 @@ export function computeVolumesFromRoom(
 
 // ---------- v0.3 path: tiered proximity (team-aware) ----------
 
-export const DEFAULT_CROSS_TEAM_RANGE = 600;
-
 export interface TieredRoomClient {
   name: string;
   team?: 'ORDER' | 'CHAOS';
-  hearCrossTeam?: boolean;
   position?: { x: number; y: number; updatedMs: number };
 }
 
 /**
- * v0.3 tiered proximity. Server-authoritative team filter + cross-team
- * range cap. The full 1200u falloff curve (calculateVolume) is used in
- * both modes — only the cutoff changes, so distance X sounds the same
- * regardless of toggle.
+ * v0.3 tiered proximity. Server-authoritative team filter.
  *
- * Allies (same team as requester) always come back at 1.0 regardless
- * of distance. Cross-team peers come back at their distance-based
- * volume if and only if they are within `range`; out-of-range peers
- * are absent from the response entirely (the server simply doesn't
- * tell the requester they exist — a modified client cannot bypass).
+ * Allies (same team as requester) always come back at 1.0 regardless of
+ * distance. Cross-team peers (enemies) come back at their distance-based
+ * volume out to MAX_HEARING_RANGE (≈ a champion's vision range): they fade
+ * in very faintly as they enter that radius and grow louder as they close.
+ * Out-of-range peers are absent from the response entirely (the server
+ * simply doesn't tell the requester they exist — a modified client cannot
+ * bypass the cutoff to hear distant enemies).
  *
- * When the requester has no team set (legacy v0.2 client), falls back
- * to team-blind 1200u behavior — every peer audible at distance falloff.
+ * When the requester has no team set (legacy v0.2 client), every peer goes
+ * through the same distance falloff (team-blind).
  */
 export function computeTieredVolumes(
   body: VolumeRequestV2,
@@ -287,10 +286,11 @@ export function computeTieredVolumes(
     return { myBlob: '', peerVolumes: {} };
   }
 
+  // Cross-team peers are audible out to MAX_HEARING_RANGE (≈ vision range),
+  // fading to silence at the edge. `legacy` (no team) means we can't tell
+  // allies from enemies, so everyone goes through the distance falloff.
   const legacy = me.team === undefined;
-  const range = legacy
-    ? MAX_HEARING_RANGE
-    : (me.hearCrossTeam ? MAX_HEARING_RANGE : DEFAULT_CROSS_TEAM_RANGE);
+  const range = MAX_HEARING_RANGE;
 
   const cutoff = Date.now() - STALE_POSITION_MS;
   const peerVolumes: Record<string, number> = {};
@@ -334,8 +334,7 @@ export function computeTieredVolumes(
 
   if (DEBUG_VOLUMES) {
     console.log('[volumes] req me=' + JSON.stringify(me.name) +
-      ' team=' + me.team + ' hearCrossTeam=' + me.hearCrossTeam +
-      ' legacy=' + legacy + ' range=' + range +
+      ' team=' + me.team + ' legacy=' + legacy + ' range=' + range +
       ' | ' + (trace.length ? trace.join(' ') : '(no peers)'));
   }
 

@@ -213,31 +213,4 @@ describe('RoomManager', () => {
     });
   });
 
-  // v0.3: hearCrossTeam piggybacks on coords (no separate WSS message type)
-  describe('hearCrossTeam on coords', () => {
-    it('records hearCrossTeam when setPosition includes it', () => {
-      const ws = mockWs();
-      rooms.join('room1', 'Alice', ws, 'ORDER');
-      rooms.setPosition(ws, 100, 100, true);
-      const info = rooms.getClientInfo(ws);
-      expect(info?.hearCrossTeam).toBe(true);
-    });
-
-    it('defaults hearCrossTeam to false when setPosition omits it', () => {
-      const ws = mockWs();
-      rooms.join('room1', 'Alice', ws, 'ORDER');
-      rooms.setPosition(ws, 100, 100);
-      const info = rooms.getClientInfo(ws);
-      expect(info?.hearCrossTeam).toBe(false);
-    });
-
-    it('updates hearCrossTeam on each setPosition call (toggle changes flow through)', () => {
-      const ws = mockWs();
-      rooms.join('room1', 'Alice', ws, 'ORDER');
-      rooms.setPosition(ws, 100, 100, true);
-      expect(rooms.getClientInfo(ws)?.hearCrossTeam).toBe(true);
-      rooms.setPosition(ws, 200, 200, false);
-      expect(rooms.getClientInfo(ws)?.hearCrossTeam).toBe(false);
-    });
-  });
 });
