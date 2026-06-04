@@ -27,6 +27,7 @@ import {
   bestRingInBlob,
   RingMatch,
   RING_TEAL_MIN,
+  RING_COVERAGE_MIN,
   ANNULUS_MIN,
   FOLLOW_ANNULUS_FLOOR,
   WEAK_FOLLOW_DROP,
@@ -647,7 +648,7 @@ export class TrackingService {
    * recovers a champion ring from a blob that merged with an adjacent icon/turret.
    */
   private getRing(b: Blob): RingMatch {
-    if (!this.currentTealMask) return { cx: b.cx, cy: b.cy, ringTeal: 0, centerTeal: 0, score: 0 };
+    if (!this.currentTealMask) return { cx: b.cx, cy: b.cy, ringTeal: 0, centerTeal: 0, score: 0, coverage: 0 };
     return bestRingInBlob(this.currentTealMask, this.currentMaskW, this.currentMaskH, b, this.expectedIconDiam / 2);
   }
 
@@ -1213,7 +1214,7 @@ export class TrackingService {
       let bestMetric = Infinity; // lower is better
       for (const b of tealBlobs) {
         const ring = this.getRing(b);
-        if (ring.ringTeal < RING_TEAL_MIN || ring.score < ANNULUS_MIN) continue;
+        if (ring.ringTeal < RING_TEAL_MIN || ring.score < ANNULUS_MIN || ring.coverage < RING_COVERAGE_MIN) continue;
         const metric = vp ? (ring.cx - vp.x) ** 2 + (ring.cy - vp.y) ** 2 : -ring.score;
         if (metric < bestMetric) {
           bestMetric = metric;
@@ -1379,7 +1380,13 @@ export class TrackingService {
       // break into arcs). FOLLOW_ANNULUS_FLOOR rejects only teal-FILLED turrets /
       // minion clumps, so if the champion truly leaves (recall/teleport/death) we
       // won't latch a turret nearby — we fall through to the strict reacquire.
-      const followable = refined.filter(rb => ringOf.get(rb)!.score > FOLLOW_ANNULUS_FLOOR);
+      // Follow only COMPLETE rings (coverage) — this is what stops the dot from
+      // trailing minion-lane clusters, which score the same annulus fraction as a
+      // champion but only cover a few sectors. Still lenient on ringTeal/score.
+      const followable = refined.filter(rb => {
+        const r = ringOf.get(rb)!;
+        return r.score > FOLLOW_ANNULUS_FLOOR && r.coverage >= RING_COVERAGE_MIN;
+      });
       const follow = pickBestBlobInRange(followable, lastReg, predicted, maxJumpPx, false, scoreFns);
       if (follow) {
         const fr = ringOf.get(follow.blob)!;

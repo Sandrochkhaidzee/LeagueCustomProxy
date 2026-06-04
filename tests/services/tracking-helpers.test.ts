@@ -11,7 +11,9 @@ import {
   nextClassifierEma,
   annulusFeatures,
   bestRingInBlob,
+  ringCoverage,
   RING_TEAL_MIN,
+  RING_COVERAGE_MIN,
   ANNULUS_MIN,
   FOLLOW_ANNULUS_FLOOR,
   WEAK_FOLLOW_DROP,
@@ -337,6 +339,7 @@ describe('bestRingInBlob', () => {
     expect(Math.abs(r.cx - ringCx)).toBeLessThanOrEqual(step);
     expect(Math.abs(r.cy - ringCy)).toBeLessThanOrEqual(step);
     expect(r.score).toBeGreaterThan(0.4);
+    expect(r.coverage).toBeGreaterThan(0.9); // a continuous ring covers ~all sectors
   });
 
   test('a fully teal-FILLED blob yields no champion ring (best score <= 0)', () => {
@@ -349,6 +352,30 @@ describe('bestRingInBlob', () => {
     const r = bestRingInBlob(mkMask(W, H, disc), W, H, offsetBlob, iconR);
     expect(r.score).toBeLessThanOrEqual(0);
     expect(r.score).toBeLessThan(ANNULUS_MIN);
+  });
+});
+
+describe('ringCoverage', () => {
+  const W = 40, H = 40, cx = 20, cy = 20, r = 12;
+  test('a continuous teal ring covers ~all sectors (>= 0.9)', () => {
+    const ring = (x: number, y: number) => {
+      const d = Math.hypot(x - cx, y - cy); return d >= 0.78 * r && d <= 1.0 * r;
+    };
+    expect(ringCoverage(mkMask(W, H, ring), W, H, cx, cy, r)).toBeGreaterThan(0.9);
+  });
+
+  test('teal in only one wedge (a minion clump) covers few sectors (< RING_COVERAGE_MIN)', () => {
+    // Teal only in a narrow wedge around +x — like a couple of clustered minion
+    // dots: same ring-band presence locally, but it spans only 1-2 of 12 sectors.
+    const wedge = (x: number, y: number) => {
+      const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy);
+      return d >= 0.78 * r && d <= 1.0 * r && dx > Math.abs(dy) * 2;
+    };
+    expect(ringCoverage(mkMask(W, H, wedge), W, H, cx, cy, r)).toBeLessThan(RING_COVERAGE_MIN);
+  });
+
+  test('empty mask covers nothing (0)', () => {
+    expect(ringCoverage(mkMask(W, H, () => false), W, H, cx, cy, r)).toBe(0);
   });
 });
 

@@ -232,7 +232,7 @@ export function annulusFeatures(
   return { ringTeal, centerTeal, score: ringTeal - centerTeal };
 }
 
-export interface RingMatch { cx: number; cy: number; ringTeal: number; centerTeal: number; score: number; }
+export interface RingMatch { cx: number; cy: number; ringTeal: number; centerTeal: number; score: number; coverage: number; }
 
 /**
  * Best champion-ring match WITHIN a blob: scan candidate centers across the blob's
@@ -247,14 +247,49 @@ export function bestRingInBlob(
   mask: Uint8Array, w: number, h: number, blob: Blob, iconR: number,
 ): RingMatch {
   const step = Math.max(2, Math.round(iconR / 3));
-  let best: RingMatch = { cx: blob.cx, cy: blob.cy, ringTeal: 0, centerTeal: 0, score: -Infinity };
+  let best: RingMatch = { cx: blob.cx, cy: blob.cy, ringTeal: 0, centerTeal: 0, score: -Infinity, coverage: 0 };
   for (let cy = blob.minY; cy <= blob.maxY; cy += step) {
     for (let cx = blob.minX; cx <= blob.maxX; cx += step) {
       const a = annulusFeatures(mask, w, h, cx, cy, iconR);
-      if (a.score > best.score) best = { cx, cy, ringTeal: a.ringTeal, centerTeal: a.centerTeal, score: a.score };
+      if (a.score > best.score) best = { cx, cy, ringTeal: a.ringTeal, centerTeal: a.centerTeal, score: a.score, coverage: 0 };
     }
   }
+  // Coverage measured once at the chosen center — distinguishes a continuous
+  // champion ring from a minion cluster with the same teal FRACTION but scattered
+  // around only a few sectors (see ringCoverage).
+  if (best.score > -Infinity) best.coverage = ringCoverage(mask, w, h, best.cx, best.cy, iconR);
   return best;
+}
+
+/**
+ * Fraction of angular sectors around the ring band that contain ally-teal — i.e.
+ * how COMPLETE the ring is. A champion icon has a continuous ally ring (coverage
+ * ≈ 1); a minion cluster forms a "ring" of a few scattered dots that scores the
+ * same annulus FRACTION but only spans a few sectors (low coverage). The annulus
+ * score alone can't separate them (measured: both ~0.30 ring-teal); coverage can
+ * (measured: champion median 1.00, minion-cluster 0.58). `mask[i]===1` = teal.
+ */
+export function ringCoverage(
+  mask: Uint8Array, w: number, h: number, cx: number, cy: number, r: number, nSectors = 12,
+): number {
+  const inner = 0.70 * r, outer = 1.05 * r;
+  const in2 = inner * inner, out2 = outer * outer;
+  const x0 = Math.max(0, Math.floor(cx - outer)), x1 = Math.min(w - 1, Math.ceil(cx + outer));
+  const y0 = Math.max(0, Math.floor(cy - outer)), y1 = Math.min(h - 1, Math.ceil(cy + outer));
+  const hit = new Array<boolean>(nSectors).fill(false);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (mask[y * w + x] !== 1) continue;
+      const dx = x - cx, dy = y - cy, d2 = dx * dx + dy * dy;
+      if (d2 < in2 || d2 > out2) continue;
+      let sec = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI)) * nSectors);
+      if (sec >= nSectors) sec = nSectors - 1; else if (sec < 0) sec = 0;
+      hit[sec] = true;
+    }
+  }
+  let covered = 0;
+  for (const s of hit) if (s) covered++;
+  return covered / nSectors;
 }
 
 /** Min ally-teal fraction in the ring band to consider a blob a champion ring.
@@ -262,6 +297,11 @@ export function bestRingInBlob(
 export const RING_TEAL_MIN = 0.10;
 /** Min annulus score (ringTeal − centerTeal) to accept; rejects teal-filled turrets. Provisional. */
 export const ANNULUS_MIN = 0.05;
+/** Min ring angular coverage (fraction of sectors with ally-teal) to accept a ring.
+ *  Rejects minion clusters that form a scattered "ring" with the same teal fraction
+ *  as a champion but cover only a few sectors. Offline-validated: champion median
+ *  1.00 (91% ≥ 0.75), minion-cluster median 0.58 (12% ≥ 0.75). */
+export const RING_COVERAGE_MIN = 0.75;
 
 /** Follow-path floor: once locked, follow the nearest in-range blob with a
  *  POSITIVE ring score (ring teal exceeds center teal). Under the scan-max getRing
