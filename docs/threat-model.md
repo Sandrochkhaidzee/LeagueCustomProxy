@@ -45,7 +45,7 @@ If we ever need to re-introduce server-side coarsening for a real adversarial sc
 
 ### Volume itself is a coarse side channel
 
-- A modified client can read its per-peer volume vector to learn whether an enemy is within `MAX_HEARING_RANGE` (1200 game units, calibrated to roughly match LoL vision range).
+- A modified client can read its per-peer volume vector to learn whether an enemy is within `MAX_HEARING_RANGE` (1350 game units, calibrated to roughly match LoL vision range).
 - That binary "enemy is in audible range" signal is information the stock game wouldn't provide if the enemy is in fog of war.
 - ~~The bucket quantization reduces this to "in range, and roughly which tier of distance" rather than a precise distance.~~ Reverted in v0.1.33; volume is again continuous. The leak is now "presence within range + a distance estimate accurate to about ±5% noise floor from the underlying CV jitter."
 - This leak is **inherent to proximity audio existing at all** — closing it would mean abandoning the feature.
@@ -70,7 +70,7 @@ If we ever need to re-introduce server-side coarsening for a real adversarial sc
 
 ## Calibration of `MAX_HEARING_RANGE`
 
-The 1200-game-unit hearing range was chosen to roughly match the radius at which a player would already gain visual information about an enemy in stock LoL (champion vision range, ward range, brush vision). The intent is that a stock client doesn't expose information the player wouldn't have anyway — the audio "fades in" right around when the enemy would become visible or warded.
+The 1350-game-unit hearing range was chosen to roughly match the radius at which a player would already gain visual information about an enemy in stock LoL (champion vision range). The intent is that a stock client doesn't expose information the player wouldn't have anyway — the audio "fades in" right around when the enemy would become visible or warded. (A planned follow-up gates cross-team audio on actual minimap visibility — only channel enemies your team can see — computed server-side from positions so a modified client can't bypass it.)
 
 If this range is increased, the side-channel value to a modified client grows. If decreased, the proximity-audio experience loses utility (you can only hear teammates in melee range of each other). The current value is the result of those competing pressures.
 
@@ -184,7 +184,7 @@ There is no opt-in/opt-out switch for analytics because there is no analytics. T
 **Status:** Mitigated since v0.1.31. Application-layer limits in `server/src/rate-limit.ts`:
 
 - `/turn-credentials`: 60 req/min per IP (legit clients call ~once per peer connection)
-- `/compute-volumes`: 15 req/sec sustained per IP (real cadence is 10 Hz; gives 50% headroom)
+- `/compute-volumes`: per player (IP + name), sized for the max scan rate, with a per-IP backstop — so players sharing one NAT each get their own budget (a shared per-IP limit previously 429'd everyone behind one IP, silencing proximity audio)
 - `/compute-volumes` body cap: 256 KB (real payload is ~2 KB)
 - WebSocket: 20 concurrent connections per IP, 60 msg/sec per connection, 64 KB per message
 

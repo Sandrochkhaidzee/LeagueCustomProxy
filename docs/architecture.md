@@ -85,7 +85,7 @@ Tracking is a state machine: **SCANNING → LOCKED → (DEAD)**. Every CV tick:
 1. **Capture.** `invoke('capture_minimap')` triggers a Win32 `BitBlt` of a bounded screen rect. Tauri returns the raw RGBA bytes as a data URL.
 2. **Color mask.** Build HSV-thresholded masks for each plausible champion-circle color (teal allies + various enemy hues). Tracked via `buildWhiteMasks` / `findBlobs`.
 3. **Blob detection.** Flood-fill connected components, filter by size + fill-ratio against the expected icon diameter at the current minimap scale.
-4. **Identity (v0.4 template matching).** Each candidate blob is cropped and identified by **SSIM template matching** (`src/services/template-match.ts`) against the actual icons of the 10 champions in this match. Those icons are fetched once at game start from Riot's Data Dragon CDN (`src/services/champion-icons.ts`) — we know the exact roster from the LCU, so this is a bounded fetch. Matching against the real per-game icons rejects minions/structures for free (they don't structurally resemble a champion portrait) and has no per-champion weak spots. The previous 172-class ONNX champion classifier (`src/services/champion-classifier.ts`, a small CNN trained on champion circle icons, WASM ONNX Runtime) is retained **only as a fallback** for when the icon fetch fails (offline / CDN down), and will be removed once template matching is proven. Rationale + research: [`docs/plans/2026-06-03-cv-tracking-research.md`](plans/2026-06-03-cv-tracking-research.md). Approach ported from [LOL_Minimap_Tracker](https://github.com/Quinntana/LOL_Minimap_Tracker).
+4. **Identity (172-class ONNX classifier).** Each candidate blob is cropped and identified by a small CNN champion classifier (`src/services/champion-classifier.ts`, a model trained on champion circle icons, WASM ONNX Runtime), combined with composite blob scoring. v0.4 replaced this with SSIM template matching against the live Data Dragon icons (`template-match.ts` / `champion-icons.ts`), but v0.5.0 reverted to the classifier: in real games the template/annulus approach under-locked and drifted onto minions, turrets, and ward rings, while the classifier keeps the dot on your champion more reliably. History + research: [`docs/plans/2026-06-03-cv-tracking-research.md`](plans/2026-06-03-cv-tracking-research.md).
 5. **Track.** In LOCKED state, prefer the blob nearest to last position + velocity; rebuild velocity as an EMA on apparent motion. Allow brief "holds" (no match in range) using extrapolation with a velocity cap (10 px/tick — see `extrapolatePosition`). The scoring/selection math (composite blob score, Phase-1 in-range pick, Phase-2 classifier reacquisition, adaptive thresholds) was extracted to pure functions in `src/services/tracking-helpers.ts` in v0.1.29 — testable in isolation; `handleLocked` is the orchestration layer that wires them up plus the side-effect ordering.
 6. **Position-jump detection.** All `lastPosition` writes funnel through `setLastPosition`, which warns when a jump exceeds both a distance threshold (>500 game-units) AND a speed threshold (>2000 u/s) — both gates filter out CV pixel-jitter on normal movement while still catching real teleports (recall) or mis-tracks. Thresholds live as `JUMP_WARN_MIN_UNITS` / `JUMP_WARN_MIN_SPEED` static constants on `TrackingService`.
 
@@ -97,7 +97,7 @@ This is the part that matters for both the threat model and the "what does the s
 
 1. On every position tick (~10 Hz), the client sends a `coords` WebSocket message: `{ type: "coords", x, y }`. The server stamps it with the current time and stores it on the sender's room-client record.
 2. Immediately after, the client POSTs `/compute-volumes` with `{ myPosition, roomId, name }`. The server reads the latest position for every *other* client in the room (skipping any whose last `coords` is older than 5 s) and returns `{ peerVolumes: { peerName: volume } }`.
-3. Volume math: pairwise distance with quadratic falloff `1 - (d/MAX_HEARING_RANGE)²`, continuous float in `[0, 1]`. `MAX_HEARING_RANGE = 1200` game units. See `server/src/volumes.ts`.
+3. Volume math: pairwise distance with quadratic falloff `1 - (d/MAX_HEARING_RANGE)²`, continuous float in `[0, 1]`. `MAX_HEARING_RANGE = 1350` game units (≈ champion vision range). Allies always return 1.0; cross-team peers use the falloff and are omitted entirely beyond the range. See `server/src/volumes.ts`.
 
 The result: **a peer client never sees another client's raw position; the server sees every client's plaintext XY for the duration the client is in the room**. That's the v0.2 trade — encryption is gone because the round-trip was the actual reliability issue (clock-skew rejections, intermittent per-peer freezes) and the encryption was only useful against a malicious *server* (we're the server). Threat-model implications in [`threat-model.md`](threat-model.md).
 
@@ -128,7 +128,7 @@ Source files:
 
 | File | Responsibility |
 |---|---|
-| `src/index.ts` | HTTP/WebSocket bootstrap, route dispatch, per-IP rate limit + body cap + WS connection cap |
+| `src/index.ts` | HTTP/WebSocket bootstrap, route dispatch, rate limits (per-player + per-IP backstop) + body cap + WS connection cap |
 | `src/ws-handler.ts` | Per-connection lifecycle, room messages, per-connection message rate limit |
 | `src/rooms.ts` | In-memory room table, presence tracking |
 | `src/volumes.ts` | Continuous quadratic-falloff distance→volume math. `computeVolumesFromRoom` (v0.2 path) reads coords from room state. Legacy `computeVolumes` (v0.1 path) keeps AES-GCM blob decrypt around for older clients. |
@@ -136,11 +136,11 @@ Source files:
 | `src/rate-limit.ts` | Token-bucket and concurrency limiters used across endpoints. No external dep. |
 | `src/types.ts` | Shared request/response types |
 
-75 tests under `server/tests/` (v0.3 added tiered-proximity tests + team / hearCrossTeam room-state tests).
+74 tests under `server/tests/` (tiered-proximity + team room-state, TURN credentials, and rate-limiting incl. an end-to-end per-player isolation test).
 
 **Rate-limit defaults** (all in `src/rate-limit.ts::LIMITS`):
 - `/turn-credentials`: 60 req/min per IP
-- `/compute-volumes`: 15 req/sec sustained per IP (30-token burst), 256 KB body cap
+- `/compute-volumes`: per player (IP + name) ~90 req/sec sustained (sized for the max scan rate), plus a per-IP backstop (~400 req/sec) for premades sharing a NAT, and a 256 KB body cap
 - WebSocket: 20 connections per IP, 60 msg/sec per connection (120 burst), 64 KB per message
 
 Defaults are tuned for ~50% headroom over normal gameplay cadence (10 Hz position broadcasts, occasional signaling bursts). Operators with unusual environments (e.g. CG-NAT'd ISP sharing one public IP among many subscribers) can adjust the constants in `LIMITS` and rebuild.
@@ -165,9 +165,7 @@ Manual checks (Settings → Updates → CHECK) skip the launch delay and the Aut
 |---|---|
 | `Orchestrator` | Game-state polling, session lifecycle, broadcast cadence, scanning-mode passthrough, peer state registry. The wiring layer between everything else. |
 | `TrackingService` | Minimap CV pipeline. State machine described above. |
-| `template-match` | v0.4 SSIM/NCC template matching (`ssim`, `bestChampionMatch`, `cropResizeGray`) — the primary champion-identity signal. Pure functions, unit-tested. |
-| `champion-icons` | Fetches the match roster's icons from Data Dragon at game start and builds circular templates. Resolves LCU display names → Data Dragon ids. |
-| `ChampionClassifier` | ONNX Runtime Web (WASM backend) 172-class classifier. v0.4: fallback only (used when the Data Dragon icon fetch fails). |
+| `ChampionClassifier` | ONNX Runtime Web (WASM backend) 172-class champion classifier — the champion-identity signal. (v0.4 demoted this to a fallback behind SSIM template matching; v0.5.0 restored it as primary and removed the template-matching path.) |
 | `AudioService` | WebRTC audio + per-peer volume control. Input mode toggle (Always Open / PTT). Mic acquisition with selected device. Output via shared `AudioContext`. Noise suppression handled natively by Chromium. |
 | `SignalingService` | WebSocket presence + signal relay. Auto-reconnect with exponential backoff. |
 | `PeerConnection` | Single peer's `RTCPeerConnection` wrapper. EMA-smoothed gain, periodic `getStats()` logging, ICE-restart on failure, ICE-transport-policy reading from privacy settings. |

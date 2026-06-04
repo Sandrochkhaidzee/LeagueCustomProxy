@@ -35,7 +35,6 @@ Each player row has:
 | **Toggle-mute Key** *(v0.3+)* | Optional global hotkey to flip self-mute on/off. Unbound by default — click the button to bind. |
 | **Mic Volume** | Pre-transmission gain on your mic, 0-100%. Useful if your hardware mic is too quiet or too hot. |
 | **Hide IP (Force TURN)** | Routes all voice through the TURN relay so peers in your match never see your public IP. Defends against DDoS / port-scan attempts from random players. Adds ~20-100 ms latency. Default off; takes effect on the next peer connection. See [`threat-model.md`](threat-model.md) for the full discussion. |
-| **Hear enemies at full vision range** *(v0.3+)* | Default off: only enemies within ~600 game units (auto-attack range) are audible — minimal information leak versus stock gameplay. Toggle on to hear enemies anywhere within ~1200 game units (champion vision range). Server-enforced, so a modified client cannot bypass. Allies are always full volume regardless of this toggle. |
 | **Debug** | Toggles diagnostic mode — paints the HSV-filtered minimap and the tracking dot, exposes the Scan Rate slider, and starts writing a debug log to disk. Off by default; turn on only when investigating a problem or asked by a maintainer. |
 | **Debug Logs → OPEN** | Launches Explorer at `%LOCALAPPDATA%\com.proxchat.app\` so you can grab `lolproxchat.log` to attach to a GitHub issue. |
 | **Auto-update** | When on, the app checks GitHub Releases ~5 seconds after launch and applies any newer version automatically (process exits cleanly, new binary takes over, old one is deleted). Off by default. The setting persists. |
@@ -82,7 +81,7 @@ The log is plain text. It contains your summoner name and nearby players' summon
 | Voice doesn't work when you (or your friend) play **Nunu & Willump** or **Dr. Mundo** | You're on a pre-v0.2.1 build. Update — the champion classifier was failing to match those display names against the model labels, so CV never locked on for that player and they couldn't broadcast a useful position. |
 | Voice cut out intermittently or felt laggy for one peer specifically on v0.1.x | Fixed in v0.2.0 — the old peer-to-peer encrypted-blob round trip was sensitive to clock skew and data-channel delays. v0.2 sends positions client→server directly. Update both peers. |
 | PTT key (F8 or Caps Lock) doesn't fire while LoL has focus | You're on a pre-v0.3 build. Update — v0.3 uses a low-level Windows keyboard hook that runs ahead of LoL's input layer (same technique Discord/Mumble/OBS use). Also lets you rebind both PTT and toggle-mute keys from Settings. |
-| Can't hear enemies you used to hear at vision range | Default cross-team range tightened to ~600u (auto-attack range) in v0.3. Toggle **Settings → Hear enemies at full vision range** to restore the old 1200u behavior. |
+| Faint or no audio from a nearby enemy | Cross-team (enemy) voice fades in at ~champion vision range (~1350u) and gets louder as they close — it's quiet at the edge by design. Allies are always full volume. (The old v0.3/v0.4 "hear at full vision range" toggle was removed in v0.5.0; cross-team is always on at vision range now.) |
 | Debug thumbnail clipped at the bottom of the panel | You're on a pre-v0.3 build. Update — the overlay window now dynamically resizes to fit panel content. |
 
 ## Updating

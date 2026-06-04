@@ -21,7 +21,7 @@ LoLProxChat is built to stay within the categories Riot Games explicitly publish
 
 ## Specifically: the proximity audio
 
-The volume falloff drops to zero at ~1200 game units — typical LoL vision range. By default you only hear enemies who are roughly close enough that the game would already give you visual indicators of their presence (minimap icon when they walk past warded ground, champion model when they enter your vision).
+The volume falloff drops to zero at ~1350 game units — roughly a champion's vision range. You only hear enemies who are close enough that the game would already give you visual indicators of their presence (minimap icon when they walk past warded ground, champion model when they enter your vision); they fade in faintly at that edge and grow louder as they approach.
 
 The app does not reveal *where* an enemy is — only that one is somewhere within hearing range. This is strictly less information than Discord voice chat with the same opponent already provides (which has zero distance modulation).
 
