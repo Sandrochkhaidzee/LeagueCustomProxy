@@ -32,3 +32,6 @@ package-lock.json
 # Git worktrees (per-feature isolated checkouts)
 .worktrees/
 .playwright-mcp/
+
+# scratch analysis / contact-sheet images from CV debugging
+/_*.png
