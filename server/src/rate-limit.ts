@@ -110,11 +110,14 @@ export class ConcurrencyLimiter {
  *   any legit client should ever need but bounds the worst-case Cloudflare
  *   quota burn from a malicious script.
  *
- * /compute-volumes — fires at the 10 Hz position tick during gameplay. 900
- *   req/min per IP = 15/sec sustained, 50% headroom over the 10 Hz baseline
- *   so brief bursts (settle-in after game start, multiple users sharing one
- *   NAT'd IP) are absorbed. Lower bound is well under what a real script
- *   attack could push.
+ * /compute-volumes — each client polls this independently during gameplay.
+ *   Keyed per PLAYER (ip + name), NOT per IP: multiple players behind one
+ *   household NAT each get their own budget. (A shared per-IP bucket silently
+ *   429'd everyone in a 2+ stack — every client polls, so two clients at the
+ *   10 Hz poll alone exceeded the old 15/sec per-IP cap → no audio for anyone.)
+ *   The per-player budget (90/sec) covers the max settable scan rate (60 Hz)
+ *   with headroom; a per-IP backstop (400/sec) bounds the total from any one
+ *   source (incl. a client spoofing many names).
  *
  * /ws connections per IP — premades from a single household + buffer for
  *   reconnect-during-restart situations. 20 covers most real cases; CG-NAT
@@ -122,18 +125,26 @@ export class ConcurrencyLimiter {
  *   would benefit from a higher number — adjust here if you self-host into
  *   such an environment.
  *
- * /ws messages per connection — position broadcasts at 10 Hz + signaling
- *   bursts at game start + occasional ICE-candidate batches. 60/sec is a
- *   generous cap that still prevents flood-relay abuse through a legit
- *   joiner.
+ * /ws messages per connection — position broadcasts run at the client's scan
+ *   rate (up to 60 Hz) + signaling bursts at game start + occasional
+ *   ICE-candidate batches. 100/sec sustained keeps headroom above the 60 Hz
+ *   coord stream while still preventing flood-relay abuse through a legit
+ *   joiner. (Per-connection, so household NAT sharing doesn't collapse it.)
  */
 export const LIMITS = {
-  TURN_CREDS: { capacity: 60, refillPerSec: 1 },        // 60/min, no burst
-  COMPUTE_VOLUMES: { capacity: 30, refillPerSec: 15 },  // 15/sec sustained, 2-sec burst
-  WS_MESSAGES: { capacity: 120, refillPerSec: 60 },     // 60/sec sustained, 2-sec burst
+  TURN_CREDS: { capacity: 60, refillPerSec: 1 },                  // 60/min, no burst
+  // Keyed per PLAYER (ip + name): each genuine client polls independently, so
+  // a 90/sec sustained budget covers the max settable scan rate (60 Hz) with
+  // 50% headroom. A modified client is bounded to this per name.
+  COMPUTE_VOLUMES_PER_PLAYER: { capacity: 180, refillPerSec: 90 },
+  // Per-IP backstop for the same endpoint: a full 5-stack premade on one NAT
+  // at the max scan rate is 5*60 = 300/sec; 400/sec leaves headroom while
+  // bounding the worst case from any single source (incl. name-spoofing).
+  COMPUTE_VOLUMES_PER_IP: { capacity: 800, refillPerSec: 400 },
+  WS_MESSAGES: { capacity: 200, refillPerSec: 100 },             // 60 Hz coords + signaling headroom
   WS_PER_IP: 20,
-  BODY_BYTES: 256 * 1024,                                // /compute-volumes body cap
-  WS_PAYLOAD_BYTES: 64 * 1024,                           // single WS message cap
+  BODY_BYTES: 256 * 1024,                                        // /compute-volumes body cap
+  WS_PAYLOAD_BYTES: 64 * 1024,                                   // single WS message cap
 } as const;
 
 /**

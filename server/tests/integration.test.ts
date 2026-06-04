@@ -161,4 +161,26 @@ describe('tiered proximity — end-to-end against the real server', () => {
 
     a.close(); other.close();
   });
+
+  it('rate-limits per player (ip + name) so housemates on one IP do not starve each other', async () => {
+    // The no-audio bug: a shared per-IP bucket 429'd every client behind one
+    // household NAT (each client polls /compute-volumes independently, so a
+    // 2+ stack blew the per-IP cap). Now each (ip, name) has its own budget.
+    const room = 'r-ratelimit';
+    const post = (name: string) =>
+      fetch(`${BASE}/compute-volumes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ myPosition: { x: 0, y: 0 }, roomId: room, name }),
+      });
+
+    // 220 near-simultaneous requests as "Hog" — above the 180 per-player
+    // capacity, so some are rejected once Hog's own bucket drains.
+    const hog = await Promise.all(Array.from({ length: 220 }, () => post('Hog')));
+    expect(hog.filter((r) => r.status === 429).length).toBeGreaterThan(0);
+
+    // A different player from the SAME IP still gets through — separate bucket.
+    const housemate = await post('Housemate');
+    expect(housemate.status).toBe(200);
+  });
 });
