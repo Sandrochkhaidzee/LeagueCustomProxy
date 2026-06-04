@@ -41,9 +41,6 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
     case 'updateSettings':
       orchestrator.updateSettings(payload);
       break;
-    case 'setHearCrossTeam':
-      orchestrator.setHearCrossTeamPref(payload.enabled === true);
-      break;
     case 'setPttKey':
       invoke('set_ptt_key', { vk: payload.vk })
         .catch((e) => console.warn('[Background] set_ptt_key failed:', e));

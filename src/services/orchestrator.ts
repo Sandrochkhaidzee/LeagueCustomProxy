@@ -10,15 +10,6 @@ import { PeerState } from '../core/types';
 import '../core/window-globals';
 import { isStreamerMode } from '../core/streamer-detect';
 
-const HEAR_CROSS_TEAM_KEY = 'lolproxchat.hearCrossTeam';
-
-function readHearCrossTeamPref(): boolean {
-  try {
-    return window.localStorage.getItem(HEAR_CROSS_TEAM_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
 
 export class Orchestrator {
   private gameState: GameStateService;
@@ -179,16 +170,13 @@ export class Orchestrator {
     this.audio.setSelfMuted(this.selfMutedPref);
     this.audio.setMuteAll(this.muteAllPref);
 
-    // Join signaling room. v0.3: team + hearCrossTeam are required so the
-    // server can do team-aware proximity (allies always full, cross-team
-    // capped at 600u by default / 1200u with toggle). Older servers
-    // silently ignore the extra fields and fall back to legacy 1200u
-    // team-blind behavior.
+    // Join signaling room. v0.3: team is sent so the server can do team-aware
+    // proximity (allies always full volume; enemies fade out at vision range).
+    // Older servers ignore the team field and fall back to team-blind behavior.
     this.signaling.joinRoom(
       session.roomId,
       this.localSummonerName,
       session.localPlayer.team,
-      readHearCrossTeamPref(),
       (peer) => this.handlePeerPosition(peer),
       (signal) => this.handleSignal(signal),
       (name) => this.handlePeerLeave(name),
@@ -514,15 +502,6 @@ export class Orchestrator {
   }
   toggleMutePlayer(name: string): boolean { return this.audio?.toggleMutePlayer(name) ?? false; }
   setPlayerVolume(name: string, volume: number): void { this.audio?.setPlayerVolume(name, volume); }
-  /**
-   * v0.3: persist + apply the cross-team hearing preference. Persists to
-   * localStorage (read on next session start) and pushes to signaling so
-   * the next coords tick (~100ms) carries the new value.
-   */
-  setHearCrossTeamPref(enabled: boolean): void {
-    try { window.localStorage.setItem(HEAR_CROSS_TEAM_KEY, String(enabled)); } catch { /* ignore */ }
-    this.signaling.setHearCrossTeam(enabled);
-  }
   setScanRate(fps: number): void {
     if (!this.tracking) return;
     const clamped = Math.max(1, Math.min(60, Math.round(fps)));

@@ -246,24 +246,6 @@ btnForceTurn.addEventListener('click', () => {
   syncForceTurnButton();
 });
 
-// v0.3: cross-team hearing toggle. Default off — only enemies within ~600u
-// (auto-attack range) audible. Toggle on extends to ~1200u (vision range).
-// Server enforces; a modified client cannot bypass.
-const btnHearCrossTeam = document.getElementById('btn-hear-cross-team') as HTMLButtonElement;
-const HEAR_CROSS_TEAM_KEY = 'lolproxchat.hearCrossTeam';
-function syncHearCrossTeamButton(): void {
-  const on = localStorage.getItem(HEAR_CROSS_TEAM_KEY) === 'true';
-  btnHearCrossTeam.textContent = on ? 'ON' : 'OFF';
-  btnHearCrossTeam.classList.toggle('active', on);
-}
-queueMicrotask(syncHearCrossTeamButton);
-btnHearCrossTeam.addEventListener('click', () => {
-  const enabled = !(localStorage.getItem(HEAR_CROSS_TEAM_KEY) === 'true');
-  localStorage.setItem(HEAR_CROSS_TEAM_KEY, String(enabled));
-  syncHearCrossTeamButton();
-  sendToBackground('setHearCrossTeam', { enabled });
-});
-
 // v0.3 (#1): PTT + toggle-mute key rebind. The Rust WH_KEYBOARD_LL hook
 // reads the bound VK code from atomics it exposes via set_ptt_key /
 // set_toggle_key Tauri commands. UI pattern: click the button → "Press a

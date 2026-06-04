@@ -27,11 +27,9 @@ export class SignalingService {
   private localName: string = '';
   // Saved so reconnect can rejoin the same room with the same identity
   private currentRoomId: string | null = null;
-  // v0.3: team + hearCrossTeam preference. team is fixed for the session
-  // (sent on join); hearCrossTeam piggybacks on every coords message so
-  // toggle changes pick up within ~100ms without a separate WSS message.
+  // v0.3: team is fixed for the session (sent on join) and used by the server
+  // for team-aware proximity.
   private currentTeam: 'ORDER' | 'CHAOS' | null = null;
-  private currentHearCrossTeam = false;
   private currentHandlers: {
     onPeerPosition: OnPeerPosition;
     onSignal: OnSignal;
@@ -46,7 +44,6 @@ export class SignalingService {
     roomId: string,
     localName: string,
     team: 'ORDER' | 'CHAOS',
-    hearCrossTeam: boolean,
     onPeerPosition: OnPeerPosition,
     onSignal: OnSignal,
     onPeerLeave: OnPeerLeave,
@@ -55,7 +52,6 @@ export class SignalingService {
     this.localName = localName;
     this.currentRoomId = roomId;
     this.currentTeam = team;
-    this.currentHearCrossTeam = hearCrossTeam;
     this.currentHandlers = { onPeerPosition, onSignal, onPeerLeave, onPeerJoined };
     this.intentionallyClosed = false;
     this.reconnectAttempt = 0;
@@ -179,24 +175,11 @@ export class SignalingService {
   /**
    * v0.2: send the local player's XY coordinates to the server, where they
    * land in the room state and feed the next /compute-volumes request.
-   * v0.3: also carries `hearCrossTeam` so the server picks up Settings
-   * toggle changes within one tick. Older servers ignore the extra field.
    */
   sendCoords(x: number, y: number): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({
-        type: 'coords', x, y,
-        hearCrossTeam: this.currentHearCrossTeam,
-      }));
+      this.ws.send(JSON.stringify({ type: 'coords', x, y }));
     }
-  }
-
-  /**
-   * v0.3: update the cross-team-hearing preference. Takes effect on the
-   * next coords tick (~100ms). No-op if not in a room.
-   */
-  setHearCrossTeam(enabled: boolean): void {
-    this.currentHearCrossTeam = enabled;
   }
 
   /** Current room ID + local player name, for HTTP requests that need them
@@ -224,7 +207,6 @@ export class SignalingService {
     }
     this.currentRoomId = null;
     this.currentTeam = null;
-    this.currentHearCrossTeam = false;
     this.currentHandlers = null;
     if (this.ws) {
       try { this.ws.close(); } catch { /* ignore */ }
