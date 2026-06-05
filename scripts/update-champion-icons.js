@@ -79,7 +79,14 @@ async function main() {
   fs.mkdirSync(ICONS_DIR, { recursive: true });
 
   const version = (await fetchJson(DDRAGON_VERSIONS))[0];
-  let champs = (await fetchJson(`${GAME_DATA}/champion-summary.json`)).filter((c) => c.id > 0);
+  // Real champions have small sequential ids (currently <= ~950). Bot and
+  // special-mode units live in high id blocks — e.g. Doom Bots at 66600+, whose
+  // icons mimic real champions and would pollute the classifier with junk
+  // near-duplicate classes. id < 10000 is a ceiling Riot won't reach for
+  // centuries, so it cleanly drops those while keeping every real champion.
+  let champs = (await fetchJson(`${GAME_DATA}/champion-summary.json`)).filter(
+    (c) => c.id > 0 && c.id < 10000,
+  );
   champs.sort((a, b) => a.name.localeCompare(b.name));
   if (argLimit) champs = champs.slice(0, argLimit);
   console.log(`Patch ${version} — ${champs.length} champions${argLimit ? ' (test subset)' : ''}\n`);
