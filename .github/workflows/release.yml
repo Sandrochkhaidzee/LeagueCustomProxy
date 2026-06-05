@@ -1,0 +1,117 @@
+name: Build + draft release
+
+# Builds the Windows client and creates a DRAFT GitHub Release with the
+# lolproxchat.exe asset and its SHA-256. A human reviews and publishes the draft.
+# Publishing fires the VirusTotal workflow (which appends scan links), and the
+# in-app auto-updater then picks it up — it reads releases/latest (drafts are
+# invisible until published) and needs the asset named exactly lolproxchat.exe.
+#
+# Trigger by pushing a version tag, e.g.:
+#     git tag v0.5.1 && git push origin v0.5.1
+# or run manually (workflow_dispatch), which derives the tag from Cargo.toml.
+#
+# No secrets needed: PROXCHAT_SERVER defaults to the public server at build time.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release + upload assets
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # package-lock.json is gitignored, so resolve from package.json (not `npm ci`).
+      - name: Install npm deps
+        run: npm install --no-audit --no-fund
+
+      # Runs `npm run build:prod` (webpack) via beforeBuildCommand, then compiles
+      # the binary. --no-bundle skips the MSI/NSIS installers; we ship the raw exe.
+      - name: Build (tauri)
+        run: npx tauri build --no-bundle
+
+      - name: Locate exe + compute SHA-256
+        id: artifact
+        shell: pwsh
+        run: |
+          $exe = "src-tauri/target/release/lolproxchat.exe"
+          if (-not (Test-Path $exe)) { Write-Error "exe not found at $exe"; exit 1 }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "sha256=$hash"   >> $env:GITHUB_OUTPUT
+          "exe_path=$exe"  >> $env:GITHUB_OUTPUT
+          Write-Host "SHA-256: $hash"
+
+      - name: Resolve tag
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $tag = $env:GITHUB_REF -replace '^refs/tags/', ''
+          } else {
+            $v = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
+            $tag = "v$v"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Tag: $tag"
+
+      - name: Compose release notes
+        shell: pwsh
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          SHA256: ${{ steps.artifact.outputs.sha256 }}
+        run: |
+          $body = ''
+          if (Test-Path CHANGELOG.md) {
+            $lines = Get-Content CHANGELOG.md
+            $start = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match ('^##\s*\[' + [regex]::Escape($env:TAG) + '\]')) { $start = $i; break }
+            }
+            if ($start -ge 0) {
+              $collected = @()
+              for ($j = $start + 1; $j -lt $lines.Count; $j++) {
+                if ($lines[$j] -match '^##\s*\[') { break }
+                $collected += $lines[$j]
+              }
+              $body = ($collected -join "`n").Trim()
+            }
+          }
+          if (-not $body) { $body = "Automated build for $($env:TAG)." }
+          $fence = '```'
+          $notes  = $body
+          $notes += "`n`n---`n`n**SHA-256** (verify before running):`n`n"
+          $notes += $fence + "`n" + $env:SHA256 + "`n" + $fence
+          $notes += "`n`nPowerShell:  Get-FileHash .\lolproxchat.exe -Algorithm SHA256`n"
+          Set-Content -Path RELEASE_NOTES.md -Value $notes -Encoding utf8
+          Write-Host "---- release notes ----"
+          Get-Content RELEASE_NOTES.md
+
+      - name: Create or update draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          EXE: ${{ steps.artifact.outputs.exe_path }}
+        run: |
+          $asset = "$($env:EXE)#lolproxchat.exe"
+          gh release view $env:TAG 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG $asset --clobber
+            gh release edit   $env:TAG --notes-file RELEASE_NOTES.md
+          } else {
+            gh release create $env:TAG $asset --draft --title $env:TAG --notes-file RELEASE_NOTES.md
+          }
+          Write-Host "Draft release ready for $($env:TAG) — review and publish it in the Releases tab."

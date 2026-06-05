@@ -123,14 +123,20 @@ Loosely [Conventional Commits](https://www.conventionalcommits.org/), used to sc
 
 ## Release process
 
-Releases are manual (no CI release pipeline):
+Pushing a `v*` tag builds the release in CI ([`.github/workflows/release.yml`](.github/workflows/release.yml)): it runs `tauri build` on a Windows runner, computes the SHA-256, and creates a **draft** GitHub Release with the `lolproxchat.exe` asset and notes pulled from the matching `CHANGELOG.md` section. You review and publish the draft — publishing fires the VirusTotal scan and the in-app updater (which reads `releases/latest`; drafts are invisible until published) picks it up on clients' next launch.
+
+So a release is:
 
 1. Bump `version` in `src-tauri/Cargo.toml`.
 2. Add the `CHANGELOG.md` entry + tag-link footnote.
-3. `npx tauri build`.
-4. Commit (`release:`) + tag + push.
-5. `gh release create` with the `lolproxchat.exe` asset + its SHA-256 inlined in the release notes (the in-app updater pulls `releases/latest`).
-6. Auto-update clients pick it up on next launch.
+3. Commit (`release:`), then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+4. Wait for the draft release to appear, then review and publish it.
+
+To build locally (or sanity-check before tagging), `npx tauri build` drops the exe at `src-tauri/target/release/lolproxchat.exe`. No build secrets are needed — `PROXCHAT_SERVER` defaults to the public server.
+
+### Automated classifier retrain
+
+[`.github/workflows/icon-watch.yml`](.github/workflows/icon-watch.yml) runs weekly: it scrapes the latest champion icons and, if the set changed (new champion, skin, or rework), retrains the classifier and opens a PR with the new model. Validate tracking in a real game, merge, then cut a release as above. See § "Refreshing the champion classifier". The PR step needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" enabled.
 
 ## Anti-patterns we've explicitly avoided
 
