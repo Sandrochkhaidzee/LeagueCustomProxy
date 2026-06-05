@@ -105,7 +105,7 @@ describe('tiered proximity — end-to-end against the real server', () => {
     // Enemy beyond vision range → omitted entirely
     sendCoords(enemyBeyond, 1500, 0);
 
-    await sleep(150); // let the coords WS messages land in room state
+    await sleep(500); // let the coords WS messages land in room state
 
     const result = await computeVolumes({ x: 0, y: 0 }, room, 'Alice');
     expect(result.peerVolumes.AllyFar).toBe(1.0);               // ally, always full
@@ -133,7 +133,7 @@ describe('tiered proximity — end-to-end against the real server', () => {
     // Teamless requester: legacy fallback uses team-blind vision-range falloff.
     // Place the other peer at 1000u — within the 1350u range.
     sendCoords(other, 1000, 0);
-    await sleep(150);
+    await sleep(500);
 
     const result = await computeVolumes({ x: 0, y: 0 }, room, 'Legacy');
     // Even though Legacy never sent a team, the other peer at 1000u is audible
