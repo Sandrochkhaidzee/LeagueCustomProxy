@@ -124,7 +124,7 @@ out.push(
 );
 out.push('');
 out.push(
-  'After merge: bump `version` in `src-tauri/Cargo.toml`, add a `CHANGELOG.md` entry, then push a `v*` tag — that triggers `release.yml`, which builds the Windows exe and creates a **draft** release for you to publish.',
+  'This PR already bumps the patch version + CHANGELOG, so **merging it triggers `release.yml`** automatically — it builds the Windows exe and opens a **draft** release for you to review and publish.',
 );
 
 console.log(out.join('\n'));

@@ -123,20 +123,19 @@ Loosely [Conventional Commits](https://www.conventionalcommits.org/), used to sc
 
 ## Release process
 
-Pushing a `v*` tag builds the release in CI ([`.github/workflows/release.yml`](.github/workflows/release.yml)): it runs `tauri build` on a Windows runner, computes the SHA-256, and creates a **draft** GitHub Release with the `lolproxchat.exe` asset and notes pulled from the matching `CHANGELOG.md` section. You review and publish the draft — publishing fires the VirusTotal scan and the in-app updater (which reads `releases/latest`; drafts are invisible until published) picks it up on clients' next launch.
+A release is triggered by a **version bump landing on `main`** — [`.github/workflows/release.yml`](.github/workflows/release.yml) sees `src-tauri/Cargo.toml`'s version has no matching tag yet, builds `tauri build` on a Windows runner, computes the SHA-256, creates the `vX.Y.Z` tag, and opens a **draft** GitHub Release with the `lolproxchat.exe` asset and notes pulled from the matching `CHANGELOG.md` section. You review and publish the draft — publishing fires the VirusTotal scan, and the in-app updater (which reads `releases/latest`; drafts are invisible until published) picks it up on clients' next launch.
 
-So a release is:
+So a manual release is:
 
-1. Bump `version` in `src-tauri/Cargo.toml`.
-2. Add the `CHANGELOG.md` entry + tag-link footnote.
-3. Commit (`release:`), then `git tag vX.Y.Z && git push origin vX.Y.Z`.
-4. Wait for the draft release to appear, then review and publish it.
+1. `node scripts/bump-version.mjs --type patch --changelog "### Fixed\n- …"` — bumps `Cargo.toml` + `Cargo.lock` and adds the dated `CHANGELOG.md` section + footnote (use `--type minor` for notable/behavior changes).
+2. Commit (`release:`) and push to `main`.
+3. Wait for the draft release to appear, then review and publish it.
 
-To build locally (or sanity-check before tagging), `npx tauri build` drops the exe at `src-tauri/target/release/lolproxchat.exe`. No build secrets are needed — `PROXCHAT_SERVER` defaults to the public server.
+(You can also trigger `release.yml` manually via workflow_dispatch — it builds whatever version is in `Cargo.toml`.) To build locally for a sanity check, `npx tauri build` drops the exe at `src-tauri/target/release/lolproxchat.exe`. No build secrets are needed — `PROXCHAT_SERVER` defaults to the public server.
 
-### Automated classifier retrain
+### Automated classifier retrain → release
 
-[`.github/workflows/icon-watch.yml`](.github/workflows/icon-watch.yml) runs weekly: it scrapes the latest champion icons and, if the set changed (new champion, skin, or rework), retrains the classifier and opens a PR with the new model. Validate tracking in a real game, merge, then cut a release as above. See § "Refreshing the champion classifier". The PR step needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" enabled.
+[`.github/workflows/icon-watch.yml`](.github/workflows/icon-watch.yml) runs daily: it scrapes the latest champion icons and, if the set changed (new champion, skin, or rework), retrains the classifier, **patch-bumps the version**, and opens a PR with the new model + a quality report. Validate tracking in a real game and merge — the version bump then triggers `release.yml` to build the draft release automatically. See § "Refreshing the champion classifier". The PR step needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" enabled. [`.github/workflows/ci.yml`](.github/workflows/ci.yml) type-checks, builds, and tests every PR.
 
 ## Anti-patterns we've explicitly avoided
 
