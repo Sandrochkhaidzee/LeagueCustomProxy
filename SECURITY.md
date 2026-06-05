@@ -20,7 +20,7 @@ If you can't use that flow for any reason, open a regular GitHub issue titled `S
 
 - The client application (`lolproxchat.exe`), including the Rust backend, the WebView2 frontend code, and the signaling/WebRTC integration.
 - The signaling server (`server/`) at `proxchat.dant123.com` and its `/turn-credentials`, `/compute-volumes`, `/health`, `/ws` endpoints.
-- The crypto design for position blobs (AES-GCM, server-only key, blob freshness check).
+- The position-handling and proximity design — coordinates sent over TLS, computed into volumes server-side so peers never receive raw positions.
 
 ## What's out of scope
 
@@ -33,7 +33,7 @@ If you can't use that flow for any reason, open a regular GitHub issue titled `S
 
 For the full breakdown of what the design protects against, what it doesn't, and the rationale behind each call, see [`docs/threat-model.md`](docs/threat-model.md). Two parts:
 
-- **Part 1** — cheat / information-leak threats (volume side channel, position-blob trust, server math precision).
+- **Part 1** — cheat / information-leak threats (the volume side channel, self-reported-position trust, server-side volume math).
 - **Part 2** — threats to users (public IP exposure, server-operator trust, code-signing absence, etc.).
 
 That document also lists what data is and isn't collected (the short version: no analytics, no telemetry, no fingerprinting, no persistent user IDs).

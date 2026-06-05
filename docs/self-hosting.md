@@ -14,22 +14,7 @@ The server is a ~500-LOC Node process: WebSocket signaling (room presence + offe
 - A domain name with a wildcard or specific TLS cert (Caddy or another auto-cert reverse proxy makes this painless).
 - A Cloudflare account if you're going the recommended TURN route. The free tier covers 1 TB egress/month — sufficient for thousands of voice-hours.
 
-## Step 1 — Generate an encryption key (only if you'll serve v0.1.x clients)
-
-v0.2+ clients send their position to `/compute-volumes` directly — no encryption required. You can skip this step entirely if all of your users are on v0.2.0 or newer.
-
-If you want the server to keep accepting position blobs from v0.1.33-or-older clients during a rollout, generate the AES-GCM key those clients' blobs are encrypted with:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-- **It must be the same across server restarts** for as long as v0.1.x clients are connecting — rotating it invalidates every in-flight blob from them.
-- **It must never leave your infrastructure** — it's the only thing standing between an attacker and decrypted positions in the legacy code path.
-
-Once your community is fully on v0.2+, drop `ENCRYPTION_KEY` from `.env` and the legacy path stops being reachable.
-
-## Step 2 — Get TURN credentials (Cloudflare Realtime TURN, recommended)
+## Step 1 — Get TURN credentials (Cloudflare Realtime TURN, recommended)
 
 For users behind symmetric NAT (mobile networks, some corporate setups), peers need a TURN relay to connect. The default deployment uses Cloudflare Realtime TURN — 1 TB/month egress free, no infrastructure to maintain, $0.05/GB after.
 
@@ -43,20 +28,18 @@ If you'd rather self-host coturn instead, skip to § "Optional: self-host coturn
 
 **To avoid surprise bills:** don't add a payment method to your Cloudflare account. The free tier becomes a hard cap — service degrades at quota instead of charging.
 
-## Step 3 — Write `.env`
+## Step 2 — Write `.env`
 
 Next to the compose file:
 
 ```ini
 TURN_KEY_ID=<UUID from Cloudflare>
 TURN_KEY_API_TOKEN=<token from Cloudflare>
-# Only required if you want to keep serving v0.1.33-or-older clients — see Step 1.
-# ENCRYPTION_KEY=<your-64-hex-key>
 ```
 
 The compose file is at `docker-compose.proxchat.yml` in the repo root. `.env` is already in `.gitignore`.
 
-## Step 4 — Deploy via Docker
+## Step 3 — Deploy via Docker
 
 ```bash
 docker compose -f docker-compose.proxchat.yml up -d
@@ -83,11 +66,10 @@ proxy_set_header Connection "upgrade";
 cd server
 npm install
 npm run build
-# ENCRYPTION_KEY is only needed for legacy v0.1.x clients — see Step 1.
 PORT=3100 TURN_KEY_ID=<id> TURN_KEY_API_TOKEN=<token> npm start
 ```
 
-## Step 5 — Verify
+## Step 4 — Verify
 
 ```bash
 # Health (server up, accepting requests)
@@ -182,9 +164,9 @@ echo "" | openssl s_client -connect turn.your-domain.com:5349 \
 
 ## Updating an existing deployment
 
-If your remote is a hand-synced directory of `server/` files (rather than a `git` checkout on the host), **updates are a file-sync, not a `git pull`** — and a partial sync silently runs stale code. This bit us in production: the v0.2.0 / v0.2.1 server upgrades never landed because the sync missed the new files, so every v0.2.x client talked to a v0.1 server and got empty proximity volumes with no error.
+If your remote is a hand-synced directory of `server/` files (rather than a `git` checkout on the host), **updates are a file-sync, not a `git pull`** — and a partial sync silently runs stale code: clients talk to an old server and proximity quietly breaks with no error. (This has bitten the project in production.)
 
-Use [`scripts/deploy-server.sh`](../scripts/deploy-server.sh) to do it safely. It builds + tests locally first, backs up the remote source, syncs **all** of `server/src/` plus the build files, rebuilds the container, and then verifies the new code is actually serving (a v0.3+ server returns `myBlob:""` for a room-shaped `/compute-volumes` request; a stale v0.1 server would return a non-empty blob — the exact tell that hid the missed upgrade). It never touches the remote `docker-compose.yml`, so your secrets stay put.
+Use [`scripts/deploy-server.sh`](../scripts/deploy-server.sh) to do it safely. It builds + tests locally first, backs up the remote source, syncs **all** of `server/src/` plus the build files, rebuilds the container, and then verifies the new code is actually serving before declaring success. It never touches the remote `docker-compose.yml`, so your secrets stay put.
 
 ```bash
 PROXCHAT_DEPLOY_HOST=root@your-host \
@@ -194,12 +176,11 @@ PROXCHAT_DEPLOY_PATH=/path/to/proxchat-server \
 
 ## Operational notes
 
-- **The encryption key (if you set one) is unrotatable in practice while v0.1.x clients are connected.** Treat it like a password manager secret. Rotating it breaks every legacy client's in-flight position blob the moment the new key is live; v0.2+ clients are unaffected since they don't use it.
 - **The server is stateless modulo rooms.** Restarts drop active rooms; clients reconnect. No DB to migrate, no persistence to back up.
 - **Health checks.** Docker Compose includes a built-in healthcheck that hits `/health` every 30 s. The README's status badge also pulls from this endpoint via Shields.io.
 - **TLS termination is your responsibility.** Caddy is the recommended default since it handles cert renewal end-to-end. nginx + certbot also works but renewal is a separate concern.
 - **WebSocket upgrades.** Any reverse proxy you use must support and forward the WebSocket upgrade headers, or `/ws` will fail even if `/health` returns 200.
-- **Rate limiting (v0.1.31+).** The server ships with per-IP rate limits, body size cap, and WebSocket connection/message limits built in (`server/src/rate-limit.ts::LIMITS`). Defaults: `/turn-credentials` 60/min, `/compute-volumes` 15/sec sustained + 256 KB body cap, WebSocket 20 connections per IP + 60 msg/sec per connection + 64 KB per message. Tuned for ~50% headroom over the real 10 Hz gameplay cadence — legitimate clients should never trigger them. If you serve an unusual environment (CG-NAT'd ISP where many subscribers share one public IP, large training-server setup with many clients per IP, etc.) the constants in `LIMITS` are the single place to adjust + rebuild. No env-var knobs by design — keeps the server config trivially auditable.
+- **Rate limiting.** The server ships with rate limits, a body-size cap, and WebSocket connection/message limits built in (`server/src/rate-limit.ts::LIMITS`). Defaults: `/turn-credentials` 60/min per IP; `/compute-volumes` keyed per player (IP + name) and sized for the max scan rate, plus a generous per-IP backstop and a 256 KB body cap; WebSocket 20 connections per IP + 64 KB per message. Legitimate clients never trigger them. If you serve an unusual environment (e.g. a CG-NAT'd ISP where many subscribers share one public IP), the constants in `LIMITS` are the single place to adjust + rebuild. No env-var knobs by design — keeps the server config trivially auditable.
 
 ## Pointing the client at your server
 
@@ -216,7 +197,7 @@ The WebSocket URL is derived from `PROXCHAT_SERVER` (`https://` → `wss://`).
 
 You probably don't need to. The default deployment at `proxchat.dant123.com` is what 99% of users use, and a private deployment makes sense in only two cases:
 
-- **Trust.** You don't want a third party (me) to be able to see your room's positions. v0.2 holds them in process memory on the server, so whoever runs the server can read them. See [`threat-model.md`](threat-model.md) § "Server operator can read all positions".
+- **Trust.** You don't want a third party (me) to be able to see your room's positions. The server holds them in process memory, so whoever runs it can read them. See [`threat-model.md`](threat-model.md) § "Server operator can read all positions".
 - **Capacity.** You're running a player base large enough to justify operational cost. (For perspective: 1000 concurrent users at full Opus 128 kbps would be ~16 MB/s of voice, well within any small-VPS budget.)
 
 If neither applies, save yourself the ops work.

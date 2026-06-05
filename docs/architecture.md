@@ -8,8 +8,6 @@ LoLProxChat reads your in-game position by **computer vision on the minimap**, r
 
 No client ever sees another client's raw position; the server returns only `{ peerName: volume }`. No audio touches the server.
 
-(Pre-v0.2: positions were AES-GCM encrypted and exchanged peer-to-peer over WebRTC data channels with the server decrypting them only to compute volumes. v0.2 dropped the encryption layer and the data-channel round trip — root cause of intermittent clock-skew rejections, position-lag, and per-peer divergence in real games. See [`CHANGELOG.md`](../CHANGELOG.md#v020--2026-06-02) and `docs/plans/2026-06-02-server-side-positions.md`.)
-
 ## System map
 
 ```
@@ -39,7 +37,7 @@ No client ever sees another client's raw position; the server returns only `{ pe
              │  WSS + HTTPS                   │  WebRTC P2P
              │  (presence, signal             │  (DTLS-SRTP voice
              │   relay, XY coords,            │   only — no data
-             │   /compute-volumes)            │   channel since v0.2)
+             │   /compute-volumes)            │   channel)
              ▼                                │
    ┌────────────────────────┐                 │
    │  Signaling server      │                 │
@@ -69,10 +67,10 @@ No client ever sees another client's raw position; the server returns only `{ pe
 
 ## The three windows
 
-Since v0.1.21 the client runs two Tauri windows, both inside a single WebView2 process:
+The client runs two Tauri windows, both inside a single WebView2 process:
 
 - **`overlay`** — the **panel** window. Draggable, holds the player list and Settings. Visible, captures input over its hit-rect, click-through everywhere else (via a 30 Hz cursor-position polling loop in `main.rs`).
-- **`scanner`** — a transparent click-through window auto-pinned over the detected minimap region. Empty in normal use. When Debug is on, it paints a small tracking dot showing where the CV thinks you are. *Doesn't* paint the HSV-filtered debug image — that lives in the panel's Settings to avoid a capture-feedback loop.
+- **`scanner`** — a transparent click-through window auto-pinned over the detected minimap region. It stays empty, even in Debug: the tracked-position marker and the filtered minimap preview both live in the panel's Settings, deliberately kept out of the scanner so they can't be captured back into the minimap image the tracker reads.
 
 A short-lived third "window" is the splash visible at startup before the orchestrator boots; it's just the panel before CV locks on.
 
@@ -85,8 +83,8 @@ Tracking is a state machine: **SCANNING → LOCKED → (DEAD)**. Every CV tick:
 1. **Capture.** `invoke('capture_minimap')` triggers a Win32 `BitBlt` of a bounded screen rect. Tauri returns the raw RGBA bytes as a data URL.
 2. **Color mask.** Build HSV-thresholded masks for each plausible champion-circle color (teal allies + various enemy hues). Tracked via `buildWhiteMasks` / `findBlobs`.
 3. **Blob detection.** Flood-fill connected components, filter by size + fill-ratio against the expected icon diameter at the current minimap scale.
-4. **Identity (172-class ONNX classifier).** Each candidate blob is cropped and identified by a small CNN champion classifier (`src/services/champion-classifier.ts`, a model trained on champion circle icons, WASM ONNX Runtime), combined with composite blob scoring. v0.4 replaced this with SSIM template matching against the live Data Dragon icons (`template-match.ts` / `champion-icons.ts`), but v0.5.0 reverted to the classifier: in real games the template/annulus approach under-locked and drifted onto minions, turrets, and ward rings, while the classifier keeps the dot on your champion more reliably. History + research: [`docs/plans/2026-06-03-cv-tracking-research.md`](plans/2026-06-03-cv-tracking-research.md).
-5. **Track.** In LOCKED state, prefer the blob nearest to last position + velocity; rebuild velocity as an EMA on apparent motion. Allow brief "holds" (no match in range) using extrapolation with a velocity cap (10 px/tick — see `extrapolatePosition`). The scoring/selection math (composite blob score, Phase-1 in-range pick, Phase-2 classifier reacquisition, adaptive thresholds) was extracted to pure functions in `src/services/tracking-helpers.ts` in v0.1.29 — testable in isolation; `handleLocked` is the orchestration layer that wires them up plus the side-effect ordering.
+4. **Identity.** Each candidate icon is cropped and identified by a champion classifier (`src/services/champion-classifier.ts` — a small CNN trained on champion icons, run in-browser via ONNX Runtime) combined with blob scoring, so the tracker follows *your* champion rather than whatever icon is nearest. Design notes + research: [`docs/plans/2026-06-03-cv-tracking-research.md`](plans/2026-06-03-cv-tracking-research.md).
+5. **Track.** In LOCKED state, prefer the blob nearest to last position + velocity; rebuild velocity as an EMA on apparent motion. Allow brief "holds" (no match in range) using extrapolation with a velocity cap (10 px/tick — see `extrapolatePosition`). The scoring/selection math (composite blob score, Phase-1 in-range pick, Phase-2 classifier reacquisition, adaptive thresholds) lives in pure functions in `src/services/tracking-helpers.ts` — testable in isolation; `handleLocked` is the orchestration layer that wires them up plus the side-effect ordering.
 6. **Position-jump detection.** All `lastPosition` writes funnel through `setLastPosition`, which warns when a jump exceeds both a distance threshold (>500 game-units) AND a speed threshold (>2000 u/s) — both gates filter out CV pixel-jitter on normal movement while still catching real teleports (recall) or mis-tracks. Thresholds live as `JUMP_WARN_MIN_UNITS` / `JUMP_WARN_MIN_SPEED` static constants on `TrackingService`.
 
 Edge cases the state machine handles: champion deaths (icon disappears), respawn at fountain (re-acquire via classifier), camera pan, overlapping icons in teamfights, minimap scale changes via `game.cfg` MinimapScale.
@@ -99,17 +97,15 @@ This is the part that matters for both the threat model and the "what does the s
 2. Immediately after, the client POSTs `/compute-volumes` with `{ myPosition, roomId, name }`. The server reads the latest position for every *other* client in the room (skipping any whose last `coords` is older than 5 s) and returns `{ peerVolumes: { peerName: volume } }`.
 3. Volume math: pairwise distance with quadratic falloff `1 - (d/MAX_HEARING_RANGE)²`, continuous float in `[0, 1]`. `MAX_HEARING_RANGE = 1350` game units (≈ champion vision range). Allies always return 1.0; cross-team peers use the falloff and are omitted entirely beyond the range. See `server/src/volumes.ts`.
 
-The result: **a peer client never sees another client's raw position; the server sees every client's plaintext XY for the duration the client is in the room**. That's the v0.2 trade — encryption is gone because the round-trip was the actual reliability issue (clock-skew rejections, intermittent per-peer freezes) and the encryption was only useful against a malicious *server* (we're the server). Threat-model implications in [`threat-model.md`](threat-model.md).
-
-Back-compat: server still accepts the legacy v0.1 request shape `{ myPosition, peers: { name: encryptedBlob } }` and the older WebRTC data-channel blob exchange. v0.1.33 clients keep working unchanged against a v0.2-server. Once v0.1.x clients are gone the legacy path will be removed.
+The result: **a peer client never sees another client's raw position; the server sees every client's plaintext XY for as long as they're in the room.** That's a deliberate trade — the server needs positions to compute proximity, and a peer never receives another peer's coordinates. The only party who can see positions is whoever runs the server, so self-host if that matters to you. Threat-model implications in [`threat-model.md`](threat-model.md).
 
 ## WebRTC voice flow
 
-Voice is the only thing on the WebRTC connection since v0.2 — the data channel was dropped along with the blob exchange.
+Voice is the only thing on the WebRTC connection — there is no data channel.
 
 - Each client publishes a single mic stream through a WebAudio graph: `mic → GainNode → MediaStreamDestination → RTCPeerConnection`.
 - Each peer's incoming stream goes through the inverse: `RTCPeerConnection → MediaStreamSource → GainNode → AudioContext.destination`.
-- The per-peer gain is driven by the server-returned volume, smoothed by an EMA (`nextSmoothedVolume`) with a 0.3 alpha cap so distance changes ramp over ~1 second instead of snapping. The cap originally bridged quantization buckets; with v0.1.33's continuous output it primarily damps CV jitter.
+- The per-peer gain is driven by the server-returned volume, smoothed (`nextSmoothedVolume`, ~1-second ramp) so distance changes ease in instead of snapping, and tracking jitter is damped.
 - ICE candidates flow through the signaling server's `/ws` endpoint. Direct P2P (host or srflx) is preferred; TURN relay kicks in if the user opted into "Hide IP" or if direct paths fail. TURN credentials come from Cloudflare's Realtime TURN API, proxied through the signaling server's `/turn-credentials`.
 - ICE failure auto-recovers: initiator side calls `pc.restartIce()` + re-issues an offer, capped at 2 attempts per peer, counter resets on successful re-connect.
 
@@ -120,7 +116,7 @@ A ~500-LOC Node process. Single container deployed via Docker Compose. Stateless
 **Endpoints:**
 
 - **`/ws`** — WebSocket upgrade. Handles room join/leave, peer presence broadcast, position coords (`coords` message), and relay of `offer` / `answer` / `ice-candidate` signals between named peers. Room IDs are deterministic hashes of sorted player summoner names, so any two players in the same match independently compute the same room ID.
-- **`POST /compute-volumes`** — v0.2 shape: `{ myPosition, roomId, name }` → `{ peerVolumes }`. Reads peer positions from room state (populated by `coords` WSS messages). Continuous quadratic-falloff volumes; 5-second staleness window for stored coords. Legacy v0.1 shape `{ myPosition, peers: { name: encryptedBlob } }` → `{ myBlob, peerVolumes }` still accepted for older clients.
+- **`POST /compute-volumes`** — `{ myPosition, roomId, name }` → `{ peerVolumes }`. Reads every other client's stored position from room state (5-second staleness window), applies the team-aware distance→volume falloff, and returns one volume per audible peer.
 - **`GET /turn-credentials`** — Returns ICE servers for the requesting client. Calls Cloudflare's TURN API in the background (cached in-process for 24 hours with stale-grace fallback on API failure). Falls back to self-hosted coturn HMAC credentials if `TURN_KEY_ID` is unset and `TURN_SERVER`/`TURN_SECRET` are set.
 - **`GET /health`** — `{ status: "ok", rooms: N }`. Used by Docker healthcheck and the public status badge in the README.
 
@@ -131,7 +127,7 @@ Source files:
 | `src/index.ts` | HTTP/WebSocket bootstrap, route dispatch, rate limits (per-player + per-IP backstop) + body cap + WS connection cap |
 | `src/ws-handler.ts` | Per-connection lifecycle, room messages, per-connection message rate limit |
 | `src/rooms.ts` | In-memory room table, presence tracking |
-| `src/volumes.ts` | Continuous quadratic-falloff distance→volume math. `computeVolumesFromRoom` (v0.2 path) reads coords from room state. Legacy `computeVolumes` (v0.1 path) keeps AES-GCM blob decrypt around for older clients. |
+| `src/volumes.ts` | Team-aware distance→volume falloff math (`computeTieredVolumes`), reading coords from room state. Older entry points remain for backward compatibility. |
 | `src/turn.ts` | Cloudflare TURN credential fetcher + cache + coturn HMAC fallback |
 | `src/rate-limit.ts` | Token-bucket and concurrency limiters used across endpoints. No external dep. |
 | `src/types.ts` | Shared request/response types |
@@ -157,7 +153,7 @@ In-app updater (`src-tauri/src/updater.rs` + `src/services/updater.ts`):
 
 Manual checks (Settings → Updates → CHECK) skip the launch delay and the Auto-update gate.
 
-**URL validation (v0.1.31+):** `download_and_apply_update` refuses any URL that doesn't start with `ALLOWED_DOWNLOAD_PREFIX` (defined alongside `GITHUB_LATEST` in `updater.rs`). Defense-in-depth against a hypothetical frontend compromise (XSS, supply-chain attack on a bundled JS dep) being able to call the command with an attacker-controlled URL → arbitrary binary execution. Forks should adjust both constants in lockstep.
+**URL validation:** `download_and_apply_update` refuses any URL that doesn't start with `ALLOWED_DOWNLOAD_PREFIX` (defined alongside `GITHUB_LATEST` in `updater.rs`). Defense-in-depth against a hypothetical frontend compromise (XSS, supply-chain attack on a bundled JS dep) being able to call the command with an attacker-controlled URL → arbitrary binary execution. Forks should adjust both constants in lockstep.
 
 ## Key client services (under `src/services/`)
 
@@ -165,7 +161,7 @@ Manual checks (Settings → Updates → CHECK) skip the launch delay and the Aut
 |---|---|
 | `Orchestrator` | Game-state polling, session lifecycle, broadcast cadence, scanning-mode passthrough, peer state registry. The wiring layer between everything else. |
 | `TrackingService` | Minimap CV pipeline. State machine described above. |
-| `ChampionClassifier` | ONNX Runtime Web (WASM backend) 172-class champion classifier — the champion-identity signal. (v0.4 demoted this to a fallback behind SSIM template matching; v0.5.0 restored it as primary and removed the template-matching path.) |
+| `ChampionClassifier` | Champion classifier (a small CNN run via ONNX Runtime Web) — the champion-identity signal for tracking. |
 | `AudioService` | WebRTC audio + per-peer volume control. Input mode toggle (Always Open / PTT). Mic acquisition with selected device. Output via shared `AudioContext`. Noise suppression handled natively by Chromium. |
 | `SignalingService` | WebSocket presence + signal relay. Auto-reconnect with exponential backoff. |
 | `PeerConnection` | Single peer's `RTCPeerConnection` wrapper. EMA-smoothed gain, periodic `getStats()` logging, ICE-restart on failure, ICE-transport-policy reading from privacy settings. |
@@ -181,7 +177,7 @@ Not services in their own right — small support modules consumed by the servic
 
 | Module | Used by | Purpose |
 |---|---|---|
-| `src/services/tracking-helpers.ts` | `TrackingService` | Pure scoring/selection math extracted from `handleLocked` in v0.1.29. Unit-tested in isolation. |
+| `src/services/tracking-helpers.ts` | `TrackingService` | Pure scoring/selection math used by `handleLocked`. Unit-tested in isolation. |
 | `src/services/blob-types.ts` | `tracking.ts`, `tracking-helpers.ts` | Shared `Blob` interface. Lives outside `tracking.ts` so the helpers can import it without a circular reach back. |
 | `src/core/window-globals.ts` | `overlay.ts`, `background.ts`, `orchestrator.ts` | `declare global { interface Window { … } }` for the two app-specific properties used as a cross-module bus (`__proxchatRunUpdateCheck`, `__lolproxchat_debug_enabled`). Imported side-effect-only. |
 
@@ -190,7 +186,7 @@ Not services in their own right — small support modules consumed by the servic
 | Command (file) | Responsibility |
 |---|---|
 | `capture::set_capture_bounds`, `capture::capture_minimap` | Win32 GDI BitBlt of a bounded screen rect into an RGBA data URL. |
-| `lcu::check_league_running`, `lcu::get_game_state`, `lcu::get_live_client_data`, `lcu::read_league_config_file`, `lcu::get_league_install_dir` | LCU + Live Client Data polling. Install-dir resolution via the LCU lockfile path. `read_league_config_file` takes no arguments and reads only `Config/game.cfg` — Rust computes the path so the frontend can't supply arbitrary file paths (closed in v0.1.31). |
+| `lcu::check_league_running`, `lcu::get_game_state`, `lcu::get_live_client_data`, `lcu::read_league_config_file`, `lcu::get_league_install_dir` | LCU + Live Client Data polling. Install-dir resolution via the LCU lockfile path. `read_league_config_file` takes no arguments and reads only `Config/game.cfg` — Rust computes the path so the frontend can't supply arbitrary file paths. |
 | `updater::check_for_update`, `updater::download_and_apply_update` | GitHub Releases check + in-place exe swap. Handles the `--complete-update <old-path>` startup arg. |
 | `main::position_scanner`, `main::hide_scanner` | Auto-pin the scanner window over the detected minimap region. |
 | `main::get_screen_size` | Primary monitor resolution for DPI math. |
@@ -198,7 +194,7 @@ Not services in their own right — small support modules consumed by the servic
 | `main::append_log` | Writes a single line to the rolling debug log file. |
 | `main::open_log_folder` | Launches Explorer at the log directory. |
 
-`main.rs` also runs the cursor-position polling loop (30 Hz, skipped while LMB held to avoid tearing down a native window-drag), registers global shortcuts (`Ctrl+Shift+M` toggle mute, `F8` PTT), opens the rolling log file at startup with 3-session rotation, and routes `tauri::WindowEvent::CloseRequested` on any window to `app.exit(0)`.
+`main.rs` also runs the cursor-position polling loop (30 Hz, skipped while LMB held to avoid tearing down a native window-drag), installs the low-level keyboard hook for the rebindable push-to-talk and toggle-mute keys (push-to-talk defaults to Caps Lock), opens the rolling log file at startup with 3-session rotation, and routes `tauri::WindowEvent::CloseRequested` on any window to `app.exit(0)`.
 
 ## What's intentionally not here
 
@@ -211,11 +207,10 @@ A few design choices that look odd until you know the constraints:
 
 ## Where the code-base is going next
 
-See open issues and the [CHANGELOG](../CHANGELOG.md). Roughly in priority order:
+See open issues and the [CHANGELOG](../CHANGELOG.md). Current threads:
 
-- **Rebindable hotkeys + low-level keyboard hook** (`#1`). Tauri's `RegisterHotKey` gets pre-empted by DirectInput consumers; needs a `WH_KEYBOARD_LL` hook on the Rust side.
-- **Asymmetric voice issue** (`#7`). Diagnostics are in place; waiting on dual-sided logs.
-- **Server-side rate limiting** on `/turn-credentials` and `/compute-volumes` to bound the worst-case Cloudflare quota burn from a malicious user.
+- **Champion-tracking reliability** (`#13`) — keeping the tracked marker glued to your champion across champions and minimap sizes; the main lever is the classifier's confidence on harder-to-recognize icons.
+- **Cross-team audio anti-cheat** — optionally gating enemy audio on actual line-of-sight (server-side, against a static map vision mesh) so you only hear enemies your team can see. Benched as a potential mitigation; see [`threat-model.md`](threat-model.md).
 - **Cloudflare TURN usage monitoring** — alert before approaching the 1 TB/month cap.
 
-For the longer view, refer to issue [#10](https://github.com/danthi123/LoLProxChat/issues/10) (anti-cheat hardening backlog) and the historical design docs under `docs/plans/`.
+For the longer view, see issue [#10](https://github.com/danthi123/LoLProxChat/issues/10) and the design notes under `docs/plans/`.

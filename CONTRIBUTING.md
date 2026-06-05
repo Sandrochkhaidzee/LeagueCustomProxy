@@ -72,8 +72,8 @@ docs/                  — User guide, architecture, self-hosting, threat model,
 
 ## Testing
 
-- **Client tests** live under `tests/` (separate root from `src/`). Run with `npm test`. The 100 tests cover core logic, tracking state machine, audio gain math (slider×proximity, plus `resolveProximityTargets` which silences peers the server drops from range — the v0.3.1 stuck-gain fix), device list filtering, tracking-helper scoring math (composite/jump/hold-cap), the position-jump warning gates, the session-flow integration, the champion-classifier label resolver, the dynamic overlay resize helpers, and the PTT-rebind keymap.
-- **Server tests** live under `server/tests/`. Run with `cd server && npm test`. 74 tests cover room management (v0.3 team fields + v0.2 coords storage), TURN credential generation (both coturn-HMAC and Cloudflare paths), volume math (v0.3 tiered proximity + legacy v0.2 room-state + legacy v0.1 encrypted-blob path), and rate-limiting (`TokenBucket`, `ConcurrencyLimiter`, `clientIp`, plus an end-to-end per-player isolation test).
+- **Client tests** live under `tests/` (separate root from `src/`). Run with `npm test`. The 100 tests cover core logic, tracking state machine, audio gain math (slider×proximity, plus `resolveProximityTargets` which silences peers the server drops from range), device list filtering, tracking-helper scoring math (composite/jump/hold-cap), the position-jump warning gates, the session-flow integration, the champion-classifier label resolver, the dynamic overlay resize helpers, and the PTT-rebind keymap.
+- **Server tests** live under `server/tests/`. Run with `cd server && npm test`. 74 tests cover room management (team + coords storage), TURN credential generation (both coturn-HMAC and Cloudflare paths), the tiered proximity-volume math, and rate-limiting (`TokenBucket`, `ConcurrencyLimiter`, `clientIp`, plus an end-to-end per-player isolation test).
 - New features should land with tests where the logic is testable (pure functions, state machines). DOM-heavy or Tauri-IPC-heavy code can skip tests; mock surfaces are too brittle to be worth maintaining.
 
 ## Commit conventions
@@ -82,7 +82,7 @@ Loosely [Conventional Commits](https://www.conventionalcommits.org/), used to sc
 
 - `feat:` — user-visible feature
 - `fix:` — user-visible bug fix
-- `feat(v0.1.X):` — bundled release with multiple changes (used for the version-stamping commit)
+- `release:` — version bump + CHANGELOG for a release
 - `chore:` — Cargo.lock bumps, dependency updates, repo hygiene
 - `docs:` — documentation only
 - `ci:` — CI workflow changes
@@ -96,19 +96,20 @@ Loosely [Conventional Commits](https://www.conventionalcommits.org/), used to sc
 
 ## Release process
 
-See [`docs/self-hosting.md`](docs/self-hosting.md) § "Cutting a Release" for the full sequence. Short version:
+Releases are manual (no CI release pipeline):
 
 1. Bump `version` in `src-tauri/Cargo.toml`.
-2. `npx tauri build`.
-3. Commit + tag + push.
-4. `gh release create` with SHA-256 hash inlined in the release notes (see the README's Releases section for the exact command).
-5. Auto-update clients pick it up on next launch.
+2. Add the `CHANGELOG.md` entry + tag-link footnote.
+3. `npx tauri build`.
+4. Commit (`release:`) + tag + push.
+5. `gh release create` with the `lolproxchat.exe` asset + its SHA-256 inlined in the release notes (the in-app updater pulls `releases/latest`).
+6. Auto-update clients pick it up on next launch.
 
 ## Anti-patterns we've explicitly avoided
 
 These are decisions worth knowing about before proposing a change:
 
-- **Client-side proximity math (with or without per-room E2E encryption)** — would let modified clients read every peer's raw distance vector, which undoes the anti-cheat design. The current model (positions go to the server, server returns only volumes, client never sees another peer's coords) is intentional. v0.2 dropped the server-side AES-GCM blob layer because TLS already covers the wire and the encryption was duplicate work that introduced reliability problems — the anti-cheat guarantee never depended on it. See [`docs/threat-model.md`](docs/threat-model.md).
+- **Client-side proximity math (with or without per-room E2E encryption)** — would let modified clients read every peer's raw distance vector, which undoes the anti-cheat design. The current model (positions go to the server, server returns only volumes, client never sees another peer's coords) is intentional. See [`docs/threat-model.md`](docs/threat-model.md).
 - **A hosted doc site** — flat markdown in the repo is the right resolution for a project this size. If `docs/` ever sprawls beyond 10-15 files, revisit.
 - **Telemetry / analytics** — the project commits to none. If ever added, must be opt-in and visible in Settings. See [`docs/threat-model.md`](docs/threat-model.md) § "What we don't collect".
-- **Self-hosted coturn as the default TURN backend** — was the default through v0.1.25; replaced with Cloudflare Realtime TURN in v0.1.26 (server) / docs in v0.1.26+. coturn remains a supported fallback for self-hosters, see [`docs/self-hosting.md`](docs/self-hosting.md).
+- **Self-hosted coturn as the default TURN backend** — Cloudflare Realtime TURN is the default; coturn remains a supported fallback for self-hosters, see [`docs/self-hosting.md`](docs/self-hosting.md).

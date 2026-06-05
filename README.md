@@ -63,7 +63,7 @@ For the rest — every Settings toggle, troubleshooting, log-grab flow, uninstal
 | Doc | When to read |
 |---|---|
 | [User guide](docs/user-guide.md) | Day-to-day usage, every Settings toggle, troubleshooting, reporting bugs |
-| [Architecture](docs/architecture.md) | How it actually works — CV pipeline, WebRTC flow, server design |
+| [Architecture](docs/architecture.md) | How it actually works — computer-vision pipeline, WebRTC flow, server design |
 | [Threat model](docs/threat-model.md) | What the design protects, what it doesn't, what we collect (and what we don't) |
 | [Compliance](docs/compliance.md) | Relationship to Riot's third-party policy + Developer Portal status |
 | [Self-hosting](docs/self-hosting.md) | Run your own signaling server |
@@ -76,7 +76,7 @@ For the rest — every Settings toggle, troubleshooting, log-grab flow, uninstal
 ## How it works (in 5 bullets)
 
 1. **Game detection** — reads the LCU and Live Client Data APIs for game phase + player roster. No memory reads, no injection.
-2. **Position** — Win32 BitBlt of the minimap region + HSV color filter + blob detection locates champion icons; each blob is identified by a **172-class ONNX champion classifier**. Position is in game coordinates. (v0.4 swapped this for SSIM template matching against the live Data Dragon icons; v0.5.0 reverted to the classifier after the template/annulus approach proved less reliable in real games.)
+2. **Position** — the app captures the minimap image, finds champion icons on it by color and shape, and identifies which champion each one is with a trained image-recognition model — producing your position in in-game coordinates.
 3. **Signaling** — players in the same match join a deterministic WebSocket room (room ID = hash of sorted player names) on a self-hosted Node server.
 4. **Voice** — WebRTC peer-to-peer audio between players (Opus 128 kbps, DTLS-SRTP). No audio touches any server.
 5. **Proximity volume** — each client streams its XY coordinates to the signaling server (over the same WebSocket used for presence/signaling); the server computes pairwise volumes for everyone in the room. **Team voice is always full volume** (no proximity); **cross-team (enemy) voice fades in at ~champion vision range (~1350 game units)** and grows louder as they close. Server-enforced — a modified client cannot bypass the team filter or range cutoff. Clients only ever receive `{ peerName: volume }`, never another peer's raw position.
@@ -101,9 +101,9 @@ Champion icon assets from the [League of Legends Wiki](https://wiki.leagueoflege
 
 ## Acknowledgements
 
-- [LOL_Minimap_Tracker](https://github.com/Quinntana/LOL_Minimap_Tracker) — informed the v0.4 SSIM template-matching tracker (reverted to the ONNX classifier in v0.5.0)
+- [LOL_Minimap_Tracker](https://github.com/Quinntana/LOL_Minimap_Tracker) — minimap champion-tracking reference
 - [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) — reference code for minimap detection
-- [League of Legends Wiki](https://wiki.leagueoflegends.com) — champion icon assets used to train the ONNX classifier (the primary champion identifier)
+- [League of Legends Wiki](https://wiki.leagueoflegends.com) — champion icon assets used to train the champion-recognition model
 - [Tauri](https://tauri.app) — desktop app framework
 - Cloudflare Realtime TURN — managed TURN relay infrastructure
 - Every user who's filed an issue or attached a log — your reports made this app actually work.
