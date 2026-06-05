@@ -56,8 +56,11 @@ describe('encryptPosition / decryptPosition', () => {
 
   it('rejects tampered blobs (returns null)', async () => {
     const blob = await encryptPosition(TEST_KEY, 10, 20);
-    // Flip a character in the middle of the blob
-    const tampered = blob.slice(0, 20) + 'Z' + blob.slice(21);
+    // Flip the middle character to a guaranteed-different one. A fixed 'Z' was a
+    // no-op ~1/64 of runs (when the random IV/ciphertext already had 'Z' there),
+    // leaving the blob untampered and the test flaky.
+    const repl = blob[20] === 'A' ? 'B' : 'A';
+    const tampered = blob.slice(0, 20) + repl + blob.slice(21);
     const result = await decryptPosition(TEST_KEY, tampered);
     expect(result).toBeNull();
   });
