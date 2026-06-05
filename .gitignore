@@ -23,9 +23,6 @@ src-tauri/target/
 # Temp/logs
 logs.txt
 
-# Lock files (legacy practice — npm regenerates on install)
-package-lock.json
-
 # Claude Code session-local settings
 .claude/
 

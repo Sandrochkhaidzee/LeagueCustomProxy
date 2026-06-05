@@ -34,9 +34,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # package-lock.json is gitignored, so resolve from package.json (not `npm ci`).
       - name: Install npm deps
-        run: npm install --no-audit --no-fund
+        run: npm ci
 
       # Runs `npm run build:prod` (webpack) via beforeBuildCommand, then compiles
       # the binary. --no-bundle skips the MSI/NSIS installers; we ship the raw exe.
