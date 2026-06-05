@@ -45,6 +45,7 @@ ICONS_DIR = Path("assets/champion-circles")
 OUTPUT_DIR = Path("models")
 MODEL_PATH = OUTPUT_DIR / "champion_classifier.onnx"
 LABEL_MAP_PATH = OUTPUT_DIR / "champion_labels.json"
+METRICS_PATH = OUTPUT_DIR / "champion-classifier-metrics.json"
 
 IMG_SIZE = 32          # Input size for the classifier
 BATCH_SIZE = 64
@@ -266,6 +267,51 @@ class ChampionClassifier(nn.Module):
 
 # -- Training --
 
+def compute_eval_metrics(model, val_loader, num_classes):
+    """Quality metrics on the held-out val split. Defensive — returns nulls on
+    any failure so a metrics bug never blocks the model/label export.
+
+    `self_vs_4` is the metric that matches the runtime task: the tracker only
+    needs your champion's icon to out-score the other blobs on the minimap, so
+    this is the expected probability the true champion outranks 4 random others
+    (≈ picking yourself among 5 allies), computed exactly from each sample's
+    rank rather than sampled.
+    """
+    import math
+    try:
+        model.eval()
+        top1 = top5 = total = 0
+        selfvs4_sum = 0.0
+        denom4 = math.comb(num_classes - 1, 4) if num_classes - 1 >= 4 else 0
+        with torch.no_grad():
+            for images, labels in val_loader:
+                logits = model(images.to(DEVICE)).cpu()
+                for i in range(labels.size(0)):
+                    row = logits[i]
+                    true = labels[i].item()
+                    topk = torch.topk(row, min(5, num_classes)).indices.tolist()
+                    if topk[0] == true:
+                        top1 += 1
+                    if true in topk:
+                        top5 += 1
+                    if denom4:
+                        below = int((row < row[true]).sum().item())
+                        if below >= 4:
+                            selfvs4_sum += math.comb(below, 4) / denom4
+                    total += 1
+        return {
+            "top1": round(top1 / total, 4) if total else None,
+            "top5": round(top5 / total, 4) if total else None,
+            "self_vs_4": round(selfvs4_sum / total, 4) if (total and denom4) else None,
+            "val_samples": total,
+            "num_classes": num_classes,
+        }
+    except Exception as e:  # noqa: BLE001 — metrics are advisory, never fatal
+        print(f"WARN: eval metrics failed: {e}")
+        return {"top1": None, "top5": None, "self_vs_4": None,
+                "val_samples": 0, "num_classes": num_classes}
+
+
 def train():
     print(f"Device: {DEVICE}")
     print(f"Icons dir: {ICONS_DIR}")
@@ -353,6 +399,13 @@ def train():
     with open(LABEL_MAP_PATH, "w") as f:
         json.dump(label_map, f, indent=2)
     print(f"Saved label map: {LABEL_MAP_PATH} ({num_classes} classes)")
+
+    # Advisory quality metrics for the retrain PR (top-1/top-5 + the self-vs-4
+    # runtime proxy). Written even on failure (nulls) — never blocks the export.
+    metrics = compute_eval_metrics(model, val_loader, num_classes)
+    with open(METRICS_PATH, "w") as f:
+        json.dump(metrics, f, indent=2)
+    print(f"Saved metrics: {METRICS_PATH} -> {metrics}")
 
     # Export to ONNX
     export_onnx(model, num_classes)

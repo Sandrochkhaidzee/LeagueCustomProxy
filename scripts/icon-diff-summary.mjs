@@ -28,6 +28,28 @@ const champCount = (m) => (m?.champions ? Object.keys(m.champions).length : 0);
 const iconCount = (m) =>
   m?.champions ? Object.values(m.champions).reduce((s, c) => s + Object.keys(c).length, 0) : 0;
 
+// Advisory model-quality metrics (written by the train script) — compare the new
+// model against the committed one so the PR flags any regression up front.
+const METRICS = 'models/champion-classifier-metrics.json';
+const tryJson = (s) => {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+};
+const newMetrics = (() => {
+  try {
+    return tryJson(readFileSync(METRICS, 'utf8'));
+  } catch {
+    return null;
+  }
+})();
+const oldMetrics = (() => {
+  const r = spawnSync('git', ['show', `HEAD:${METRICS}`], { encoding: 'utf8' });
+  return r.status === 0 && r.stdout ? tryJson(r.stdout) : null;
+})();
+
 const out = [];
 out.push(`**Patch:** \`${neu.version}\` · **${champCount(neu)} champions** · **${iconCount(neu)} icons**`);
 out.push('');
@@ -62,6 +84,35 @@ if (!old) {
     out.push('');
     for (const c of changed) out.push(`- ${c}`);
     out.push('</details>');
+  }
+}
+
+if (newMetrics) {
+  const line = (label, key) => {
+    const n = newMetrics[key];
+    if (n == null) return null;
+    const o = oldMetrics?.[key];
+    const delta = o != null ? ` (prev ${o}, ${n - o >= 0 ? '+' : ''}${(n - o).toFixed(2)})` : '';
+    return `- ${label}: **${n}**${delta}`;
+  };
+  const lines = [
+    line('self-vs-4 — your icon out-scoring 4 random others (≈ picking yourself among 5 allies)', 'self_vs_4'),
+    line('top-1', 'top1'),
+    line('top-5', 'top5'),
+  ].filter(Boolean);
+  if (lines.length) {
+    out.push('');
+    out.push(`**Model quality** (held-out val${newMetrics.val_samples ? `, ${newMetrics.val_samples} samples` : ''}):`);
+    out.push(...lines);
+    if (!oldMetrics) {
+      out.push('_(baseline — no prior model metrics to compare against)_');
+    } else if (
+      newMetrics.self_vs_4 != null &&
+      oldMetrics.self_vs_4 != null &&
+      newMetrics.self_vs_4 < oldMetrics.self_vs_4 - 0.01
+    ) {
+      out.push('⚠️ **self-vs-4 regressed vs the live model** — scrutinize tracking carefully before merging.');
+    }
   }
 }
 
