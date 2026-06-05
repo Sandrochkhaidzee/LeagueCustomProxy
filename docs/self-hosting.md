@@ -4,6 +4,8 @@ This guide is for operators who want to run their own signaling server instead o
 
 For client-side usage, see the [user guide](user-guide.md).
 
+**License note (AGPLv3).** If you run a *modified* version of the server as a network service, the AGPLv3 requires you to offer its users the corresponding source. Running it unmodified — or modifying it privately without offering it as a network service — carries no such obligation.
+
 ## Architecture in one paragraph
 
 The server is a ~500-LOC Node process: WebSocket signaling (room presence + offer/answer/ICE relay + per-client XY coords store), per-pair distance → volume math against that store, and TURN credential issuance (Cloudflare Realtime TURN by default; coturn HMAC as a fallback). Single container deployed via Docker Compose. Stateless modulo the in-memory rooms table (which now also holds the latest coords per client) — restarts drop active rooms, clients reconnect automatically. See [`architecture.md`](architecture.md) for the full picture.

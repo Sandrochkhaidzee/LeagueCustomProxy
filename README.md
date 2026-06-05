@@ -2,7 +2,7 @@
 
 ![Server status](https://img.shields.io/website?url=https%3A%2F%2Fproxchat.dant123.com%2Fhealth&label=server&up_message=online&down_message=offline)
 [![Latest release](https://img.shields.io/github/v/release/danthi123/LoLProxChat)](https://github.com/danthi123/LoLProxChat/releases/latest)
-[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm--NC--1.0-blue)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPLv3-blue)](LICENSE)
 
 **Proximity voice chat for League of Legends.** Hear nearby players (allies *and* enemies) with volume that scales by in-game distance — enemy voices fade in around champion-vision range and grow louder as they close.
 
@@ -93,9 +93,9 @@ LoLProxChat collects **no analytics, no telemetry, no fingerprinting, no persist
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE) — source available for personal and noncommercial use only.
+**[GNU AGPLv3](LICENSE).** Free and open source — use, study, modify, and self-host it, including commercially. The copyleft terms require that if you distribute the app, or run a modified version as a network service, you make the corresponding source available under the AGPLv3. © 2026 Daniel Thiberge.
 
-Champion icon assets from the [League of Legends Wiki](https://wiki.leagueoflegends.com) (CC BY-SA 3.0) were used for model training only and are not distributed with this software.
+Champion icons used to train the recognition model come from [Community Dragon](https://www.communitydragon.org/) (a community-maintained mirror of Riot's game assets). They remain Riot Games' intellectual property, are used for training only, and are not distributed with this software.
 
 ---
 
@@ -103,7 +103,7 @@ Champion icon assets from the [League of Legends Wiki](https://wiki.leagueoflege
 
 - [LOL_Minimap_Tracker](https://github.com/Quinntana/LOL_Minimap_Tracker) — minimap champion-tracking reference
 - [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) — reference code for minimap detection
-- [League of Legends Wiki](https://wiki.leagueoflegends.com) — champion icon assets used to train the champion-recognition model
+- [Community Dragon](https://www.communitydragon.org/) — champion icon assets used to train the champion-recognition model
 - [Tauri](https://tauri.app) — desktop app framework
 - Cloudflare Realtime TURN — managed TURN relay infrastructure
 - Every user who's filed an issue or attached a log — your reports made this app actually work.

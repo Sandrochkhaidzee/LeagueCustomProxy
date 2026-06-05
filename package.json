@@ -16,7 +16,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "AGPL-3.0-or-later",
   "description": "",
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",

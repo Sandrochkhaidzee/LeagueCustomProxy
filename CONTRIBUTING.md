@@ -2,6 +2,8 @@
 
 This is a personal project, but PRs and issues are welcome. This doc is the ground-truth for build / test / release / style. If anything here disagrees with what's checked into the repo, the repo wins — please file an issue.
 
+LoLProxChat is licensed under the [GNU AGPLv3](LICENSE); by contributing, you agree your contributions are licensed under the same terms.
+
 ## Getting set up
 
 Prerequisites:
