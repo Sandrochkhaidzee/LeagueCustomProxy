@@ -9,6 +9,8 @@
     "build": "webpack",
     "build:prod": "webpack --mode production",
     "update-icons": "node scripts/update-champion-icons.js",
+    "refresh-model": "node scripts/refresh-model.mjs",
+    "train-model": "node scripts/refresh-model.mjs --skip-scrape",
     "test": "jest",
     "test:watch": "jest --watch"
   },

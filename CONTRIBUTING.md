@@ -34,6 +34,10 @@ npm test
 
 # Run server tests
 cd server && npm test
+
+# Re-scrape champion icons + retrain the tracking classifier (needs Python —
+# see "Refreshing the champion classifier" below)
+npm run refresh-model
 ```
 
 There is no `tauri dev` flow — the project doesn't run a webpack dev server. The iterative loop is `npx tauri build && src-tauri/target/release/lolproxchat.exe`, which is fast enough at ~60-90 s for incremental Rust compiles.
@@ -75,6 +79,29 @@ docs/                  — User guide, architecture, self-hosting, threat model,
 - **Client tests** live under `tests/` (separate root from `src/`). Run with `npm test`. The 100 tests cover core logic, tracking state machine, audio gain math (slider×proximity, plus `resolveProximityTargets` which silences peers the server drops from range), device list filtering, tracking-helper scoring math (composite/jump/hold-cap), the position-jump warning gates, the session-flow integration, the champion-classifier label resolver, the dynamic overlay resize helpers, and the PTT-rebind keymap.
 - **Server tests** live under `server/tests/`. Run with `cd server && npm test`. 74 tests cover room management (team + coords storage), TURN credential generation (both coturn-HMAC and Cloudflare paths), the tiered proximity-volume math, and rate-limiting (`TokenBucket`, `ConcurrencyLimiter`, `clientIp`, plus an end-to-end per-player isolation test).
 - New features should land with tests where the logic is testable (pure functions, state machines). DOM-heavy or Tauri-IPC-heavy code can skip tests; mock surfaces are too brittle to be worth maintaining.
+
+## Refreshing the champion classifier
+
+Minimap tracking identifies your champion with a small CNN (`src/services/champion-classifier.ts`, run via ONNX Runtime Web). Its training data is every champion's per-skin circle icon, scraped from [Community Dragon](https://www.communitydragon.org/) — Riot's community mirror of the raw game assets — so new champions, skins, and reworks show up automatically on the live patch.
+
+```bash
+# Python deps (one time). CPU-only is fine — the model is tiny (~1.7 MB).
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r scripts/requirements.txt
+
+# Scrape the latest icons, retrain, and export the model + labels.
+npm run refresh-model
+#   --skip-scrape   retrain on the icons already on disk
+#   --limit 8       quick smoke test on the first 8 champions
+```
+
+This regenerates three tracked files:
+
+- `models/champion_classifier.onnx` — the model webpack bundles into the app.
+- `models/champion_labels.json` — the class-index → champion-name map.
+- `models/champion-icons-manifest.json` — the patch version plus a content hash per icon. It records which icon set the live model was trained against, so a diff against a fresh scrape tells you when a retrain is due.
+
+The icons themselves (`assets/champion-circles/`) are gitignored and regenerated on demand. **Validate tracking in a real game before committing a retrained model** — per-class accuracy varies by icon, and the model is load-bearing for tracking quality.
 
 ## Commit conventions
 

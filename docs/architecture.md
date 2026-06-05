@@ -89,6 +89,8 @@ Tracking is a state machine: **SCANNING → LOCKED → (DEAD)**. Every CV tick:
 
 Edge cases the state machine handles: champion deaths (icon disappears), respawn at fountain (re-acquire via classifier), camera pan, overlapping icons in teamfights, minimap scale changes via `game.cfg` MinimapScale.
 
+**Training data + retraining.** The classifier learns from every champion's per-skin circle icon, scraped from [Community Dragon](https://www.communitydragon.org/) — Riot's community mirror of the raw game assets — into `assets/champion-circles/`. `npm run refresh-model` runs the whole loop: scrape → retrain → export `models/champion_classifier.onnx` + `champion_labels.json`. A content-hash manifest (`models/champion-icons-manifest.json`) records which icon set the live model was trained against, so a new champion, skin, or rework surfaces as a manifest diff. See [`CONTRIBUTING.md`](../CONTRIBUTING.md) § "Refreshing the champion classifier".
+
 ## Position privacy + volume math
 
 This is the part that matters for both the threat model and the "what does the server see" question.
