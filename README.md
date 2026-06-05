@@ -43,7 +43,7 @@ Get-FileHash lolproxchat.exe
 sha256sum lolproxchat.exe
 ```
 
-Every release exe is also auto-submitted to [VirusTotal](https://www.virustotal.com/) via a GitHub Action. Scan permalinks land in the release body within ~30 seconds of publish — verifiable against 70+ antivirus engines before downloading.
+Every release exe is also submitted to [VirusTotal](https://www.virustotal.com/) during the build, and the scan link is included in the release notes — verifiable against 70+ antivirus engines before you download.
 
 ---
 

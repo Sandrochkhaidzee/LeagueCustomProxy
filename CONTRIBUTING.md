@@ -123,7 +123,7 @@ Loosely [Conventional Commits](https://www.conventionalcommits.org/), used to sc
 
 ## Release process
 
-A release is triggered by a **version bump landing on `main`** — [`.github/workflows/release.yml`](.github/workflows/release.yml) sees `src-tauri/Cargo.toml`'s version has no matching tag yet, builds `tauri build` on a Windows runner, computes the SHA-256, creates the `vX.Y.Z` tag, and opens a **draft** GitHub Release with the `lolproxchat.exe` asset and notes pulled from the matching `CHANGELOG.md` section. You review and publish the draft — publishing fires the VirusTotal scan, and the in-app updater (which reads `releases/latest`; drafts are invisible until published) picks it up on clients' next launch.
+A release is triggered by a **version bump landing on `main`** — [`.github/workflows/release.yml`](.github/workflows/release.yml) sees `src-tauri/Cargo.toml`'s version has no matching tag yet, builds `tauri build` on a Windows runner, computes the SHA-256, creates the `vX.Y.Z` tag, and opens a **draft** GitHub Release with the `lolproxchat.exe` asset and notes pulled from the matching `CHANGELOG.md` section. The build also submits the exe to VirusTotal (direct API call) and puts the scan link in the draft notes, so it's reviewable before you publish. You review and publish the draft, and the in-app updater (which reads `releases/latest`; drafts are invisible until published) picks it up on clients' next launch.
 
 So a manual release is:
 
