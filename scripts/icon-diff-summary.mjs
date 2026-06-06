@@ -59,31 +59,32 @@ if (!old) {
 } else {
   const oc = old.champions ?? {};
   const nc = neu.champions ?? {};
-  const added = Object.keys(nc).filter((k) => !(k in oc)).sort();
-  const removed = Object.keys(oc).filter((k) => !(k in nc)).sort();
-  const changed = [];
+  const addedChamps = Object.keys(nc).filter((k) => !(k in oc)).sort();
+  const removedChamps = Object.keys(oc).filter((k) => !(k in nc)).sort();
+  const skinChanges = []; // champions that gained/lost skins (the real retrain trigger)
+  let reworkedBytes = 0; // icons whose bytes changed — often just an upstream re-encode
   for (const name of Object.keys(nc)) {
     if (!(name in oc)) continue;
     const a = oc[name];
     const b = nc[name];
-    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-    let skinDelta = 0;
-    let reworked = 0;
-    for (const k of keys) {
-      if (!(k in a) || !(k in b)) skinDelta++;
-      else if (a[k] !== b[k]) reworked++;
+    const addedSkins = Object.keys(b).filter((k) => !(k in a));
+    const removedSkins = Object.keys(a).filter((k) => !(k in b));
+    for (const k of Object.keys(b)) if (k in a && a[k] !== b[k]) reworkedBytes++;
+    if (addedSkins.length || removedSkins.length) {
+      const parts = [];
+      if (addedSkins.length) parts.push(`+${addedSkins.length}`);
+      if (removedSkins.length) parts.push(`-${removedSkins.length}`);
+      skinChanges.push(`${name} (${parts.join(', ')} skins)`);
     }
-    if (skinDelta || reworked) changed.push(`${name} (${skinDelta} skin±, ${reworked} reworked)`);
   }
-  out.push(`- **New champions:** ${added.length ? added.join(', ') : 'none'}`);
-  out.push(`- **Removed champions:** ${removed.length ? removed.join(', ') : 'none'}`);
-  out.push(`- **Changed (added/removed/reworked skins):** ${changed.length ? `${changed.length} champions` : 'none'}`);
-  if (changed.length) {
+  out.push(`- **New champions:** ${addedChamps.length ? addedChamps.join(', ') : 'none'}`);
+  out.push(`- **Removed champions:** ${removedChamps.length ? removedChamps.join(', ') : 'none'}`);
+  out.push(`- **Champions with added/removed skins:** ${skinChanges.length ? skinChanges.join('; ') : 'none'}`);
+  if (reworkedBytes) {
     out.push('');
-    out.push('<details><summary>Per-champion changes</summary>');
-    out.push('');
-    for (const c of changed) out.push(`- ${c}`);
-    out.push('</details>');
+    out.push(
+      `_(${reworkedBytes} existing icons had byte-level changes — usually an upstream Community Dragon re-encode, not a content change; this alone does not trigger a retrain.)_`,
+    );
   }
 }
 

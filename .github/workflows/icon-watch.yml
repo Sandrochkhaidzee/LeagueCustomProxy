@@ -34,15 +34,17 @@ jobs:
       - name: Scrape latest icons (Community Dragon)
         run: npm run update-icons
 
-      - name: Detect manifest change
+      - name: Detect icon-set change
         id: diff
         run: |
-          if git status --porcelain models/champion-icons-manifest.json | grep -q .; then
+          # Trigger only when a champion or skin is ADDED/REMOVED — not on icon
+          # byte-hash churn. Community Dragon periodically re-encodes the PNGs
+          # (same pixels, different bytes), which would otherwise churn nearly
+          # every hash and open a spurious retrain PR + release.
+          if node scripts/icon-set-changed.mjs; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Icon set changed since the committed manifest."
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No icon changes; nothing to do."
           fi
 
       - name: Set up Python
