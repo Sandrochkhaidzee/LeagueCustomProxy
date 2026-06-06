@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
+## [v0.5.2] — 2026-06-05
+
+### Changed
+- Champion classifier retrained on the current-patch Community Dragon icon set (game patch 16.11.1).
+
 ### Changed
 - Relicensed from PolyForm Noncommercial 1.0.0 to the **GNU AGPLv3** — now free and open source with network copyleft (commercial use allowed; modifications, including server-side, must be shared under the AGPLv3).
 
@@ -306,6 +311,7 @@ All notable changes to this project are documented here. Format adapted from [Ke
 Initial public iteration: Overwolf → Tauri 2 migration, Supabase-stack → custom 1-container WebSocket signaling server, minimap CV pipeline (HSV color filter + blob detection + ONNX champion classifier), WebRTC P2P voice with AES-GCM encrypted position blobs computed server-side, in-app updater. See `docs/plans/` for the historical design + implementation documents from that period.
 
 [Unreleased]: https://github.com/danthi123/LoLProxChat/compare/v0.4.4...HEAD
+[v0.5.2]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.5.2
 [v0.5.1]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.5.1
 [v0.5.0]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.5.0
 [v0.4.4]: https://github.com/danthi123/LoLProxChat/releases/tag/v0.4.4
