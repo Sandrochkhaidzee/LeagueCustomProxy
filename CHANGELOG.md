@@ -4,13 +4,11 @@ All notable changes to this project are documented here. Format adapted from [Ke
 
 ## [Unreleased]
 
-## [v0.5.2] — 2026-06-05
+## [v0.5.2] — 2026-06-06
 
 ### Changed
-- Champion classifier retrained on the current-patch Community Dragon icon set (game patch 16.11.1).
-
-### Changed
-- Relicensed from PolyForm Noncommercial 1.0.0 to the **GNU AGPLv3** — now free and open source with network copyleft (commercial use allowed; modifications, including server-side, must be shared under the AGPLv3).
+- **Relicensed from PolyForm Noncommercial 1.0.0 to the GNU AGPLv3** — now free and open source with network copyleft (commercial use allowed; modifications, including server-side, must be shared under the AGPLv3).
+- Routine champion-classifier refresh against the current Community Dragon icons — no functional tracking change (upstream re-encoded the icon files).
 
 ## [v0.5.1] — 2026-06-05
 
