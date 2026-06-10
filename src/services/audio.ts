@@ -212,7 +212,8 @@ export class AudioService {
     console.log('[Audio] Connecting to peer:', remoteName);
     let peer: PeerConnection;
     try {
-      peer = await PeerConnection.create(remoteName, this.audioContext);
+      peer = await PeerConnection.create(remoteName);
+      void peer.setOutputDevice(getStoredOutputDeviceId());
     } catch (e) {
       this.connectingPeers.delete(remoteName);
       throw e;
@@ -296,7 +297,8 @@ export class AudioService {
           // arrives, which can be seconds later (or never if they're idle in
           // base). Log here so the join is always traceable in diagnostics.
           console.log('[Audio] Peer created via incoming offer: ' + signal.from);
-          peer = await PeerConnection.create(signal.from, this.audioContext);
+          peer = await PeerConnection.create(signal.from);
+          void peer.setOutputDevice(getStoredOutputDeviceId());
           this.peers.set(signal.from, peer);
           if (this.outputStream) peer.addLocalStream(this.outputStream);
 
@@ -499,20 +501,13 @@ export class AudioService {
 
   private async applyStoredOutputDevice(): Promise<void> {
     const outputId = getStoredOutputDeviceId();
-    if (!outputId || !this.audioContext) return;
-    // AudioContext.setSinkId exists in Chromium 110+ but TS DOM types
-    // haven't caught up everywhere, so type-narrow via any.
-    const ctx = this.audioContext as unknown as { setSinkId?: (id: string) => Promise<void> };
-    if (typeof ctx.setSinkId !== 'function') {
-      console.warn('[Audio] AudioContext.setSinkId not supported — output device pick ignored');
-      return;
+    if (!outputId) return;
+    // Playback is element-only, so the output device is applied per peer via
+    // HTMLMediaElement.setSinkId (more widely supported than AudioContext.setSinkId).
+    for (const peer of this.peers.values()) {
+      await peer.setOutputDevice(outputId);
     }
-    try {
-      await ctx.setSinkId(outputId);
-      console.log('[Audio] Output device set:', outputId);
-    } catch (e) {
-      console.warn('[Audio] setSinkId failed:', e);
-    }
+    console.log('[Audio] Output device applied to', this.peers.size, 'peer(s):', outputId);
   }
 
   // Re-acquire mic from the new device, swap the source node in place.

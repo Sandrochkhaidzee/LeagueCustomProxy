@@ -23,10 +23,6 @@ export function nextSmoothedVolume(
   return prev * (1 - alpha) + clamped * alpha;
 }
 
-// Time constant for gain ramping (seconds). setTargetAtTime reaches ~63% in
-// timeConstant; ~95% in 3*timeConstant. 50ms = smooth-feeling steps without
-// audible lag between volume tick updates.
-const VOLUME_RAMP_TC = 0.05;
 
 /**
  * Render an ICE candidate as `type addr:port proto` for diagnostic logs.
@@ -55,12 +51,11 @@ export class PeerConnection {
   private hasRemoteDescription = false;
   readonly remoteName: string;
 
-  // WebAudio routing for smooth volume ramping. When audioContext is present
-  // the audioElement is muted and used only to prime the WebRTC stream in
-  // Chromium; real output flows through gainNode → destination.
-  private audioContext: AudioContext | null;
-  private sourceNode: MediaStreamAudioSourceNode | null = null;
-  private gainNode: GainNode | null = null;
+  // Playback is element-only: the remote stream plays through `audioElement`,
+  // whose .volume carries the proximity gain. An earlier parallel WebAudio
+  // gain-node path was removed — the muted element wasn't reliably silent in
+  // WebView2, so both played at once, causing echo/double + a muddied level
+  // (issues #19 / #21).
   // Default to silent. Volume is supposed to come from the proximity pipeline
   // (applyPeerVolumes → setVolume). If a peer connects before that pipeline
   // has produced a value for them (e.g. during tracking SCANNING state where
@@ -85,7 +80,6 @@ export class PeerConnection {
   private constructor(
     remoteName: string,
     iceServers: RTCIceServer[],
-    audioContext: AudioContext | null,
     iceTransportPolicy: RTCIceTransportPolicy = 'all',
   ) {
     this.remoteName = remoteName;
@@ -93,18 +87,12 @@ export class PeerConnection {
     if (iceTransportPolicy === 'relay') {
       console.log('[WebRTC] Forcing TURN relay for', remoteName, '— no direct P2P candidates will be used');
     }
-    this.audioContext = audioContext;
-
     this.audioElement = new Audio();
     this.audioElement.autoplay = true;
     this.audioElement.srcObject = this.remoteStream;
-    // When routing via WebAudio, silence the element via volume=0 rather than
-    // muted=true. Chromium can stop decoding *muted* remote streams, which
-    // leaves createMediaStreamSource producing silence — using volume=0 keeps
-    // the decode pipeline alive while preventing double-playback.
-    if (audioContext) {
-      this.audioElement.volume = 0;
-    }
+    // Start silent; the proximity pipeline (applyPeerVolumes → setVolume) sets
+    // the real gain. The element is the sole audible path (see field comment).
+    this.audioElement.volume = 0;
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate && this.onIceCandidate) {
@@ -120,7 +108,6 @@ export class PeerConnection {
       this.remoteStream.addTrack(event.track);
       // Ensure audio plays (autoplay may be blocked by Chromium policy)
       this.tryPlay();
-      this.ensureWebAudioRoute();
     };
 
     this.pc.onconnectionstatechange = () => {
@@ -145,40 +132,27 @@ export class PeerConnection {
     this.startStatsLogging();
   }
 
-  static async create(remoteName: string, audioContext: AudioContext | null = null): Promise<PeerConnection> {
+  static async create(remoteName: string): Promise<PeerConnection> {
     const iceServers = await getIceServers();
     const policy: RTCIceTransportPolicy = getForceTurnRelay() ? 'relay' : 'all';
-    return new PeerConnection(remoteName, iceServers, audioContext, policy);
+    return new PeerConnection(remoteName, iceServers, policy);
   }
 
-  private ensureWebAudioRoute(): void {
-    if (!this.audioContext || this.sourceNode) return;
-    if (this.remoteStream.getAudioTracks().length === 0) return;
+  /** Route this peer's audio to the chosen output device via the element sink. */
+  async setOutputDevice(deviceId: string | null): Promise<void> {
+    const el = this.audioElement as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
+    if (!deviceId || typeof el.setSinkId !== 'function') return;
     try {
-      this.sourceNode = this.audioContext.createMediaStreamSource(this.remoteStream);
-      this.gainNode = this.audioContext.createGain();
-      this.gainNode.gain.value = this.muted ? 0 : this.targetVolume;
-      this.sourceNode.connect(this.gainNode);
-      this.gainNode.connect(this.audioContext.destination);
-      console.log('[WebRTC] WebAudio route ready for ' + this.remoteName +
-        ' (gain=' + this.gainNode.gain.value.toFixed(2) + ')');
+      await el.setSinkId(deviceId);
     } catch (e) {
-      console.warn('[WebRTC] WebAudio routing failed for', this.remoteName, '— falling back to element volume:', e);
-      this.sourceNode = null;
-      this.gainNode = null;
-      // Restore the element as the audible path
-      this.audioElement.volume = this.muted ? 0 : this.targetVolume;
-      this.audioElement.muted = false;
+      console.warn('[WebRTC] setSinkId failed for ' + this.remoteName + ':', e);
     }
   }
 
   private applyGain(value: number): void {
-    if (this.gainNode && this.audioContext) {
-      this.gainNode.gain.setTargetAtTime(value, this.audioContext.currentTime, VOLUME_RAMP_TC);
-    } else {
-      // Fallback path — no smoothing available without WebAudio.
-      this.audioElement.volume = value;
-    }
+    // Element-only playback. Per-tick EMA smoothing (setVolume) keeps the steps
+    // small enough to be click-free without WebAudio ramping.
+    this.audioElement.volume = Math.max(0, Math.min(1, value));
   }
 
   private tryPlay(): void {
@@ -280,20 +254,13 @@ export class PeerConnection {
 
   mute(): void {
     this.muted = true;
-    if (this.gainNode) {
-      this.applyGain(0);
-    } else {
-      this.audioElement.muted = true;
-    }
+    this.audioElement.muted = true;
   }
 
   unmute(): void {
     this.muted = false;
-    if (this.gainNode) {
-      this.applyGain(this.targetVolume);
-    } else {
-      this.audioElement.muted = false;
-    }
+    this.audioElement.muted = false;
+    this.applyGain(this.targetVolume);
   }
 
   close(): void {
@@ -305,12 +272,6 @@ export class PeerConnection {
     this.pc.close();
     this.audioElement.pause();
     this.audioElement.srcObject = null;
-    try {
-      this.sourceNode?.disconnect();
-      this.gainNode?.disconnect();
-    } catch { /* ignore */ }
-    this.sourceNode = null;
-    this.gainNode = null;
   }
 
   // Periodic getStats snapshot — selected candidate pair, RTT, bytes flowing.
