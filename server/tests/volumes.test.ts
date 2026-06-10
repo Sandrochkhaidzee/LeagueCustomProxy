@@ -188,6 +188,23 @@ describe('computeTieredVolumes (v0.3 path)', () => {
     expect(result.peerVolumes.AllyFarAway).toBe(1.0);
   });
 
+  it('with allyProximity set, allies use the same distance falloff as enemies', () => {
+    const result = computeTieredVolumes(
+      { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me', allyProximity: true },
+      makeGetter([
+        { name: 'Me', team: 'ORDER', position: { x: 0, y: 0, updatedMs: Date.now() } },
+        { name: 'AllyClose',  team: 'ORDER', position: { x: 400, y: 0, updatedMs: Date.now() } },
+        { name: 'AllyEdge',   team: 'ORDER', position: { x: 1300, y: 0, updatedMs: Date.now() } }, // < 1350 → faint
+        { name: 'AllyBeyond', team: 'ORDER', position: { x: 1500, y: 0, updatedMs: Date.now() } }, // > 1350 → omitted
+      ]),
+    );
+    expect(result.peerVolumes.AllyClose).toBeGreaterThan(0.5);
+    expect(result.peerVolumes.AllyClose).toBeLessThan(1.0); // proximity, not the global 1.0
+    expect(result.peerVolumes.AllyEdge).toBeGreaterThan(0);
+    expect(result.peerVolumes.AllyEdge).toBeLessThan(0.1);
+    expect(result.peerVolumes.AllyBeyond).toBeUndefined();
+  });
+
   it('makes cross-team enemies audible out to vision range, omitting those beyond', () => {
     const result = computeTieredVolumes(
       { myPosition: { x: 0, y: 0 }, roomId: 'r1', name: 'Me' },

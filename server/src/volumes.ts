@@ -35,6 +35,10 @@ export interface VolumeRequestV2 {
   myPosition: { x: number; y: number };
   roomId: string;
   name: string;
+  // When true, the requester hears allies by proximity (same distance falloff as
+  // enemies) instead of always at full volume. Per-user preference; optional for
+  // backward compatibility — absent means global/full (the default, #22).
+  allyProximity?: boolean;
 }
 
 export interface VolumeResponse {
@@ -299,14 +303,13 @@ export function computeTieredVolumes(
   for (const peer of clients) {
     if (peer.name === me.name) continue;
 
-    if (!legacy && peer.team === me.team) {
-      // INTENTIONAL: skip the staleness check for allies. Team voice is
-      // "always full volume, no proximity" by design (allies already see
-      // each other on the minimap, and an ally in SCANNING / long-hold
-      // hasn't reported coords recently but is still actively transmitting
-      // audio — we want them audible). A peer who's truly gone is removed
-      // from the room by RoomManager.leave on socket close; until then,
-      // 1.0 is harmless because no audio is flowing from a dead WebRTC peer.
+    if (!legacy && peer.team === me.team && !body.allyProximity) {
+      // Global ally voice (default): always full volume, no proximity. We even
+      // skip the staleness check — an ally in SCANNING / long-hold hasn't
+      // reported coords recently but is still actively transmitting audio, and a
+      // truly-gone peer is removed by RoomManager.leave on socket close.
+      // (When the requester opts into allyProximity, allies fall through to the
+      // distance falloff below, exactly like cross-team peers.)
       peerVolumes[peer.name] = 1.0;
       if (DEBUG_VOLUMES) trace.push(peer.name + '[ally team=' + peer.team + ']=1.0');
       continue;
