@@ -6,6 +6,7 @@ import { AudioService } from './audio';
 import { TrackingService, TrackingState } from './tracking';
 import { ChampionClassifier } from './champion-classifier';
 import { VolumeClient } from './volume-client';
+import { getAllyProximity } from './audio-prefs';
 import { PeerState } from '../core/types';
 import '../core/window-globals';
 import { isStreamerMode } from '../core/streamer-detect';
@@ -342,6 +343,7 @@ export class Orchestrator {
         position,
         this.session.roomId,
         this.localSummonerName,
+        getAllyProximity(),
       );
       this.audio.applyPeerVolumes(result.peerVolumes);
     } catch (e) {
