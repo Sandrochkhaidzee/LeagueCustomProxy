@@ -21,11 +21,15 @@ export class VolumeClient {
    * (populated by `coords` WSS messages from each client), so the request
    * just identifies who we are and where we are. No more peer-to-peer
    * encrypted-blob exchange — see docs/plans/2026-06-02-server-side-positions.md.
+   *
+   * `allyProximity` opts the caller into hearing teammates by distance (the same
+   * falloff as enemies) instead of always-full volume (#22).
    */
   async computeVolumes(
     myPosition: Position,
     roomId: string,
     name: string,
+    allyProximity: boolean,
   ): Promise<VolumeResponse> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000);
@@ -40,6 +44,7 @@ export class VolumeClient {
           myPosition: { x: myPosition.x, y: myPosition.y },
           roomId,
           name,
+          allyProximity,
         }),
         signal: controller.signal,
       });

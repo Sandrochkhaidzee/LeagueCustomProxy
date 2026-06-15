@@ -15,6 +15,7 @@ import {
   probeMicPermission,
 } from '../services/devices';
 import { getForceTurnRelay, setForceTurnRelay } from '../services/privacy';
+import { getAllyProximity, setAllyProximity } from '../services/audio-prefs';
 import { computeDesiredHeight } from './resize-helpers';
 import { browserKeyToWin32Vk, humanizeVk } from '../core/keymap';
 import '../core/window-globals';
@@ -244,6 +245,22 @@ queueMicrotask(syncForceTurnButton);
 btnForceTurn.addEventListener('click', () => {
   setForceTurnRelay(!getForceTurnRelay());
   syncForceTurnButton();
+});
+
+// Ally-proximity toggle (#22). When ON, teammates fade with distance (the same
+// falloff as enemies) instead of always playing at full volume. The orchestrator
+// reads this fresh on each /compute-volumes tick, so flipping it takes effect on
+// the next position update — no reconnect needed.
+const btnAllyProximity = document.getElementById('btn-ally-proximity') as HTMLButtonElement;
+function syncAllyProximityButton(): void {
+  const on = getAllyProximity();
+  btnAllyProximity.textContent = on ? 'ON' : 'OFF';
+  btnAllyProximity.classList.toggle('active', on);
+}
+queueMicrotask(syncAllyProximityButton);
+btnAllyProximity.addEventListener('click', () => {
+  setAllyProximity(!getAllyProximity());
+  syncAllyProximityButton();
 });
 
 // v0.3 (#1): PTT + toggle-mute key rebind. The Rust WH_KEYBOARD_LL hook
