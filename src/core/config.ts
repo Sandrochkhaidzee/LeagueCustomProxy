@@ -3,7 +3,7 @@ declare const __PROXCHAT_SERVER__: string;
 
 export const SERVER_URL: string = typeof __PROXCHAT_SERVER__ !== 'undefined'
   ? __PROXCHAT_SERVER__
-  : 'https://proxchat.dant123.com';
+  : 'http://26.36.227.156:3100';
 
 // Derive WebSocket URL from SERVER_URL (http→ws, https→wss)
 export const WS_URL: string = SERVER_URL.replace(/^http/, 'ws') + '/ws';

@@ -32,7 +32,7 @@ module.exports = {
   },
   plugins: [
     new webpack.DefinePlugin({
-      __PROXCHAT_SERVER__: JSON.stringify(process.env.PROXCHAT_SERVER || 'https://proxchat.dant123.com'),
+      __PROXCHAT_SERVER__: JSON.stringify(process.env.PROXCHAT_SERVER || 'http://26.36.227.156:3100'),
     }),
     new CopyPlugin({
       patterns: [

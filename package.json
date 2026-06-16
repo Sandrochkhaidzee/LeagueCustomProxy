@@ -1,18 +1,13 @@
 {
-  "name": "lolproxchat",
-  "version": "1.0.0",
-  "main": "index.js",
+  "name": "leagueproxy",
+  "version": "0.1.0-beta.1",
+  "private": true,
   "directories": {
     "doc": "docs"
   },
   "scripts": {
     "build": "webpack",
-    "build:prod": "webpack --mode production",
-    "update-icons": "node scripts/update-champion-icons.js",
-    "refresh-model": "node scripts/refresh-model.mjs",
-    "train-model": "node scripts/refresh-model.mjs --skip-scrape",
-    "test": "jest",
-    "test:watch": "jest --watch"
+    "build:prod": "webpack --mode production"
   },
   "keywords": [],
   "author": "",

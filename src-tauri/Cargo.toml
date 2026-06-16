@@ -1,6 +1,6 @@
 [package]
-name = "lolproxchat"
-version = "0.5.4"
+name = "leagueproxy"
+version = "0.1.0-beta.1"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 

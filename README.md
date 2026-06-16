@@ -1,109 +1,58 @@
-# LoLProxChat
+# LeagueProxy
 
-![Server status](https://img.shields.io/website?url=https%3A%2F%2Fproxchat.dant123.com%2Fhealth&label=server&up_message=online&down_message=offline)
-[![Latest release](https://img.shields.io/github/v/release/danthi123/LoLProxChat)](https://github.com/danthi123/LoLProxChat/releases/latest)
-[![License: AGPL v3](https://img.shields.io/badge/license-AGPLv3-blue)](LICENSE)
+**Beta** — proximity voice for League of Legends custom games with friends.
 
-**Proximity voice chat for League of Legends.** Hear nearby players (allies *and* enemies) with volume that scales by in-game distance — enemy voices fade in around champion-vision range and grow louder as they close.
+Download the latest **`leagueproxy.exe`** from [Releases](https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases).
 
-Standalone Windows desktop app built with Tauri 2 + WebView2. No Overwolf, no third-party voice service, no telemetry. Registered + approved on the Riot Developer Portal (App ID 809090).
+## Players (3 steps)
 
----
+1. **Join Radmin VPN** — network name and password from the host (Discord).
+2. **Download** `leagueproxy.exe` from Releases → verify SHA-256 in the release notes.
+3. **Launch** the exe → open League in **Borderless** mode → join the host’s custom game.
 
-## Install
+First launch: Windows SmartScreen may warn → **More info → Run anyway**.
 
-Download the latest `lolproxchat.exe` from [Releases](https://github.com/danthi123/LoLProxChat/releases/latest). Single portable executable — no installer.
+No build tools needed. The exe is already pointed at the host server.
 
-**Requirements:**
+## Host (you)
 
-- Windows 10 1809+ or Windows 11
-- WebView2 Runtime (ships with Windows 11; pushed via Edge on Windows 10)
-- **League of Legends in Borderless mode** (Settings → Video → Window Mode → Borderless). Required — DX9 true fullscreen takes exclusive GPU output and no transparent overlay can render over it.
+Every game night, before anyone queues:
 
-Launch the exe before or during a League match. The panel auto-attaches beside the minimap once a game is detected.
+1. Connect to **Radmin VPN**
+2. Run **`scripts\start-server.bat`** (leave the window open)
+3. Allow **TCP port 3100** through Windows Firewall (VPN only)
+4. Launch **`release\leagueproxy.exe`** and create the custom lobby
 
-### First run
+## Requirements
 
-Windows will show one of these on first launch (the exe isn't code-signed; this is the standard treatment for any unsigned binary downloaded from the internet):
+| | |
+|--|--|
+| OS | Windows 10/11 + WebView2 |
+| League | **Borderless** window mode (all 10 players) |
+| VPN | Radmin VPN — same network as host |
+| Use case | Private custom 5v5 with friends only |
 
-- **"Windows protected your PC"** (SmartScreen) → **More info** → **Run anyway**.
-- **"This app has been blocked for your protection"** (Mark of the Web) → right-click `lolproxchat.exe` → **Properties** → check **Unblock** → **OK** → re-launch.
+## Safety
 
-Subsequent launches don't prompt.
+- Uses Riot-approved APIs + minimap capture only (no memory reads, no injection).
+- **No analytics or telemetry.**
+- Voice is encrypted WebRTC peer-to-peer; the host signaling server sees summoner names and map coordinates for proximity math — not voice.
+- **Not for ranked** or public lobbies. Do not use in Korea.
 
-### Verify your download
+## Rebuild (developers)
 
-Every release body includes a SHA-256 hash. Compare it against your downloaded exe to confirm you got the official build (defends against in-transit tampering, mirror reposts, typosquatted re-uploads):
-
-```bash
-# PowerShell
-Get-FileHash lolproxchat.exe
-
-# WSL / git-bash
-sha256sum lolproxchat.exe
+```bat
+scripts\build-client.bat
 ```
 
-Every release exe is also submitted to [VirusTotal](https://www.virustotal.com/) during the build, and the scan link is included in the release notes — verifiable against 70+ antivirus engines before you download.
+Requires Node.js, Rust, and Visual Studio C++ Build Tools. Output: `release\leagueproxy.exe`.
 
----
+## Attribution
 
-## Quick start
+Forked from [LoLProxChat](https://github.com/danthi123/LoLProxChat) by Daniel Thiberge — [AGPLv3](LICENSE).
 
-1. Make sure LoL is in **Borderless** mode.
-2. Launch `lolproxchat.exe`. The panel appears in the middle of the screen showing the current lifecycle ("Waiting for League of Legends", "In champion select", etc.).
-3. Once you load into a match, the panel jumps to the left edge of the minimap. Other players running LoLProxChat in the same match appear within a few seconds.
-4. **Always Open mic** is the default — just talk. **MIC** = self-mute, **VOL** = mute everyone, **MUTE** per row = silence a specific player.
+Champion classifier assets from [Community Dragon](https://www.communitydragon.org/) (Riot IP, training use only).
 
-For the rest — every Settings toggle, troubleshooting, log-grab flow, uninstall — see the **[user guide](docs/user-guide.md)**.
+## Full guide
 
----
-
-## Docs
-
-| Doc | When to read |
-|---|---|
-| [User guide](docs/user-guide.md) | Day-to-day usage, every Settings toggle, troubleshooting, reporting bugs |
-| [Architecture](docs/architecture.md) | How it actually works — computer-vision pipeline, WebRTC flow, server design |
-| [Threat model](docs/threat-model.md) | What the design protects, what it doesn't, what we collect (and what we don't) |
-| [Compliance](docs/compliance.md) | Relationship to Riot's third-party policy + Developer Portal status |
-| [Self-hosting](docs/self-hosting.md) | Run your own signaling server |
-| [Contributing](CONTRIBUTING.md) | Build, test, release flow + code style |
-| [Security policy](SECURITY.md) | How to report vulnerabilities |
-| [Changelog](CHANGELOG.md) | What changed in each release |
-
----
-
-## How it works (in 5 bullets)
-
-1. **Game detection** — reads the LCU and Live Client Data APIs for game phase + player roster. No memory reads, no injection.
-2. **Position** — the app captures the minimap image, finds champion icons on it by color and shape, and identifies which champion each one is with a trained image-recognition model — producing your position in in-game coordinates.
-3. **Signaling** — players in the same match join a deterministic WebSocket room (room ID = hash of sorted player names) on a self-hosted Node server.
-4. **Voice** — WebRTC peer-to-peer audio between players (Opus 128 kbps, DTLS-SRTP). No audio touches any server.
-5. **Proximity volume** — each client streams its XY coordinates to the signaling server (over the same WebSocket used for presence/signaling); the server computes pairwise volumes for everyone in the room. **Team voice is always full volume** (no proximity); **cross-team (enemy) voice fades in at ~champion vision range (~1350 game units)** and grows louder as they close. Server-enforced — a modified client cannot bypass the team filter or range cutoff. Clients only ever receive `{ peerName: volume }`, never another peer's raw position.
-
-For depth, see [`docs/architecture.md`](docs/architecture.md).
-
----
-
-## Privacy + anti-cheat in one paragraph
-
-LoLProxChat collects **no analytics, no telemetry, no fingerprinting, no persistent user identifiers**. The only data that leaves your machine is your summoner name (for room routing — same name visible on the match scoreboard), your XY position (sent to the server over TLS, held in process memory only for as long as you're in the room, never logged), WebRTC signaling, and the voice audio itself (DTLS-SRTP, peer-to-peer, never touches the server). Want to keep your public IP private even from peers in your match? **Settings → Hide IP (Force TURN)** routes voice through the TURN relay. See [`docs/threat-model.md`](docs/threat-model.md) for the full breakdown.
-
----
-
-## License
-
-**[GNU AGPLv3](LICENSE).** Free and open source — use, study, modify, and self-host it, including commercially. The copyleft terms require that if you distribute the app, or run a modified version as a network service, you make the corresponding source available under the AGPLv3. © 2026 Daniel Thiberge.
-
-Champion icons used to train the recognition model come from [Community Dragon](https://www.communitydragon.org/) (a community-maintained mirror of Riot's game assets). They remain Riot Games' intellectual property, are used for training only, and are not distributed with this software.
-
----
-
-## Acknowledgements
-
-- [LOL_Minimap_Tracker](https://github.com/Quinntana/LOL_Minimap_Tracker) — minimap champion-tracking reference
-- [LeagueMinimapDetectionCNN](https://github.com/Maknee/LeagueMinimapDetectionCNN) — reference code for minimap detection
-- [Community Dragon](https://www.communitydragon.org/) — champion icon assets used to train the champion-recognition model
-- [Tauri](https://tauri.app) — desktop app framework
-- Cloudflare Realtime TURN — managed TURN relay infrastructure
-- Every user who's filed an issue or attached a log — your reports made this app actually work.
+[docs/friend-playbook.md](docs/friend-playbook.md)

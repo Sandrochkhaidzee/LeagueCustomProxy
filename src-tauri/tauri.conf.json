@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickvdyck/tauri-settings-schema/refs/heads/main/schemas/2.1.0/schema.json",
-  "productName": "LoLProxChat",
-  "version": "0.1.0",
-  "identifier": "com.proxchat.app",
+  "productName": "LeagueProxy",
+  "version": "0.1.0-beta.1",
+  "identifier": "com.leagueproxy.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:8080",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "overlay",
-        "title": "LoLProxChat",
+        "title": "LeagueProxy",
         "width": 260,
         "height": 400,
         "decorations": false,
@@ -25,7 +25,7 @@
       },
       {
         "label": "scanner",
-        "title": "LoLProxChat Scanner",
+        "title": "LeagueProxy Scanner",
         "width": 250,
         "height": 250,
         "decorations": false,

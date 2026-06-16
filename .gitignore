@@ -20,6 +20,9 @@ models/*.pt
 # Rust/Tauri build artifacts
 src-tauri/target/
 
+# Distribution build (local only)
+release/
+
 # Temp/logs
 logs.txt
 
