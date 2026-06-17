@@ -12,6 +12,7 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -19,11 +20,12 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
+
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Build frontend
         env:
