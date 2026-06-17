@@ -12,8 +12,6 @@ if not exist .env copy .env.example .env
 set PROXCHAT_DEV_BUILD=0
 echo Building RELEASE client (no debug UI) ...
 if "%GITHUB_REPOSITORY%"=="" set "GITHUB_REPOSITORY=Sandrochkhaidzee/LeagueCustomProxy"
-call npm run build:release
-if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call npx tauri build --no-bundle
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 if not exist "%~dp0..\release" mkdir "%~dp0..\release"

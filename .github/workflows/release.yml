@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
@@ -29,6 +29,7 @@ jobs:
         env:
           PROXCHAT_SERVER: http://26.36.227.156:3100
           GITHUB_REPOSITORY: ${{ github.repository }}
+          PROXCHAT_DEV_BUILD: '0'
           WEBPACK_CLEAN: '1'
         run: npx tauri build --no-bundle
 
