@@ -2,6 +2,13 @@
 
 All notable changes to LeagueProxy are documented here.
 
+## [2.1.0] — 2026-06-17
+
+### Connect & networking
+
+- Fix disconnects when connecting over **HTTPS / Cloudflare quick tunnels** — grace period before health checks and skip probes while the WebSocket is still connecting.
+- Use cleaner HTTPS/WSS URLs (omit redundant `:443` / `:80`).
+
 ## [2.0.0] — 2026-06-17
 
 Major release: dedicated host app, connect-on-launch flow, and improved tracking.
@@ -82,5 +89,6 @@ First stable release for custom 5v5 friend groups.
 - Release vs dev builds (`leagueproxy.exe` vs `leagueproxy-dev.exe`).
 - Split build scripts for faster iteration (`build-frontend-only`, `build-rust-only`).
 
+[2.1.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.0.0
 [1.0.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v1.0.0

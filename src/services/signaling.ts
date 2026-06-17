@@ -281,6 +281,10 @@ export class SignalingService {
     return this.inLobby && this.ws?.readyState === WebSocket.OPEN;
   }
 
+  isLobbyConnecting(): boolean {
+    return this.inLobby && this.ws?.readyState === WebSocket.CONNECTING;
+  }
+
   sendSignal(signal: SignalMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({

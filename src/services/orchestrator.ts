@@ -48,6 +48,8 @@ export class Orchestrator {
   private overlaySpeakingPeers: Record<string, boolean> = {};
   private sessionStarting = false;
   private overlayHeartbeatId: number | null = null;
+  /** Grace period after connect before /health poll may force-disconnect. */
+  private lobbyConnectStartedAt = 0;
 
   constructor() {
     this.gameState = new GameStateService();
@@ -119,8 +121,12 @@ export class Orchestrator {
     // During a game session the WebSocket close handler owns disconnect logic.
     if (this.session) return;
     // Lobby WebSocket handles disconnect; skip duplicate HTTP probe while connected.
-    if (this.signaling.isLobbyConnected()) {
+    if (this.signaling.isLobbyConnected() || this.signaling.isLobbyConnecting()) {
       this.consecutiveHealthFailures = 0;
+      return;
+    }
+    // Allow time for WSS to establish through slow tunnels before probing /health.
+    if (this.lobbyConnectStartedAt > 0 && Date.now() - this.lobbyConnectStartedAt < 45_000) {
       return;
     }
 
@@ -678,6 +684,7 @@ export class Orchestrator {
   applyServerUrl(url: string): void {
     setStoredServerUrl(url);
     invalidateRelayCache();
+    this.lobbyConnectStartedAt = Date.now();
     if (this.session) {
       this.signaling.reconnect();
     } else {
@@ -686,6 +693,7 @@ export class Orchestrator {
   }
 
   disconnectFromServer(): void {
+    this.lobbyConnectStartedAt = 0;
     if (this.session) {
       this.endSession(false);
     } else {

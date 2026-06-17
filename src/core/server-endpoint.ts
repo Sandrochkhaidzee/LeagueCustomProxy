@@ -48,13 +48,21 @@ export function parseServerEndpoint(fields: ServerEndpointFields): ServerEndpoin
   };
 }
 
+/** Host with port omitted when it is the protocol default (443/80). */
+export function formatHostPort(endpoint: ServerEndpoint): string {
+  const defaultPort = endpoint.protocol === 'https' ? 443 : 80;
+  return endpoint.port === defaultPort
+    ? endpoint.host
+    : `${endpoint.host}:${endpoint.port}`;
+}
+
 export function buildServerUrl(endpoint: ServerEndpoint): string {
-  return `${endpoint.protocol}://${endpoint.host}:${endpoint.port}`;
+  return `${endpoint.protocol}://${formatHostPort(endpoint)}`;
 }
 
 export function buildWsUrl(endpoint: ServerEndpoint): string {
   const wsProto = endpoint.protocol === 'https' ? 'wss' : 'ws';
-  return `${wsProto}://${endpoint.host}:${endpoint.port}/ws`;
+  return `${wsProto}://${formatHostPort(endpoint)}/ws`;
 }
 
 /** Parse a full URL into endpoint fields (legacy migration). */
@@ -62,11 +70,13 @@ export function parseServerUrlToFields(url: string): ServerEndpointFields | null
   try {
     const u = new URL(url.trim());
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-    if (!u.hostname || !u.port) return null;
+    if (!u.hostname) return null;
+    const protocol = u.protocol.replace(':', '');
+    const port = u.port || (protocol === 'https' ? '443' : '80');
     return {
-      protocol: u.protocol.replace(':', ''),
+      protocol,
       host: u.hostname,
-      port: u.port,
+      port,
     };
   } catch {
     return null;
