@@ -1,26 +1,65 @@
 import { getIceServers } from '../core/config';
 import { getForceTurnRelay } from './privacy';
+import type { InputMode, OpusQuality } from '../core/types';
+import { OPUS_BITRATES } from './audio-prefs';
 
-// Time-based EMA on per-peer volume targets. Damps CV-jitter spikes without
-// introducing audible ramp delay on normal updates. Two important properties:
-//   • First call (prev == null) snaps to the new value so new peers don't
-//     start playing at 1.0 before the proximity pipeline catches up.
-//   • Alpha is capped at 0.3 so even a long gap between updates (e.g. a peer
-//     re-entering hearing range after going far away) ramps over multiple
-//     ticks instead of snapping to a loud value. At ~3 FPS update cadence,
-//     the smoother reaches ~95% of target in about a second.
-// Exported so tests can verify the math without a real RTCPeerConnection.
+// Time-based EMA on per-peer volume targets with per-tick slew cap.
 export function nextSmoothedVolume(
   prev: number | null,
   target: number,
   nowMs: number,
   lastUpdateMs: number,
+  maxDeltaPerSec = 1.5,
 ): number {
   const clamped = Math.max(0, Math.min(1, target));
   if (prev === null) return clamped;
   const dtSec = (nowMs - lastUpdateMs) / 1000;
   const alpha = Math.min(0.3, 1 - Math.exp(-dtSec / 0.3));
-  return prev * (1 - alpha) + clamped * alpha;
+  let next = prev * (1 - alpha) + clamped * alpha;
+  const maxDelta = maxDeltaPerSec * Math.max(dtSec, 0.05);
+  next = Math.max(prev - maxDelta, Math.min(prev + maxDelta, next));
+  return Math.max(0, Math.min(1, next));
+}
+
+/** Find Opus payload type from SDP (avoids hardcoding fmtp:111). */
+export function findOpusPayloadType(sdp: string): number | null {
+  const lines = sdp.split('\r\n');
+  let opusPt: string | null = null;
+  for (const line of lines) {
+    const m = line.match(/^a=rtpmap:(\d+) opus\/48000/);
+    if (m) opusPt = m[1];
+  }
+  return opusPt !== null ? parseInt(opusPt, 10) : null;
+}
+
+export interface OpusSdpOptions {
+  bitrate: number;
+  usedtx: boolean;
+}
+
+export function enhanceOpusSdp(sdp: string, options: OpusSdpOptions): string {
+  const pt = findOpusPayloadType(sdp);
+  if (pt === null) return sdp;
+  const re = new RegExp(`a=fmtp:${pt} (.*)`, 'g');
+  return sdp.replace(re, (_match, params: string) => {
+    let enhanced = params;
+    if (!enhanced.includes('maxaveragebitrate')) {
+      enhanced += `;maxaveragebitrate=${options.bitrate}`;
+    } else {
+      enhanced = enhanced.replace(/maxaveragebitrate=\d+/, `maxaveragebitrate=${options.bitrate}`);
+    }
+    const dtxVal = options.usedtx ? '1' : '0';
+    if (!enhanced.includes('usedtx')) {
+      enhanced += `;usedtx=${dtxVal}`;
+    } else {
+      enhanced = enhanced.replace(/usedtx=[01]/, `usedtx=${dtxVal}`);
+    }
+    return `a=fmtp:${pt} ${enhanced}`;
+  });
+}
+
+export function shouldUseDtx(inputMode: InputMode): boolean {
+  return inputMode === 'ptt' || inputMode === 'vad';
 }
 
 
@@ -68,6 +107,16 @@ export class PeerConnection {
   // produce audible dropouts. null = first call (snap to value, no smoothing).
   private smoothedVolume: number | null = null;
   private lastSetVolumeMs = 0;
+  private opusBitrate = OPUS_BITRATES.standard;
+  private inputMode: InputMode = 'always';
+
+  static setGlobalOpusQuality(quality: OpusQuality, inputMode: InputMode): void {
+    PeerConnection.globalOpusQuality = quality;
+    PeerConnection.globalInputMode = inputMode;
+  }
+
+  private static globalOpusQuality: OpusQuality = 'standard';
+  private static globalInputMode: InputMode = 'always';
 
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
   // Fired when ICE has fully failed. The audio layer is responsible for
@@ -135,7 +184,10 @@ export class PeerConnection {
   static async create(remoteName: string): Promise<PeerConnection> {
     const iceServers = await getIceServers();
     const policy: RTCIceTransportPolicy = getForceTurnRelay() ? 'relay' : 'all';
-    return new PeerConnection(remoteName, iceServers, policy);
+    const pc = new PeerConnection(remoteName, iceServers, policy);
+    pc.opusBitrate = OPUS_BITRATES[PeerConnection.globalOpusQuality];
+    pc.inputMode = PeerConnection.globalInputMode;
+    return pc;
   }
 
   /** Route this peer's audio to the chosen output device via the element sink. */
@@ -183,8 +235,9 @@ export class PeerConnection {
 
   async createOffer(options?: { iceRestart?: boolean }): Promise<RTCSessionDescriptionInit> {
     const offer = await this.pc.createOffer(options);
-    offer.sdp = this.enhanceOpusSdp(offer.sdp || '');
+    offer.sdp = this.enhanceOpusSdpLocal(offer.sdp || '');
     await this.pc.setLocalDescription(offer);
+    await this.applySenderBitrate();
     return offer;
   }
 
@@ -193,33 +246,33 @@ export class PeerConnection {
     this.hasRemoteDescription = true;
     await this.flushPendingCandidates();
     const answer = await this.pc.createAnswer();
-    answer.sdp = this.enhanceOpusSdp(answer.sdp || '');
+    answer.sdp = this.enhanceOpusSdpLocal(answer.sdp || '');
     await this.pc.setLocalDescription(answer);
+    await this.applySenderBitrate();
     return answer;
   }
 
-  /**
-   * Modify SDP to set Opus bitrate to 128kbps and disable DTX.
-   * DTX (Discontinuous Transmission) stops sending packets during silence
-   * to save bandwidth, but the ramp out of silence-mode at speech onset
-   * clips the first packet or two — audible as missing word starts. The
-   * bandwidth cost of always-on transmission is trivial for voice.
-   */
-  private enhanceOpusSdp(sdp: string): string {
-    return sdp.replace(
-      /a=fmtp:111 (.*)/g,
-      (match, params) => {
-        let enhanced = params;
-        if (!enhanced.includes('maxaveragebitrate')) {
-          enhanced += ';maxaveragebitrate=128000';
+  private enhanceOpusSdpLocal(sdp: string): string {
+    return enhanceOpusSdp(sdp, {
+      bitrate: this.opusBitrate,
+      usedtx: shouldUseDtx(this.inputMode),
+    });
+  }
+
+  private async applySenderBitrate(): Promise<void> {
+    try {
+      const senders = this.pc.getSenders().filter((s) => s.track?.kind === 'audio');
+      for (const sender of senders) {
+        const params = sender.getParameters();
+        if (!params.encodings?.length) {
+          params.encodings = [{}];
         }
-        // Explicitly disable DTX so word starts/ends aren't clipped.
-        if (!enhanced.includes('usedtx')) {
-          enhanced += ';usedtx=0';
-        }
-        return 'a=fmtp:111 ' + enhanced;
+        params.encodings[0].maxBitrate = this.opusBitrate;
+        await sender.setParameters(params);
       }
-    );
+    } catch (e) {
+      console.warn('[WebRTC] setParameters maxBitrate failed for', this.remoteName, e);
+    }
   }
 
   async handleAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
@@ -268,16 +321,52 @@ export class PeerConnection {
       clearInterval(this.statsIntervalId);
       this.statsIntervalId = null;
     }
+    if (this.speakingMonitorId !== null) {
+      clearInterval(this.speakingMonitorId);
+      this.speakingMonitorId = null;
+    }
+    this.speakingAnalyser?.disconnect();
+    this.speakingAnalyser = null;
     this.remoteStream.getTracks().forEach((t) => t.stop());
     this.pc.close();
     this.audioElement.pause();
     this.audioElement.srcObject = null;
   }
 
-  // Periodic getStats snapshot — selected candidate pair, RTT, bytes flowing.
-  // Logged via the standard console.log path which is gated by Debug toggle.
-  // Without these, ICE failures are opaque (we only see "failed" with no
-  // context about which pair was tried or what the RTT looked like).
+  private speakingAnalyser: AnalyserNode | null = null;
+  private speakingMonitorId: number | null = null;
+  private speaking = false;
+  private static readonly SPEAKING_RMS = 0.012;
+
+  /** UI-only remote voice activity indicator (~10 Hz). */
+  startSpeakingMonitor(
+    context: AudioContext,
+    onChange: (speaking: boolean) => void,
+  ): void {
+    if (this.speakingMonitorId !== null) return;
+    try {
+      const source = context.createMediaStreamSource(this.remoteStream);
+      this.speakingAnalyser = context.createAnalyser();
+      this.speakingAnalyser.fftSize = 512;
+      source.connect(this.speakingAnalyser);
+      const buf = new Float32Array(this.speakingAnalyser.fftSize);
+      this.speakingMonitorId = window.setInterval(() => {
+        if (!this.speakingAnalyser) return;
+        this.speakingAnalyser.getFloatTimeDomainData(buf);
+        let sumSq = 0;
+        for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+        const rms = Math.sqrt(sumSq / buf.length);
+        const nowSpeaking = rms >= PeerConnection.SPEAKING_RMS;
+        if (nowSpeaking !== this.speaking) {
+          this.speaking = nowSpeaking;
+          onChange(nowSpeaking);
+        }
+      }, 100) as unknown as number;
+    } catch (e) {
+      console.warn('[WebRTC] speaking monitor failed for', this.remoteName, e);
+    }
+  }
+
   private statsIntervalId: number | null = null;
   private startStatsLogging(): void {
     this.statsIntervalId = window.setInterval(() => {

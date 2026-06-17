@@ -1,10 +1,10 @@
+import { invoke } from '@tauri-apps/api/core';
 import { setLoggingEnabled } from '../core/logging';
 import { listen } from '@tauri-apps/api/event';
 import {
   checkForUpdate,
   downloadAndApply,
-  isAutoUpdateEnabled,
-  setAutoUpdateEnabled,
+  formatInvokeError,
 } from '../services/updater';
 import {
   getStoredInputDeviceId,
@@ -14,10 +14,11 @@ import {
   listAudioDevices,
   probeMicPermission,
 } from '../services/devices';
-import { getForceTurnRelay, setForceTurnRelay } from '../services/privacy';
-import { getAllyProximity, setAllyProximity } from '../services/audio-prefs';
+import { loadAudioSettings, saveAudioSettings } from '../services/audio-prefs';
+import type { InputMode } from '../core/types';
 import { computeDesiredHeight } from './resize-helpers';
 import { browserKeyToWin32Vk, humanizeVk } from '../core/keymap';
+import { IS_DEV_BUILD } from '../core/build-flags';
 import '../core/window-globals';
 
 // v0.3 (#11): dynamic overlay-window resize so the panel grows to fit
@@ -51,12 +52,16 @@ interface NearbyPeer {
   isMuted: boolean;
   isMutedByLocal: boolean;
   isDead: boolean;
+  isSpeaking?: boolean;
 }
 
 interface OverlayState {
   selfMuted: boolean;
   muteAll: boolean;
   nearbyPeers: NearbyPeer[];
+  micLevel?: number;
+  micTransmitting?: boolean;
+  inputMode?: InputMode | null;
   trackingState?: string;
   lastPosition?: { x: number; y: number } | null;
   filteredImageUrl?: string | null;
@@ -66,18 +71,24 @@ interface OverlayState {
 }
 
 const playerList = document.getElementById('player-list')!;
-const btnSelfMute = document.getElementById('btn-self-mute')!;
-const btnMuteAll = document.getElementById('btn-mute-all')!;
 const btnSettings = document.getElementById('btn-settings')!;
-const btnDebug = document.getElementById('btn-debug')!;
-const btnCollapse = document.getElementById('btn-collapse')!;
+const btnClose = document.getElementById('btn-close')!;
 const panel = document.getElementById('panel')!;
 const settingsPanel = document.getElementById('settings-panel')!;
-const dragHandle = document.getElementById('drag-handle')!;
+const transmitStatus = document.getElementById('transmit-status')!;
+const transmitLabel = document.getElementById('transmit-label')!;
 
-// Debug overlay state — always starts off; user toggles per session.
+const btnDebug = IS_DEV_BUILD ? document.getElementById('btn-debug')! : null;
+
 let debugEnabled = false;
-setLoggingEnabled(false);
+if (IS_DEV_BUILD) {
+  setLoggingEnabled(false);
+} else {
+  // Strip dev-only DOM before any code touches those nodes (see vadEngineSelect guard below).
+  document.querySelectorAll('.dev-only').forEach((el) => el.remove());
+  setLoggingEnabled(false);
+  window.__lolproxchat_debug_enabled = false;
+}
 
 // Per-player volume cache (so sliders don't reset on re-render)
 const playerVolumes: Map<string, number> = new Map();
@@ -86,26 +97,24 @@ const playerVolumes: Map<string, number> = new Map();
 // The drag handle uses Tauri's built-in data-tauri-drag-region attribute
 // (set in the HTML). No manual drag/resize logic needed.
 
-// --- Controls ---
-// MIC / VOL buttons signal their muted state via the `.active` color only —
-// the label stays "MIC" / "VOL" (no "OFF" suffix) so the button width doesn't
-// jump and the icon-button row stays visually stable.
-btnSelfMute.addEventListener('click', () => {
-  const nowMuted = !btnSelfMute.classList.contains('active');
-  btnSelfMute.classList.toggle('active', nowMuted);
-  sendToBackground('toggleSelfMute', {});
-});
-
-btnMuteAll.addEventListener('click', () => {
-  const nowMuted = !btnMuteAll.classList.contains('active');
-  btnMuteAll.classList.toggle('active', nowMuted);
-  sendToBackground('toggleMuteAll', {});
+// --- Header controls ---
+btnClose.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  invoke('exit_app').catch(() => {
+    // Last resort if IPC fails — still better than a dead button.
+    window.close();
+  });
 });
 
 btnSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('hidden');
   if (!settingsPanel.classList.contains('hidden')) {
     refreshDeviceLists();
+    const mode = (document.getElementById('input-mode') as HTMLSelectElement).value;
+    if (shouldRunMicMonitor(mode)) {
+      sendToBackground('ensureMicMonitor', {});
+    }
   }
   syncOverlayHeight();
 });
@@ -172,37 +181,11 @@ navigator.mediaDevices.addEventListener('devicechange', () => {
   }
 });
 
-let collapsed = false;
-btnCollapse.addEventListener('click', () => {
-  collapsed = !collapsed;
-  panel.classList.toggle('collapsed', collapsed);
-  btnCollapse.textContent = collapsed ? '\u00AB' : '\u00BB';
-  btnCollapse.title = collapsed ? 'Expand' : 'Collapse';
-  // Close settings when collapsing
-  if (collapsed) {
-    settingsPanel.classList.add('hidden');
-  }
-});
-
-const scanRateRow = document.getElementById('scan-rate-row')!;
-const btnAutoUpdate = document.getElementById('btn-autoupdate') as HTMLButtonElement;
+const scanRateRow = IS_DEV_BUILD ? document.getElementById('scan-rate-row') : null;
 const btnCheckUpdate = document.getElementById('btn-check-update') as HTMLButtonElement;
 const updateStatus = document.getElementById('update-status')!;
 
-// --- Auto-update UI ---
-function syncAutoUpdateButton(): void {
-  const on = isAutoUpdateEnabled();
-  btnAutoUpdate.textContent = on ? 'ON' : 'OFF';
-  btnAutoUpdate.classList.toggle('active', on);
-}
-queueMicrotask(syncAutoUpdateButton);
-
-btnAutoUpdate.addEventListener('click', () => {
-  setAutoUpdateEnabled(!isAutoUpdateEnabled());
-  syncAutoUpdateButton();
-});
-
-async function runUpdateCheck(triggeredByUser: boolean): Promise<void> {
+async function runUpdateCheck(): Promise<void> {
   updateStatus.textContent = 'Checking for updates…';
   try {
     const info = await checkForUpdate();
@@ -210,67 +193,31 @@ async function runUpdateCheck(triggeredByUser: boolean): Promise<void> {
       updateStatus.textContent = 'Update available: v' + info.latest_version + ' — applying…';
       await downloadAndApply(info.download_url);
       // If apply succeeds, the process exits before we reach here
+    } else if (info.update_available && !info.download_url) {
+      updateStatus.textContent = 'Update v' + info.latest_version
+        + ' exists but no leagueproxy.exe on the release';
     } else {
-      updateStatus.textContent = triggeredByUser
-        ? 'Up to date (v' + info.current_version + ')'
-        : '';
+      updateStatus.textContent = 'Up to date (v' + info.current_version + ')';
     }
   } catch (e) {
-    updateStatus.textContent = 'Update check failed: ' + (e as Error).message;
+    updateStatus.textContent = 'Update check failed: ' + formatInvokeError(e);
   }
 }
 
 btnCheckUpdate.addEventListener('click', () => {
-  runUpdateCheck(true);
+  void runUpdateCheck();
 });
 
-const btnOpenLogs = document.getElementById('btn-open-logs') as HTMLButtonElement;
-btnOpenLogs.addEventListener('click', () => {
-  sendToBackground('openLogFolder', {});
-});
-
-// Expose for background.ts to trigger an auto-check on launch
-window.__proxchatRunUpdateCheck = runUpdateCheck;
-
-// Force-TURN privacy toggle. New peer connections created after this is
-// flipped honor the new setting; existing connections keep whatever policy
-// they were created with (would need to re-join the game to apply).
-const btnForceTurn = document.getElementById('btn-force-turn') as HTMLButtonElement;
-function syncForceTurnButton(): void {
-  const on = getForceTurnRelay();
-  btnForceTurn.textContent = on ? 'ON' : 'OFF';
-  btnForceTurn.classList.toggle('active', on);
+const btnOpenLogs = IS_DEV_BUILD ? document.getElementById('btn-open-logs') as HTMLButtonElement : null;
+if (btnOpenLogs) {
+  btnOpenLogs.addEventListener('click', () => {
+    sendToBackground('openLogFolder', {});
+  });
 }
-queueMicrotask(syncForceTurnButton);
-btnForceTurn.addEventListener('click', () => {
-  setForceTurnRelay(!getForceTurnRelay());
-  syncForceTurnButton();
-});
 
-// Ally-proximity toggle (#22). When ON, teammates fade with distance (the same
-// falloff as enemies) instead of always playing at full volume. The orchestrator
-// reads this fresh on each /compute-volumes tick, so flipping it takes effect on
-// the next position update — no reconnect needed.
-const btnAllyProximity = document.getElementById('btn-ally-proximity') as HTMLButtonElement;
-function syncAllyProximityButton(): void {
-  const on = getAllyProximity();
-  btnAllyProximity.textContent = on ? 'ON' : 'OFF';
-  btnAllyProximity.classList.toggle('active', on);
-}
-queueMicrotask(syncAllyProximityButton);
-btnAllyProximity.addEventListener('click', () => {
-  setAllyProximity(!getAllyProximity());
-  syncAllyProximityButton();
-});
-
-// v0.3 (#1): PTT + toggle-mute key rebind. The Rust WH_KEYBOARD_LL hook
-// reads the bound VK code from atomics it exposes via set_ptt_key /
-// set_toggle_key Tauri commands. UI pattern: click the button → "Press a
-// key..." prompt → capture next keydown → translate to Win32 VK → persist
-// + push to Rust.
+// v0.3 (#1): PTT key rebind.
 const PTT_VK_KEY = 'lolproxchat.pttVk';
-const TOGGLE_VK_KEY = 'lolproxchat.toggleVk';
-const DEFAULT_PTT_VK = 0x14;  // Caps Lock — matches Rust default
+const DEFAULT_PTT_VK: number | null = null;
 const FORBIDDEN_CODES = new Set([
   'Escape', 'Tab',
   // Common LoL bindings — would conflict with gameplay even though our
@@ -310,6 +257,12 @@ function setupBindButton(buttonId: string, storageKey: string, backgroundCmd: st
         restore(originalText);
         return;
       }
+      if (e.code === 'Backspace' || e.code === 'Delete') {
+        localStorage.removeItem(storageKey);
+        sendToBackground(backgroundCmd, { vk: 0 });
+        restore('(unbound)');
+        return;
+      }
       if (FORBIDDEN_CODES.has(e.code)) {
         restore('(LoL/system key — pick another)');
         setTimeout(() => restore(originalText), 1500);
@@ -331,81 +284,203 @@ function setupBindButton(buttonId: string, storageKey: string, backgroundCmd: st
 
 queueMicrotask(() => {
   setupBindButton('btn-bind-ptt', PTT_VK_KEY, 'setPttKey', DEFAULT_PTT_VK);
-  setupBindButton('btn-bind-toggle', TOGGLE_VK_KEY, 'setToggleKey', null);
-  // Push any stored bindings to Rust on startup so user prefs survive restart.
   const ptt = localStorage.getItem(PTT_VK_KEY);
-  if (ptt !== null) sendToBackground('setPttKey', { vk: parseInt(ptt, 10) });
-  const toggle = localStorage.getItem(TOGGLE_VK_KEY);
-  if (toggle !== null) sendToBackground('setToggleKey', { vk: parseInt(toggle, 10) });
+  const vk = ptt !== null ? parseInt(ptt, 10) : 0;
+  sendToBackground('setPttKey', { vk: !Number.isNaN(vk) && vk > 0 ? vk : 0 });
 });
 
-btnDebug.addEventListener('click', () => {
-  debugEnabled = !debugEnabled;
-  btnDebug.textContent = debugEnabled ? 'ON' : 'OFF';
-  btnDebug.classList.toggle('active', debugEnabled);
-  scanRateRow.classList.toggle('hidden', !debugEnabled);
-  setLoggingEnabled(debugEnabled);
-  // Read by orchestrator when emitting scanner:scene events so the scanner
-  // window only renders the tracking dot while Debug is on.
-  window.__lolproxchat_debug_enabled = debugEnabled;
-  // Hide the HSV thumbnail immediately when Debug flips off.
-  if (!debugEnabled) {
-    debugFilterThumb.classList.add('hidden');
-    debugFilterThumb.removeAttribute('src');
-  }
-  // v0.3 (#11): re-fit window for new debug-row visibility
-  syncOverlayHeight();
-});
+if (btnDebug) {
+  btnDebug.addEventListener('click', () => {
+    debugEnabled = !debugEnabled;
+    btnDebug.textContent = debugEnabled ? 'ON' : 'OFF';
+    btnDebug.classList.toggle('active', debugEnabled);
+    scanRateRow?.classList.toggle('hidden', !debugEnabled);
+    setLoggingEnabled(debugEnabled);
+    window.__lolproxchat_debug_enabled = debugEnabled;
+    if (!debugEnabled) {
+      debugFilterThumb?.classList.add('hidden');
+      debugFilterThumb?.removeAttribute('src');
+    }
+    syncOverlayHeight();
+  });
+}
 
-// HSV-filtered minimap preview — shown only while Debug is on. Listens to the
-// same scanner:scene event the scanner window does; the panel renders the
-// filtered image (which used to live painted on the scanner itself, but that
-// fed back into the next capture cycle and required excluding the scanner
-// from capture, which broke ShadowPlay / OBS).
-const debugFilterThumb = document.getElementById('debug-filter-thumb') as HTMLImageElement;
-listen<{ filteredImageUrl: string | null; debugEnabled: boolean }>('scanner:scene', (event) => {
-  const { filteredImageUrl, debugEnabled: dbg } = event.payload;
-  if (dbg && filteredImageUrl) {
-    debugFilterThumb.src = filteredImageUrl;
-    debugFilterThumb.classList.remove('hidden');
-  } else {
-    debugFilterThumb.classList.add('hidden');
-    if (!filteredImageUrl) debugFilterThumb.removeAttribute('src');
-  }
-}).catch((e) => console.warn('[Overlay] scanner:scene listen failed:', e));
+const debugFilterThumb = IS_DEV_BUILD
+  ? document.getElementById('debug-filter-thumb') as HTMLImageElement
+  : null;
+if (IS_DEV_BUILD && debugFilterThumb) {
+  listen<{ filteredImageUrl: string | null; debugEnabled: boolean }>('scanner:scene', (event) => {
+    const { filteredImageUrl, debugEnabled: dbg } = event.payload;
+    if (dbg && filteredImageUrl) {
+      debugFilterThumb.src = filteredImageUrl;
+      debugFilterThumb.classList.remove('hidden');
+    } else {
+      debugFilterThumb.classList.add('hidden');
+      if (!filteredImageUrl) debugFilterThumb.removeAttribute('src');
+    }
+  }).catch((e) => console.warn('[Overlay] scanner:scene listen failed:', e));
 
-// v0.3 (#11): also re-fit when the thumbnail finishes loading (async image
-// load can change scrollHeight after the toggle click already fired) and on
-// every overlayUpdate (peer list grows / shrinks).
-debugFilterThumb.addEventListener('load', syncOverlayHeight);
+  debugFilterThumb.addEventListener('load', syncOverlayHeight);
+}
 const panelEl = document.querySelector('.panel');
 if (panelEl) {
   new ResizeObserver(syncOverlayHeight).observe(panelEl);
 }
 window.addEventListener('DOMContentLoaded', syncOverlayHeight);
 
-document.getElementById('input-mode')!.addEventListener('change', (e) => {
-  const mode = (e.target as HTMLSelectElement).value;
-  sendToBackground('updateSettings', { inputMode: mode });
+document.querySelectorAll('.settings-category').forEach((el) => {
+  el.addEventListener('toggle', syncOverlayHeight);
 });
 
+document.getElementById('input-mode')!.addEventListener('change', (e) => {
+  const mode = (e.target as HTMLSelectElement).value;
+  saveAudioSettings({ inputMode: mode as InputMode });
+  sendToBackground('updateSettings', { inputMode: mode });
+  if (shouldRunMicMonitor(mode)) {
+    sendToBackground('ensureMicMonitor', {});
+  }
+  syncInputModePanels();
+});
+
+function shouldRunMicMonitor(mode: string): boolean {
+  return mode === 'vad' || mode === 'always';
+}
+
+const vadSettings = document.getElementById('vad-settings')!;
+const pttSettings = document.getElementById('ptt-settings')!;
+const vadSensitivityInput = document.getElementById('vad-sensitivity') as HTMLInputElement;
+const vadSensitivityLabel = document.getElementById('vad-sensitivity-label')!;
+const vadEngineSelect = IS_DEV_BUILD
+  ? document.getElementById('vad-engine') as HTMLSelectElement
+  : null;
+const micMeterFill = document.getElementById('mic-meter-fill')!;
+const noiseModeSelect = document.getElementById('noise-mode') as HTMLSelectElement;
+const opusQualitySelect = document.getElementById('opus-quality') as HTMLSelectElement;
+const btnEchoCancel = document.getElementById('btn-echo-cancel') as HTMLButtonElement;
+const btnAutoGain = document.getElementById('btn-auto-gain') as HTMLButtonElement;
+const btnBrowserNs = document.getElementById('btn-browser-ns') as HTMLButtonElement;
 const volumeInput = document.getElementById('input-volume') as HTMLInputElement;
 const volumeLabel = document.getElementById('volume-label')!;
+
+function syncInputModePanels(): void {
+  const mode = (document.getElementById('input-mode') as HTMLSelectElement).value;
+  vadSettings.classList.toggle('hidden', mode !== 'vad');
+  pttSettings.classList.toggle('hidden', mode !== 'ptt');
+  syncOverlayHeight();
+}
+
+function syncToggleBtn(btn: HTMLButtonElement, on: boolean): void {
+  btn.textContent = on ? 'ON' : 'OFF';
+  btn.classList.toggle('active', on);
+}
+
+function loadPersistedAudioSettings(): void {
+  const s = loadAudioSettings();
+  const inputMode = document.getElementById('input-mode') as HTMLSelectElement;
+  if (s.inputMode) inputMode.value = s.inputMode;
+  if (s.inputVolume !== undefined) {
+    volumeInput.value = String(Math.round(s.inputVolume * 100));
+    volumeLabel.textContent = String(Math.round(s.inputVolume * 100));
+  }
+  if (s.vadSensitivity !== undefined) {
+    vadSensitivityInput.value = String(s.vadSensitivity);
+    vadSensitivityLabel.textContent = String(s.vadSensitivity);
+  }
+  if (s.vadEngine && vadEngineSelect) vadEngineSelect.value = s.vadEngine;
+  if (s.noiseMode) noiseModeSelect.value = s.noiseMode;
+  if (s.opusQuality) opusQualitySelect.value = s.opusQuality;
+  syncToggleBtn(btnEchoCancel, s.echoCancellation !== false);
+  syncToggleBtn(btnAutoGain, s.autoGainControl !== false);
+  syncToggleBtn(btnBrowserNs, s.noiseSuppression !== false);
+  if (s.playerVolumes) {
+    for (const [name, vol] of Object.entries(s.playerVolumes)) {
+      playerVolumes.set(name, vol);
+    }
+  }
+  syncInputModePanels();
+}
+
+queueMicrotask(() => {
+  if (!IS_DEV_BUILD && loadAudioSettings().vadEngine === 'silero') {
+    saveAudioSettings({ vadEngine: 'energy' });
+    sendToBackground('updateSettings', { vadEngine: 'energy' });
+  }
+  loadPersistedAudioSettings();
+  if (shouldRunMicMonitor((document.getElementById('input-mode') as HTMLSelectElement).value)) {
+    sendToBackground('ensureMicMonitor', {});
+  }
+});
+
+vadSensitivityInput.addEventListener('input', () => {
+  const raw = parseInt(vadSensitivityInput.value, 10);
+  vadSensitivityLabel.textContent = String(raw);
+  saveAudioSettings({ vadSensitivity: raw });
+  sendToBackground('updateSettings', { vadSensitivity: raw });
+});
+
+if (vadEngineSelect) {
+  vadEngineSelect.addEventListener('change', () => {
+    const engine = vadEngineSelect.value as 'energy' | 'silero';
+    saveAudioSettings({ vadEngine: engine });
+    sendToBackground('updateSettings', { vadEngine: engine });
+  });
+}
+
+noiseModeSelect.addEventListener('change', () => {
+  const mode = noiseModeSelect.value as 'native' | 'rnnoise';
+  saveAudioSettings({ noiseMode: mode });
+  sendToBackground('updateSettings', { noiseMode: mode });
+});
+
+opusQualitySelect.addEventListener('change', () => {
+  const q = opusQualitySelect.value as 'voice' | 'standard' | 'high';
+  saveAudioSettings({ opusQuality: q });
+  sendToBackground('updateSettings', { opusQuality: q });
+});
+
+btnEchoCancel.addEventListener('click', () => {
+  const on = !btnEchoCancel.classList.contains('active');
+  syncToggleBtn(btnEchoCancel, on);
+  saveAudioSettings({ echoCancellation: on });
+  sendToBackground('updateSettings', { echoCancellation: on });
+});
+
+btnAutoGain.addEventListener('click', () => {
+  const on = !btnAutoGain.classList.contains('active');
+  syncToggleBtn(btnAutoGain, on);
+  saveAudioSettings({ autoGainControl: on });
+  sendToBackground('updateSettings', { autoGainControl: on });
+});
+
+btnBrowserNs.addEventListener('click', () => {
+  const on = !btnBrowserNs.classList.contains('active');
+  syncToggleBtn(btnBrowserNs, on);
+  saveAudioSettings({ noiseSuppression: on });
+  sendToBackground('updateSettings', { noiseSuppression: on });
+});
+
 volumeInput.addEventListener('input', () => {
   const raw = parseInt(volumeInput.value);
   volumeLabel.textContent = String(raw);
-  sendToBackground('updateSettings', { inputVolume: raw / 100 });
+  const vol = raw / 100;
+  saveAudioSettings({ inputVolume: vol });
+  sendToBackground('updateSettings', { inputVolume: vol });
 });
 
-const scanRateInput = document.getElementById('input-scan-rate') as HTMLInputElement;
-const scanRateLabel = document.getElementById('scan-rate-label')!;
-scanRateInput.addEventListener('input', () => {
-  const raw = parseInt(scanRateInput.value);
-  scanRateLabel.textContent = String(raw);
-  // Map 0-100 → 1-60 FPS for backend scan rate (default 50 → 30 FPS)
-  const fps = Math.max(1, Math.round(1 + (raw / 100) * 59));
-  sendToBackground('setScanRate', { fps });
-});
+const scanRateInput = IS_DEV_BUILD
+  ? document.getElementById('input-scan-rate') as HTMLInputElement
+  : null;
+const scanRateLabel = IS_DEV_BUILD
+  ? document.getElementById('scan-rate-label')!
+  : null;
+if (scanRateInput && scanRateLabel) {
+  scanRateInput.addEventListener('input', () => {
+    const raw = parseInt(scanRateInput.value);
+    scanRateLabel.textContent = String(raw);
+    const fps = Math.max(1, Math.round(1 + (raw / 100) * 59));
+    sendToBackground('setScanRate', { fps });
+  });
+}
 
 function sendToBackground(action: string, payload: any): void {
   // In Tauri, both background and overlay run in the same WebView,
@@ -435,6 +510,7 @@ const playerRows: Map<string, {
   indicator: HTMLElement | null;
   volSlider: HTMLInputElement;
   muteBtn: HTMLButtonElement;
+  speakingDot: HTMLElement;
 }> = new Map();
 
 // Track whether a player slider is being actively dragged
@@ -444,6 +520,11 @@ function createPlayerRow(peer: NearbyPeer, localTeam: 'ORDER' | 'CHAOS' | null |
   const row = document.createElement('div');
   const isAlly = localTeam ? peer.team === localTeam : peer.team === 'ORDER';
   row.className = 'player-row ' + (isAlly ? 'ally' : 'enemy');
+  if (peer.isSpeaking) row.classList.add('speaking');
+
+  const speakingDot = document.createElement('span');
+  speakingDot.className = 'player-speaking-dot';
+  row.appendChild(speakingDot);
 
   const nameSpan = document.createElement('span');
   nameSpan.className = 'player-name';
@@ -473,6 +554,7 @@ function createPlayerRow(peer: NearbyPeer, localTeam: 'ORDER' | 'CHAOS' | null |
   volSlider.addEventListener('input', () => {
     const vol = parseInt(volSlider.value) / 100;
     playerVolumes.set(peer.summonerName, vol);
+    saveAudioSettings({ playerVolumes: Object.fromEntries(playerVolumes) });
     sendToBackground('setPlayerVolume', { name: peer.summonerName, volume: vol });
   });
   row.appendChild(volSlider);
@@ -491,7 +573,7 @@ function createPlayerRow(peer: NearbyPeer, localTeam: 'ORDER' | 'CHAOS' | null |
   });
   row.appendChild(muteBtn);
 
-  playerRows.set(peer.summonerName, { row, nameSpan, indicator, volSlider, muteBtn });
+  playerRows.set(peer.summonerName, { row, nameSpan, indicator, volSlider, muteBtn, speakingDot });
   return row;
 }
 
@@ -499,6 +581,7 @@ function updatePlayerRow(peer: NearbyPeer): void {
   const entry = playerRows.get(peer.summonerName);
   if (!entry) return;
 
+  entry.row.classList.toggle('speaking', !!peer.isSpeaking);
   // Update indicator
   if (peer.isDead) {
     entry.indicator!.textContent = 'DEAD';
@@ -524,11 +607,31 @@ function updatePlayerRow(peer: NearbyPeer): void {
   entry.muteBtn.textContent = isMuted ? 'MUTED' : 'MUTE';
 }
 
+function updateTransmitStatus(state: OverlayState): void {
+  transmitStatus.classList.remove('live', 'muted', 'standby');
+  if (state.selfMuted) {
+    transmitStatus.classList.add('muted');
+    transmitLabel.textContent = 'MUTED';
+    return;
+  }
+  if (state.micTransmitting) {
+    transmitStatus.classList.add('live');
+    transmitLabel.textContent = 'LIVE';
+    return;
+  }
+  transmitStatus.classList.add('standby');
+  transmitLabel.textContent = 'IDLE';
+}
+
 // --- Render state ---
 function renderState(state: OverlayState): void {
-  // Color-only mute indication (see the click handlers) — label stays static.
-  btnSelfMute.classList.toggle('active', state.selfMuted);
-  btnMuteAll.classList.toggle('active', state.muteAll);
+  updateTransmitStatus(state);
+
+  if (state.micLevel !== undefined && micMeterFill) {
+    const pct = Math.round(Math.min(1, state.micLevel) * 100);
+    micMeterFill.style.width = pct + '%';
+    micMeterFill.classList.toggle('transmitting', !!state.micTransmitting);
+  }
 
   // Sort: allies first, then by champion name
   const localTeam = state.localTeam ?? null;
@@ -598,18 +701,20 @@ function renderState(state: OverlayState): void {
     emptyState.remove();
   }
 
-  // Debug info: tracking state + position (only when debug enabled)
-  const dbgEl = document.getElementById('debug-info')!;
-  if (debugEnabled && (state.trackingState || state.lastPosition)) {
-    const parts: string[] = [];
-    if (state.trackingState) parts.push('tracking: ' + state.trackingState);
-    if (state.lastPosition) {
-      parts.push('pos: (' + Math.round(state.lastPosition.x) + ',' + Math.round(state.lastPosition.y) + ')');
+  // Debug info (dev builds only)
+  if (IS_DEV_BUILD && debugEnabled) {
+    const dbgEl = document.getElementById('debug-info');
+    if (dbgEl && (state.trackingState || state.lastPosition)) {
+      const parts: string[] = [];
+      if (state.trackingState) parts.push('tracking: ' + state.trackingState);
+      if (state.lastPosition) {
+        parts.push('pos: (' + Math.round(state.lastPosition.x) + ',' + Math.round(state.lastPosition.y) + ')');
+      }
+      dbgEl.textContent = parts.join(' | ');
+      dbgEl.classList.remove('hidden');
+    } else if (dbgEl) {
+      dbgEl.classList.add('hidden');
     }
-    dbgEl.textContent = parts.join(' | ');
-    dbgEl.classList.remove('hidden');
-  } else {
-    dbgEl.classList.add('hidden');
   }
 }
 

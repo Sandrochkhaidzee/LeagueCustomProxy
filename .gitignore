@@ -20,6 +20,12 @@ models/*.pt
 # Rust/Tauri build artifacts
 src-tauri/target/
 
+# Server build output
+server/dist/
+
+# Webpack filesystem cache
+node_modules/.cache/
+
 # Distribution build (local only)
 release/
 

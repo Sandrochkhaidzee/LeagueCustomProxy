@@ -37,8 +37,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const VK_CAPITAL: u32 = 0x14;
 
-/// Currently-bound PTT virtual-key code. Default = Caps Lock.
-static PTT_VK: AtomicU32 = AtomicU32::new(VK_CAPITAL);
+/// Currently-bound PTT virtual-key code. 0 = unbound.
+static PTT_VK: AtomicU32 = AtomicU32::new(0);
 
 /// Currently-bound toggle-self-mute virtual-key code. 0 = unbound.
 static TOGGLE_VK: AtomicU32 = AtomicU32::new(0);
@@ -188,7 +188,7 @@ pub fn setup_hook(app: AppHandle) {
     });
 }
 
-/// JS-callable: rebind the PTT key by Win32 virtual-key code.
+/// JS-callable: rebind the PTT key by Win32 virtual-key code. Pass 0 to unbind.
 #[tauri::command]
 pub fn set_ptt_key(vk: u32) {
     PTT_VK.store(vk, Ordering::Relaxed);

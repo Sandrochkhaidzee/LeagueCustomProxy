@@ -2,93 +2,159 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>LoLProxChat</title>
+  <title>LeagueProxy</title>
   <link rel="stylesheet" href="overlay.css">
 </head>
 <body>
-  <!-- Panel window. Scanner/calibration region lives in a separate Tauri window. -->
   <div id="panel" class="panel">
     <div id="drag-handle" class="widget-header" data-tauri-drag-region>
-      <span class="widget-title" data-tauri-drag-region>LoLProxChat</span>
+      <div class="header-left" data-tauri-drag-region>
+        <span class="widget-title" data-tauri-drag-region>LeagueProxy</span>
+        <div id="transmit-status" class="transmit-status" title="LIVE = your voice is detected (or PTT key held). IDLE = not talking. MUTED = you muted yourself.">
+          <span id="transmit-dot" class="transmit-dot"></span>
+          <span id="transmit-label" class="transmit-label">IDLE</span>
+        </div>
+      </div>
       <div class="header-controls">
-        <button id="btn-self-mute" class="icon-btn" title="Toggle Self Mute">MIC</button>
-        <button id="btn-mute-all" class="icon-btn" title="Mute All">VOL</button>
-        <button id="btn-settings" class="icon-btn" title="Settings">SET</button>
-        <button id="btn-collapse" class="icon-btn" title="Collapse">&raquo;</button>
+        <button id="btn-settings" class="icon-btn icon-btn-svg" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66Z"/></svg>
+        </button>
+        <button id="btn-close" class="icon-btn icon-btn-svg icon-btn-close" title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
       </div>
     </div>
     <div id="player-list" class="player-list">
       <div class="empty-state">Waiting for nearby players...</div>
     </div>
     <div id="settings-panel" class="settings-panel hidden">
-      <div class="setting-row">
-        <label>Input Device</label>
-        <select id="input-device">
-          <option value="">Default</option>
-        </select>
-      </div>
-      <div class="setting-row">
-        <label>Output Device</label>
-        <select id="output-device">
-          <option value="">Default</option>
-        </select>
-      </div>
-      <div class="setting-row">
-        <label>Input Mode</label>
-        <select id="input-mode">
-          <option value="always">Always Open</option>
-          <option value="ptt">Push to Talk</option>
-        </select>
-      </div>
-      <div class="setting-row">
-        <label title="Push-to-talk key. Default Caps Lock. The LED won't toggle (Discord-style synthetic flip-back).">PTT Key</label>
-        <button id="btn-bind-ptt" class="icon-btn">Caps Lock</button>
-      </div>
-      <div class="setting-row">
-        <label title="Optional toggle-self-mute hotkey. Click to bind a key; click again to clear.">Toggle-mute Key</label>
-        <button id="btn-bind-toggle" class="icon-btn">(unbound)</button>
-      </div>
-      <div class="setting-row">
-        <label>Mic Volume</label>
-        <div class="setting-value-group">
-          <input id="input-volume" type="range" min="0" max="100" value="100">
-          <span id="volume-label" class="setting-value-label">100</span>
+      <details class="settings-category" open>
+        <summary class="settings-category-header">Input</summary>
+        <div class="settings-category-body">
+          <div class="setting-row">
+            <label title="Which microphone the app listens to.">Input Device</label>
+            <select id="input-device"><option value="">Default</option></select>
+          </div>
+          <div class="setting-row">
+            <label title="Always Open = mic always on. Push to Talk = hold a key to talk. Voice Activation = mic turns on when you speak.">Input Mode</label>
+            <select id="input-mode">
+              <option value="always">Always Open</option>
+              <option value="ptt">Push to Talk</option>
+              <option value="vad" selected>Voice Activation</option>
+            </select>
+          </div>
+          <div id="vad-settings" class="vad-settings hidden">
+            <div class="setting-row">
+              <label title="How easily the mic turns on when you speak. Higher = picks up quieter talking.">VAD Sensitivity</label>
+              <div class="setting-value-group">
+                <input id="vad-sensitivity" type="range" min="0" max="100" value="50">
+                <span id="vad-sensitivity-label" class="setting-value-label">50</span>
+              </div>
+            </div>
+            <div class="setting-row">
+              <label title="Live bar showing how loud your mic hears you right now.">Mic Level</label>
+              <div id="mic-meter" class="mic-meter"><div id="mic-meter-fill" class="mic-meter-fill"></div></div>
+            </div>
+            <div class="setting-row dev-only">
+              <label title="Energy reacts fast. Silero is smarter at telling speech from noise but uses more computer power.">VAD Engine</label>
+              <select id="vad-engine">
+                <option value="energy">Energy</option>
+                <option value="silero">Silero (ML)</option>
+              </select>
+            </div>
+          </div>
+          <div id="ptt-settings" class="hidden">
+            <div class="setting-row">
+              <label title="Hold this key while you want to talk. Click to change it; press Backspace to remove it.">PTT Key</label>
+              <button id="btn-bind-ptt" class="icon-btn">(unbound)</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <label title="How loud your voice is when sent to other players.">Mic Volume</label>
+            <div class="setting-value-group">
+              <input id="input-volume" type="range" min="0" max="100" value="100">
+              <span id="volume-label" class="setting-value-label">100</span>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="setting-row">
-        <label title="Routes all voice through the TURN relay so peers never see your public IP. Adds ~20-100ms latency. Takes effect on next peer connection.">Hide IP (Force TURN)</label>
-        <button id="btn-force-turn" class="icon-btn">OFF</button>
-      </div>
-      <div class="setting-row">
-        <label title="When ON, teammates fade with distance just like enemies. When OFF (default), teammates are always at full volume. Takes effect on the next position update.">Ally proximity</label>
-        <button id="btn-ally-proximity" class="icon-btn">OFF</button>
-      </div>
-      <div class="setting-row">
-        <label>Debug</label>
-        <button id="btn-debug" class="icon-btn">OFF</button>
-      </div>
-      <div class="setting-row">
-        <label>Debug Logs</label>
-        <button id="btn-open-logs" class="icon-btn" title="Open log folder to attach to a GitHub issue">OPEN</button>
-      </div>
-      <div class="setting-row">
-        <label>Auto-update</label>
-        <button id="btn-autoupdate" class="icon-btn">OFF</button>
-      </div>
-      <div class="setting-row">
-        <label>Updates</label>
-        <button id="btn-check-update" class="icon-btn">CHECK</button>
-      </div>
-      <div id="update-status" style="font-size:10px;color:#8892a8;padding:4px 0;text-align:center;"></div>
-      <div id="scan-rate-row" class="setting-row hidden">
-        <label>Scan Rate</label>
-        <div class="setting-value-group">
-          <input id="input-scan-rate" type="range" min="0" max="100" value="50">
-          <span id="scan-rate-label" class="setting-value-label">50</span>
+      </details>
+
+      <details class="settings-category">
+        <summary class="settings-category-header">Output</summary>
+        <div class="settings-category-body">
+          <div class="setting-row">
+            <label title="Which speakers or headphones play other players' voices.">Output Device</label>
+            <select id="output-device"><option value="">Default</option></select>
+          </div>
+          <div class="setting-row">
+            <label title="How clear voice sounds for others. Higher uses more internet; Standard is fine for most people.">Voice Quality</label>
+            <select id="opus-quality">
+              <option value="voice">Low (32 kbps)</option>
+              <option value="standard">Standard (64 kbps)</option>
+              <option value="high">High (128 kbps)</option>
+            </select>
+          </div>
         </div>
-      </div>
-      <div id="debug-info" class="hidden" style="font-size:10px;color:#555;padding:4px 0;text-align:center;"></div>
-      <img id="debug-filter-thumb" class="hidden" alt="HSV-filtered minimap preview" />
+      </details>
+
+      <details class="settings-category">
+        <summary class="settings-category-header">Audio Processing</summary>
+        <div class="settings-category-body">
+          <div class="setting-row">
+            <label title="Cuts background noise like fans or keyboard. RNNoise is stronger; Native is lighter on your PC.">Noise Suppression</label>
+            <select id="noise-mode">
+              <option value="native">Native (browser)</option>
+              <option value="rnnoise">RNNoise</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label title="Stops game or speaker sound from bouncing back into your mic.">Echo Cancel</label>
+            <button id="btn-echo-cancel" class="icon-btn">ON</button>
+          </div>
+          <div class="setting-row">
+            <label title="Automatically boosts a quiet mic and lowers a loud one so your volume stays even.">Auto Gain</label>
+            <button id="btn-auto-gain" class="icon-btn">ON</button>
+          </div>
+          <div class="setting-row">
+            <label title="Extra built-in noise filtering from the browser. Separate from the Noise Suppression option above.">Browser NS</label>
+            <button id="btn-browser-ns" class="icon-btn">ON</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-category dev-only">
+        <summary class="settings-category-header">Debug</summary>
+        <div class="settings-category-body">
+          <div class="setting-row">
+            <label title="Shows extra on-screen info for troubleshooting. Leave off during normal play.">Debug</label>
+            <button id="btn-debug" class="icon-btn">OFF</button>
+          </div>
+          <div class="setting-row">
+            <label title="Opens the folder where the app saves error logs, for bug reports.">Debug Logs</label>
+            <button id="btn-open-logs" class="icon-btn" title="Open the folder with saved log files">OPEN</button>
+          </div>
+          <div id="scan-rate-row" class="setting-row hidden">
+            <label title="How often the minimap is scanned. Higher is smoother but uses more CPU.">Scan Rate</label>
+            <div class="setting-value-group">
+              <input id="input-scan-rate" type="range" min="0" max="100" value="50">
+              <span id="scan-rate-label" class="setting-value-label">50</span>
+            </div>
+          </div>
+          <div id="debug-info" class="hidden" style="font-size:10px;color:#555;padding:4px 0;text-align:center;"></div>
+          <img id="debug-filter-thumb" class="hidden" alt="HSV-filtered minimap preview" />
+        </div>
+      </details>
+
+      <details class="settings-category">
+        <summary class="settings-category-header">Updates</summary>
+        <div class="settings-category-body">
+          <div class="setting-row">
+            <label title="Search for a newer version of the app right now.">Check for Updates</label>
+            <button id="btn-check-update" class="icon-btn">CHECK</button>
+          </div>
+          <div id="update-status" class="update-status"></div>
+        </div>
+      </details>
     </div>
   </div>
   <script src="../background/background.js"></script>

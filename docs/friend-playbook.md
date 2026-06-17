@@ -5,27 +5,28 @@ Proximity voice for custom 5v5 games. Hear teammates at full volume; enemies onl
 ## Safety rules
 
 - **Custom games with our group only** — not ranked, not random queue
-- Download the exe **only** from our Discord pin — never random links
+- Download the exe **only** from [GitHub Releases](https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases) or our Discord pin
 - Verify the SHA-256 hash before first launch (posted with each release)
 - League must be in **Borderless** window mode (Settings → Video)
 - Do not use in Korea (Riot LCU restrictions)
 
-## Current build (verify before distributing)
+## Current release
 
 ```
-SHA-256: C959488989D7B800C7D5D17193953904B8AF41743F6C02BEB97ADBEA2B5D25A4
-File:    release\leagueproxy.exe
+File:    leagueproxy.exe
+Version: 1.0.0
 Server:  http://26.36.227.156:3100 (Radmin — host runs start-server.bat)
-Version: 0.1.0-beta.1
 ```
+
+SHA-256 is posted on each [GitHub Release](https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases).
 
 ## One-time setup (each player)
 
 1. Windows 10/11 with WebView2 (ships with Windows 11)
-2. Download **`leagueproxy.exe`** from GitHub Releases (see README)
+2. Download **`leagueproxy.exe`** from GitHub Releases
 3. Verify hash in PowerShell:
    ```powershell
-   Get-FileHash .\lolproxchat.exe -Algorithm SHA256
+   Get-FileHash .\leagueproxy.exe -Algorithm SHA256
    ```
 4. First launch: SmartScreen may warn — **More info → Run anyway** (unsigned hobby build)
 5. Allow microphone access when prompted
@@ -40,10 +41,7 @@ Version: 0.1.0-beta.1
    - **MIC** = self-mute
    - **VOL** = mute everyone
    - Per-row mute for individual players
-
-## Optional privacy
-
-**Settings → Hide IP (Force TURN)** — routes voice through a relay so other players cannot see your public IP. Adds slight latency; optional for trusted friend lobbies.
+   - Default input mode is **Voice Activation** (speak to transmit)
 
 ## Radmin VPN setup (recommended for friends — no VPS needed)
 
@@ -53,8 +51,8 @@ Radmin VPN gives your group a **private virtual LAN** (e.g. `26.x.x.x` addresses
 flowchart LR
     subgraph radmin [Radmin VPN Network]
         Host[Host PC runs signaling server :3100]
-        F1[Friend 1 + lolproxchat.exe]
-        F2[Friend 2 + lolproxchat.exe]
+        F1[Friend 1 + leagueproxy.exe]
+        F2[Friend 2 + leagueproxy.exe]
         F10[... up to 10 players]
     end
 
@@ -66,7 +64,7 @@ flowchart LR
 
 ### What Radmin VPN does vs. does not do
 
-| | Radmin VPN | lolproxchat.exe |
+| | Radmin VPN | leagueproxy.exe |
 |--|------------|-----------------|
 | Private network between friends | Yes | No |
 | Match room + proximity volume math | No | Needs signaling server |
@@ -83,48 +81,50 @@ flowchart LR
 
 **2. Host runs the signaling server** (pick one friend with a stable PC — usually you)
 
-```powershell
-cd c:\Users\PC\OneDrive\Desktop\LeagueProxy\server
-npm install
-npm run build
-# No Cloudflare TURN needed on VPN — voice goes direct over Radmin LAN
-$env:PORT=3100; npm start
+```bat
+scripts\start-server.bat
 ```
 
-Or with Docker (if installed): `docker compose -f docker-compose.proxchat.yml up -d`
+Or manually:
+
+```powershell
+cd server
+npm install
+npm run build
+$env:PORT=3100; npm start
+```
 
 **3. Note the host's Radmin IP**
 
 In Radmin VPN, click your network → find your IP (looks like `26.12.34.56`).
 
-**4. Rebuild the client pointed at the VPN host**
+**4. Rebuild the client pointed at the VPN host** (host only)
 
 Edit `.env`:
 
 ```
-PROXCHAT_SERVER=http://26.36.227.156:3100
+PROXCHAT_SERVER=http://YOUR_RADMIN_IP:3100
 ```
 
-Rebuild with `scripts\build-client.bat` and distribute the new exe to all friends.
+Rebuild with `scripts\build-client.bat` and distribute the new exe to all friends — or publish a GitHub release.
 
 **5. Windows Firewall** on the host: allow inbound **TCP port 3100** (Node signaling server).
 
 ### Every game night with Radmin
 
 1. Everyone connects to the **Radmin VPN network** first
-2. Host starts the signaling server (`npm start` in `server/`)
-3. Everyone launches `lolproxchat.exe` and plays custom 5v5 as usual
+2. Host starts the signaling server (`scripts\start-server.bat`)
+3. Everyone launches `leagueproxy.exe` and plays custom 5v5 as usual
 
 ### Why this is a good fit
 
 - **No VPS cost** — server runs on your PC
 - **Private** — only VPN members can reach your server; you control position data
 - **Better voice** — WebRTC often connects **directly over Radmin IPs**, no internet TURN relay needed
-- **Hide IP setting** — less important on Radmin; peers already see VPN IPs, not home public IPs
 
 ### If you skip self-hosting
 
-This build always uses the host server at **`http://26.36.227.156:3100`** (Radmin). The host must run `start-server.bat` during every session.
+This build uses the host server at **`http://26.36.227.156:3100`** (Radmin). The host must run `start-server.bat` during every session.
 
 ## Troubleshooting
 
@@ -134,11 +134,11 @@ This build always uses the host server at **`http://26.36.227.156:3100`** (Radmi
 | No peers in list | All players need the app running; wait ~10 seconds after load-in |
 | Overlay missing | Switch League to **Borderless** (not Fullscreen) |
 | No voice | Check mic permissions; confirm peers show in panel |
-| Can't reach server on Radmin | Host running `npm start`? Firewall allows port 3100? Everyone on same Radmin network? |
+| Can't reach server on Radmin | Host running `start-server.bat`? Firewall allows port 3100? Everyone on same Radmin network? |
 | Vanguard concern | App uses Riot-approved APIs only — no memory reads or injection |
 
 ## Build location (host only)
 
-Distribute: `release\leagueproxy.exe` (or GitHub Releases asset)
+Distribute: `release\leagueproxy.exe` or GitHub Releases.
 
-Rebuild: `scripts\build-client.bat` — auto-updater uses [Sandrochkhaidzee/LeagueCustomProxy](https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases).
+Rebuild: `scripts\build-client.bat`. In-app **Check for Updates** pulls from [GitHub Releases](https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases).

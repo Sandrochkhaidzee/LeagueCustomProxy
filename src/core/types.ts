@@ -20,11 +20,23 @@ export interface PeerState {
   isDead: boolean;
 }
 
+export type InputMode = 'always' | 'ptt' | 'vad';
+export type VadEngine = 'energy' | 'silero';
+export type NoiseMode = 'native' | 'rnnoise';
+export type OpusQuality = 'voice' | 'standard' | 'high';
+
 export interface AudioSettings {
-  inputMode: 'ptt' | 'always';
+  inputMode: InputMode;
   inputVolume: number;       // 0.0 - 1.0
-  pttKey: string;
   playerVolumes: Record<string, number>; // summonerName -> 0.0-1.0
+  vadSensitivity: number;    // 0–100
+  vadHangoverMs: number;
+  vadEngine: VadEngine;
+  noiseMode: NoiseMode;
+  opusQuality: OpusQuality;
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
 }
 
 export type MapType = 'summoners_rift' | 'howling_abyss' | 'unknown';

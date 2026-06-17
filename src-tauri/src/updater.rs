@@ -38,6 +38,12 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
         .map_err(|e| format!("HTTP error: {}", e))?;
 
     if !resp.status().is_success() {
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(
+                "No GitHub release published yet — create a release with leagueproxy.exe attached"
+                    .into(),
+            );
+        }
         return Err(format!("GitHub returned {}", resp.status()));
     }
 

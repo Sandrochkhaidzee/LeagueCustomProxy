@@ -23,6 +23,11 @@ fn append_log(state: tauri::State<LogFile>, line: String) {
     write_log_line(&state, line);
 }
 
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 /// Open the directory that holds the rolling debug log in Explorer so the
 /// user can grab the file and attach it to a GitHub issue.
 #[tauri::command]
@@ -265,6 +270,7 @@ fn main() {
             resize_overlay,
             append_log,
             open_log_folder,
+            exit_app,
             updater::check_for_update,
             updater::download_and_apply_update,
             global_keys::set_ptt_key,

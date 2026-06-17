@@ -5,7 +5,6 @@ setLoggingEnabled(false);
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Orchestrator } from '../services/orchestrator';
-import { isAutoUpdateEnabled } from '../services/updater';
 import '../core/window-globals';
 
 console.log('[LoLProxChat] Background script loading...');
@@ -73,6 +72,10 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
       invoke('open_log_folder')
         .catch((e) => console.warn('[LoLProxChat] open_log_folder failed:', e));
       break;
+    case 'ensureMicMonitor':
+      orchestrator.ensureMicMonitor()
+        .catch((e) => console.warn('[LoLProxChat] ensureMicMonitor failed:', e));
+      break;
   }
 }) as EventListener);
 
@@ -93,14 +96,3 @@ listen<string>('global_shortcut', (event) => {
 }).catch((e) => console.warn('[LoLProxChat] global_shortcut listen failed:', e));
 
 console.log('LoLProxChat background service started');
-
-// Auto-check for updates on launch if user has opted in. Runs after a short
-// delay so the overlay's check-update handler has a chance to register.
-if (isAutoUpdateEnabled()) {
-  setTimeout(() => {
-    const runCheck = window.__proxchatRunUpdateCheck;
-    if (typeof runCheck === 'function') {
-      runCheck(false);
-    }
-  }, 5000);
-}

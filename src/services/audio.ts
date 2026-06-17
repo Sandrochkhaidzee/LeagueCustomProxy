@@ -1,23 +1,28 @@
 import { PeerConnection } from './peer-connection';
 import { SignalingService, SignalMessage } from './signaling';
-import { AudioSettings } from '../core/types';
-import { getStoredInputDeviceId, getStoredOutputDeviceId } from './devices';
+import { AudioSettings, InputMode } from '../core/types';
+import { getStoredInputDeviceId, getStoredOutputDeviceId, getCaptureConstraints } from './devices';
+import { loadAudioSettings, saveAudioSettings, savePlayerVolume } from './audio-prefs';
+import { AudioWorkletHost } from './audio-worklet/host';
+import { SileroVadService } from './audio-worklet/silero-vad';
 
-function peakRms(buf: Float32Array): number {
-  let sumSq = 0;
-  for (let i = 0; i < buf.length; i++) {
-    sumSq += buf[i] * buf[i];
-  }
-  return Math.sqrt(sumSq / buf.length);
-}
+const DEFAULT_SETTINGS: AudioSettings = {
+  inputMode: 'vad',
+  inputVolume: 1.0,
+  playerVolumes: {},
+  vadSensitivity: 50,
+  vadHangoverMs: 300,
+  vadEngine: 'energy',
+  noiseMode: 'native',
+  opusQuality: 'standard',
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
 
 /**
  * Compute the per-peer audio gain by combining the server-returned proximity
- * volume with the user's per-player slider preference. Exported so the
- * slider-fix logic (issue #7) can be unit-tested without spinning up
- * AudioService + its PeerConnection / WebAudio dependencies.
- *
- * Both inputs are clamped to [0, 1] defensively. The output is their product.
+ * volume with the user's per-player slider preference.
  */
 export function computeFinalPeerVolume(proximityVol: number, sliderVol: number): number {
   const p = Math.max(0, Math.min(1, proximityVol));
@@ -25,22 +30,6 @@ export function computeFinalPeerVolume(proximityVol: number, sliderVol: number):
   return p * s;
 }
 
-/**
- * Resolve a target proximity volume for every peer that needs one: the union
- * of peers present in the server response and currently-connected peers.
- *
- * Connected peers that are ABSENT from the response are silenced (0). The
- * v0.3 server omits peers it filtered out (cross-team beyond the hearing cap,
- * or stale position) from the response entirely, so a missing entry means
- * "not audible" — NOT "leave unchanged". Without this, a peer once heard
- * within range stays stuck at its last gain forever after moving out of
- * range (the "enemy hears me no matter where on the map" bug: the server
- * correctly drops them, the client failed to act on the absence). In v0.2
- * the server always included far peers at volume 0, so the client never had
- * to handle absence.
- *
- * Exported for unit testing without AudioService's WebAudio dependencies.
- */
 export function resolveProximityTargets(
   responseVolumes: Record<string, number>,
   connectedPeerNames: Iterable<string>,
@@ -53,6 +42,12 @@ export function resolveProximityTargets(
   return out;
 }
 
+export type OverlayAudioState = {
+  micLevel: number;
+  micTransmitting: boolean;
+  speakingPeers: Record<string, boolean>;
+};
+
 export class AudioService {
   private localStream: MediaStream | null = null;
   private peers: Map<string, PeerConnection> = new Map();
@@ -61,43 +56,73 @@ export class AudioService {
   private selfMuted = false;
   private muteAll = false;
   private mutedPlayers: Set<string> = new Set();
-  // Track last reported volume state per peer so we only log transitions
   private lastAppliedVolume: Map<string, string> = new Map();
-  // Last proximity volume the server returned for each peer. Used by
-  // setPlayerVolume so the slider applies on top of real distance, not a
-  // hardcoded 1.0. Updated on every applyPeerVolumes tick.
   private lastProximityVolumes: Map<string, number> = new Map();
-  // Throttling state for the verbose applyPeerVolumes snapshot log
+  private silenceStreak: Map<string, number> = new Map();
   private lastVolumeLogLine = '';
   private lastVolumeLogMs = 0;
-  private settings: AudioSettings = {
-    // Always-open by default; PTT (F8 hold) available in Settings.
-    inputMode: 'always',
-    inputVolume: 1.0,
-    pttKey: 'V',
-    playerVolumes: {},
-  };
+  private settings: AudioSettings = { ...DEFAULT_SETTINGS, ...loadAudioSettings() };
 
-  // Audio processing state
   private audioContext: AudioContext | null = null;
-  private gainNode: GainNode | null = null;
+  private workletHost: AudioWorkletHost | null = null;
+  private destination: MediaStreamAudioDestinationNode | null = null;
   private outputStream: MediaStream | null = null;
-  // Held so we can swap it when the user picks a different input device at
-  // runtime without renegotiating WebRTC (the destination MediaStream that
-  // PeerConnections received stays the same).
   private micSource: MediaStreamAudioSourceNode | null = null;
 
-  // Guard against concurrent connectToPeer calls for the same peer
   private connectingPeers: Set<string> = new Set();
-  // Buffer signals that arrive before the peer connection is created
   private pendingSignals: Map<string, SignalMessage[]> = new Map();
 
-  // PTT state
   private pttHeld = false;
+  private speechActive = false;
+  private sileroVad: SileroVadService | null = null;
+  private sileroFailed = false;
+
+  private micLevel = 0;
+  private lastMicLogMs = 0;
+  private remoteSpeaking: Map<string, boolean> = new Map();
+  private overlayAudioCallback: ((state: OverlayAudioState) => void) | null = null;
 
   constructor(signaling: SignalingService, localName: string) {
     this.signaling = signaling;
     this.localName = localName;
+    PeerConnection.setGlobalOpusQuality(this.settings.opusQuality, this.settings.inputMode);
+  }
+
+  setOverlayAudioCallback(cb: ((state: OverlayAudioState) => void) | null): void {
+    this.overlayAudioCallback = cb;
+    this.emitOverlayAudioState();
+  }
+
+  private emitOverlayAudioState(): void {
+    if (!this.overlayAudioCallback) return;
+    this.overlayAudioCallback(this.getOverlaySnapshot());
+  }
+
+  /** Current mic meter / transmit state for overlay (no stale cache). */
+  getOverlaySnapshot(): OverlayAudioState {
+    const speakingPeers: Record<string, boolean> = {};
+    for (const [name, speaking] of this.remoteSpeaking) {
+      if (speaking) speakingPeers[name] = true;
+    }
+    return {
+      micLevel: this.micLevel,
+      micTransmitting: this.isTransmitIndicatorLive(),
+      speakingPeers,
+    };
+  }
+
+  getInputMode(): InputMode {
+    return this.settings.inputMode;
+  }
+
+  /** Header LIVE/IDLE — voice activity for VAD & Always Open; key held for PTT. */
+  private isTransmitIndicatorLive(): boolean {
+    if (this.selfMuted) return false;
+    if (this.settings.inputMode === 'ptt') return this.pttHeld;
+    if (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always') {
+      return this.speechActive;
+    }
+    return true;
   }
 
   async initMicrophone(): Promise<void> {
@@ -107,76 +132,125 @@ export class AudioService {
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume();
     }
-    // Honor stored output-device pick if AudioContext.setSinkId is available
-    // (Chromium 110+, which WebView2 evergreen ships).
     await this.applyStoredOutputDevice();
 
     this.micSource = this.audioContext.createMediaStreamSource(this.localStream);
-    this.gainNode = this.audioContext.createGain();
-    this.gainNode.gain.value = this.settings.inputVolume;
-    const destination = this.audioContext.createMediaStreamDestination();
+    this.destination = this.audioContext.createMediaStreamDestination();
+    this.workletHost = new AudioWorkletHost();
 
-    // Simple straight-through chain: mic → gain → destination. Noise
-    // suppression is handled by the browser's native DSP (set via the
-    // getUserMedia constraints above) which runs off the JS main thread.
-    this.micSource.connect(this.gainNode);
-    this.gainNode.connect(destination);
-    console.log('[Audio] Using native browser noise suppression');
+    const vadUseEnergy = (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always')
+      && (this.settings.vadEngine === 'energy' || this.sileroFailed);
 
-    this.outputStream = destination.stream;
-    // Apply initial transmit state through the normal path so the first
-    // [Audio] Local mic transmit log line is emitted.
+    await this.workletHost.connect(
+      this.audioContext,
+      this.micSource,
+      this.destination,
+      this.workletCallbacks(),
+    );
+
+    this.applyWorkletConfig(vadUseEnergy);
+    await this.setupSileroIfNeeded();
+
+    this.outputStream = this.destination.stream;
     this.updateLocalTrackState();
 
-    // Attach analysers to monitor whether the mic is actually producing audio
-    // and whether the WebRTC-output stream contains audio. Reported every 2s.
-    this.startAudioLevelMonitor(this.micSource, destination);
+    const nsLabel = this.settings.noiseMode === 'rnnoise' ? 'RNNoise worklet' : 'native browser NS';
+    console.log('[Audio] Mic pipeline ready (' + nsLabel + ')');
   }
 
-  private micLevelAnalyser: AnalyserNode | null = null;
-  private outputLevelAnalyser: AnalyserNode | null = null;
-  private levelMonitorId: number | null = null;
+  private workletCallbacks() {
+    return {
+      onLevel: (rms: number) => this.onWorkletLevel(rms),
+      onSpeechChange: (active: boolean) => this.onEnergySpeechChange(active),
+      onSileroChunk: (chunk: Float32Array) => this.sileroVad?.feedSamples(chunk),
+    };
+  }
 
-  private startAudioLevelMonitor(
-    micSource: MediaStreamAudioSourceNode,
-    outputDest: MediaStreamAudioDestinationNode,
-  ): void {
-    if (!this.audioContext) return;
-    this.micLevelAnalyser = this.audioContext.createAnalyser();
-    this.micLevelAnalyser.fftSize = 1024;
-    micSource.connect(this.micLevelAnalyser);
+  private applyWorkletConfig(vadUseEnergy: boolean): void {
+    const wantsVoiceDetect = this.settings.inputMode === 'vad'
+      || this.settings.inputMode === 'always';
+    const sileroActive = this.settings.inputMode === 'vad'
+      && this.settings.vadEngine === 'silero'
+      && !this.sileroFailed
+      && this.sileroVad !== null;
+    this.workletHost?.setConfig({
+      gain: this.settings.inputVolume,
+      vadEnabled: wantsVoiceDetect && vadUseEnergy,
+      vadSensitivity: this.settings.vadSensitivity,
+      vadHangoverMs: this.settings.vadHangoverMs,
+      rnnoiseEnabled: this.settings.noiseMode === 'rnnoise',
+      sileroFeed: sileroActive,
+    });
+  }
 
-    // The destination node is a sink — to monitor its output we need to
-    // re-source from its stream via a second source node.
-    const outSource = this.audioContext.createMediaStreamSource(outputDest.stream);
-    this.outputLevelAnalyser = this.audioContext.createAnalyser();
-    this.outputLevelAnalyser.fftSize = 1024;
-    outSource.connect(this.outputLevelAnalyser);
+  private async setupSileroIfNeeded(): Promise<void> {
+    this.sileroVad?.stop();
+    this.sileroVad = null;
+    if (this.settings.inputMode !== 'vad' || this.settings.vadEngine !== 'silero' || this.sileroFailed) {
+      return;
+    }
+    this.sileroVad = new SileroVadService();
+    const ok = await this.sileroVad.start(
+      { onSpeechChange: (active) => this.onSileroSpeechChange(active) },
+      this.settings.vadSensitivity,
+    );
+    if (!ok) {
+      this.sileroFailed = true;
+      this.sileroVad = null;
+      this.applyWorkletConfig(true);
+    } else {
+      this.applyWorkletConfig(false);
+    }
+  }
 
-    const micBuf = new Float32Array(this.micLevelAnalyser.fftSize);
-    const outBuf = new Float32Array(this.outputLevelAnalyser.fftSize);
-
-    this.levelMonitorId = window.setInterval(() => {
-      if (!this.micLevelAnalyser || !this.outputLevelAnalyser) return;
-      this.micLevelAnalyser.getFloatTimeDomainData(micBuf);
-      this.outputLevelAnalyser.getFloatTimeDomainData(outBuf);
-      const micPeak = peakRms(micBuf);
-      const outPeak = peakRms(outBuf);
-      const transmitting = !this.selfMuted && this.isTransmitting();
+  private onWorkletLevel(rms: number): void {
+    this.micLevel = Math.min(1, rms * 8);
+    const now = performance.now();
+    if (now - this.lastMicLogMs >= 2000) {
+      this.lastMicLogMs = now;
       console.log(
-        '[Audio] mic=' + micPeak.toFixed(3) +
-        ' out=' + outPeak.toFixed(3) +
-        ' transmit=' + transmitting +
+        '[Audio] mic=' + rms.toFixed(3) +
+        ' transmit=' + this.isTransmitting() +
         ' inputMode=' + this.settings.inputMode +
         ' selfMuted=' + this.selfMuted,
       );
-    }, 2000) as unknown as number;
+    }
+    this.emitOverlayAudioState();
+  }
+
+  private onEnergySpeechChange(active: boolean): void {
+    if (this.settings.inputMode === 'vad'
+      && this.settings.vadEngine === 'silero'
+      && !this.sileroFailed) {
+      return;
+    }
+    if (this.settings.inputMode !== 'vad' && this.settings.inputMode !== 'always') {
+      return;
+    }
+    this.setSpeechActive(active);
+  }
+
+  private onSileroSpeechChange(active: boolean): void {
+    if (this.settings.vadEngine !== 'silero' || this.sileroFailed) return;
+    this.workletHost?.reportExternalSpeech(active);
+    this.setSpeechActive(active);
+  }
+
+  private setSpeechActive(active: boolean): void {
+    if (this.speechActive === active) return;
+    this.speechActive = active;
+    this.updateLocalTrackState();
+  }
+
+  /** Feed Silero from worklet audio chunks. */
+  feedSileroSamples(samples: Float32Array): void {
+    this.sileroVad?.feedSamples(samples, this.audioContext?.sampleRate ?? 48000);
   }
 
   private isTransmitting(): boolean {
     if (this.selfMuted) return false;
     if (this.settings.inputMode === 'ptt') return this.pttHeld;
-    // 'always' (default) — transmit unless muted
+    if (this.settings.inputMode === 'vad') return this.speechActive;
     return true;
   }
 
@@ -195,16 +269,15 @@ export class AudioService {
     }
     if (enabled !== this.lastTrackEnabled) {
       this.lastTrackEnabled = enabled;
-      const reason = this.selfMuted
-        ? 'selfMuted'
-        : this.settings.inputMode === 'ptt'
-          ? 'ptt=' + this.pttHeld
-          : 'always-open';
+      let reason = 'always-open';
+      if (this.selfMuted) reason = 'selfMuted';
+      else if (this.settings.inputMode === 'ptt') reason = 'ptt=' + this.pttHeld;
+      else if (this.settings.inputMode === 'vad') reason = 'vad=' + this.speechActive;
       console.log('[Audio] Local mic transmit → ' + enabled + ' (' + reason + ')');
     }
+    this.emitOverlayAudioState();
   }
 
-  // Connect to a new peer
   async connectToPeer(remoteName: string, isInitiator?: boolean): Promise<void> {
     if (this.peers.has(remoteName) || this.connectingPeers.has(remoteName)) return;
     this.connectingPeers.add(remoteName);
@@ -225,6 +298,13 @@ export class AudioService {
       peer.addLocalStream(this.outputStream);
     }
 
+    if (this.audioContext) {
+      peer.startSpeakingMonitor(this.audioContext, (speaking) => {
+        this.remoteSpeaking.set(remoteName, speaking);
+        this.emitOverlayAudioState();
+      });
+    }
+
     peer.onIceCandidate = (candidate) => {
       this.signaling.sendSignal({
         type: 'ice-candidate',
@@ -234,12 +314,8 @@ export class AudioService {
       });
     };
 
-    // Initiator creates data channel + offer
     const shouldInitiate = isInitiator ?? (this.localName < remoteName);
 
-    // Auto-recover from ICE failure. Only the original initiator re-issues
-    // the offer (with iceRestart=true) so we don't both restart and race.
-    // The other side just handles the incoming offer via the normal flow.
     if (shouldInitiate) {
       peer.onIceFailed = () => {
         peer.createOffer({ iceRestart: true })
@@ -273,7 +349,6 @@ export class AudioService {
       }
     }
 
-    // Flush any signals that arrived before this peer was created
     const pending = this.pendingSignals.get(remoteName);
     if (pending) {
       this.pendingSignals.delete(remoteName);
@@ -284,7 +359,6 @@ export class AudioService {
     }
   }
 
-  // Handle incoming WebRTC signals
   async handleSignal(signal: SignalMessage): Promise<void> {
     console.log('[Audio] Received signal:', signal.type, 'from:', signal.from);
     try {
@@ -292,15 +366,17 @@ export class AudioService {
 
       if (signal.type === 'offer') {
         if (!peer) {
-          // Peer is reaching us first via the signaling channel — orchestrator's
-          // "Peer joined" log only fires once their first position broadcast
-          // arrives, which can be seconds later (or never if they're idle in
-          // base). Log here so the join is always traceable in diagnostics.
           console.log('[Audio] Peer created via incoming offer: ' + signal.from);
           peer = await PeerConnection.create(signal.from);
           void peer.setOutputDevice(getStoredOutputDeviceId());
           this.peers.set(signal.from, peer);
           if (this.outputStream) peer.addLocalStream(this.outputStream);
+          if (this.audioContext) {
+            peer.startSpeakingMonitor(this.audioContext, (speaking) => {
+              this.remoteSpeaking.set(signal.from, speaking);
+              this.emitOverlayAudioState();
+            });
+          }
 
           peer.onIceCandidate = (candidate) => {
             this.signaling.sendSignal({
@@ -323,7 +399,6 @@ export class AudioService {
       } else if (signal.type === 'ice-candidate' && peer) {
         await peer.addIceCandidate(signal.payload);
       } else if (!peer && (signal.type === 'answer' || signal.type === 'ice-candidate')) {
-        // Buffer signals that arrive before the peer connection is created
         let pending = this.pendingSignals.get(signal.from);
         if (!pending) {
           pending = [];
@@ -342,15 +417,12 @@ export class AudioService {
       peer.close();
       this.peers.delete(remoteName);
     }
+    this.remoteSpeaking.delete(remoteName);
+    this.silenceStreak.delete(remoteName);
+    this.emitOverlayAudioState();
   }
 
   applyPeerVolumes(volumes: Record<string, number>): void {
-    // Verbose snapshot of every server-returned per-peer volume. Lets us
-    // distinguish "server said 0 / we played 0" from "server said 0.8 /
-    // EMA stuck near 1" when debugging volume bugs. Already silent unless
-    // Debug is on (console.log is no-op'd by core/logging.ts). Throttled
-    // to ≥1s OR when the summary string changes, so an active session
-    // doesn't drown the log in ~10 lines/sec of identical snapshots.
     const entries = Object.entries(volumes);
     const summary = entries.length
       ? entries.map(([n, v]) => `${n}=${v.toFixed(2)}`).join(' ')
@@ -365,16 +437,24 @@ export class AudioService {
       this.lastVolumeLogMs = now;
     }
 
-    // Process the union of response peers AND connected peers — connected
-    // peers absent from `volumes` are silenced (0), see resolveProximityTargets.
-    const targets = resolveProximityTargets(volumes, this.peers.keys());
+    const raw = resolveProximityTargets(volumes, this.peers.keys());
+    const targets = new Map<string, number>();
+    for (const [name, volume] of raw) {
+      if (volume > 0) {
+        this.silenceStreak.set(name, 0);
+        targets.set(name, volume);
+      } else {
+        const streak = (this.silenceStreak.get(name) ?? 0) + 1;
+        this.silenceStreak.set(name, streak);
+        if (streak >= 2) {
+          targets.set(name, 0);
+        } else {
+          targets.set(name, this.lastProximityVolumes.get(name) ?? 0);
+        }
+      }
+    }
+
     for (const [name, volume] of targets) {
-      // Remember the proximity volume per peer so setPlayerVolume (the
-      // per-row slider in the UI) can recompute finalVol correctly without
-      // waiting for the next position tick. Was using a hardcoded 1.0 which
-      // briefly played peers at full volume regardless of real distance —
-      // caused user-reported "moved the slider and started hearing them"
-      // blip on issue #7.
       this.lastProximityVolumes.set(name, volume);
 
       const peer = this.peers.get(name);
@@ -382,9 +462,6 @@ export class AudioService {
       const playerVolume = this.settings.playerVolumes[name] ?? 1.0;
       const finalVol = computeFinalPeerVolume(volume, playerVolume);
       const wasState = this.lastAppliedVolume.get(name);
-      // Always update volume so it's correct when unmuted. Don't hard-mute on
-      // finalVol === 0 — the smoothed gain ramp handles it without a click,
-      // and it lets brief proximity zeros (CV tracking glitches) fade gracefully.
       peer.setVolume(finalVol);
       const muteNow = this.muteAll || this.mutedPlayers.has(name);
       if (muteNow) {
@@ -392,7 +469,6 @@ export class AudioService {
       } else {
         peer.unmute();
       }
-      // Log audible/silent transitions (skip steady-state to keep noise down)
       const stateNow = muteNow ? 'silent' : finalVol.toFixed(2);
       if (wasState !== stateNow) {
         console.log('[Audio] peer ' + name + ' → ' + stateNow +
@@ -402,7 +478,6 @@ export class AudioService {
     }
   }
 
-  // Mute controls
   toggleSelfMute(): boolean {
     this.setSelfMuted(!this.selfMuted);
     return this.selfMuted;
@@ -450,12 +525,9 @@ export class AudioService {
 
   setPlayerVolume(name: string, volume: number): void {
     this.settings.playerVolumes[name] = Math.max(0, Math.min(1, volume));
+    savePlayerVolume(name, this.settings.playerVolumes[name]);
     const peer = this.peers.get(name);
     if (peer) {
-      // Use the last server-returned proximity volume — NOT a hardcoded 1.0.
-      // The old hardcoded path briefly played the peer at slider-value × 1.0
-      // before the next 100 ms position tick zeroed it out (issue #7
-      // "moved the slider and started hearing them" symptom).
       const proximityVol = this.lastProximityVolumes.get(name) ?? 0;
       peer.setVolume(computeFinalPeerVolume(proximityVol, this.settings.playerVolumes[name]));
     }
@@ -474,47 +546,90 @@ export class AudioService {
   }
 
   updateSettings(settings: Partial<AudioSettings>): void {
+    const prev = { ...this.settings };
     Object.assign(this.settings, settings);
-    this.applyInputVolume();
-    this.updateLocalTrackState();
-  }
+    saveAudioSettings(settings);
 
-  private applyInputVolume(): void {
-    if (this.gainNode) {
-      this.gainNode.gain.value = this.settings.inputVolume;
+    const dspChanged = prev.echoCancellation !== this.settings.echoCancellation
+      || prev.noiseSuppression !== this.settings.noiseSuppression
+      || prev.autoGainControl !== this.settings.autoGainControl
+      || prev.noiseMode !== this.settings.noiseMode;
+
+    const opusChanged = prev.opusQuality !== this.settings.opusQuality
+      || prev.inputMode !== this.settings.inputMode;
+
+    if (opusChanged) {
+      PeerConnection.setGlobalOpusQuality(this.settings.opusQuality, this.settings.inputMode);
     }
+
+    this.applyWorkletConfig(
+      (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always')
+      && (this.settings.vadEngine === 'energy' || this.sileroFailed),
+    );
+
+    if (prev.vadEngine !== this.settings.vadEngine
+      || prev.inputMode !== this.settings.inputMode) {
+      void this.setupSileroIfNeeded();
+    }
+
+    if (dspChanged && this.audioContext) {
+      void this.reacquireMic();
+    } else {
+      this.workletHost?.setGain(this.settings.inputVolume);
+    }
+
+    if (prev.inputMode !== this.settings.inputMode
+      && this.settings.inputMode !== 'vad'
+      && this.settings.inputMode !== 'always') {
+      this.speechActive = false;
+    }
+
+    this.updateLocalTrackState();
   }
 
   private async acquireMicStream(): Promise<MediaStream> {
     const inputId = getStoredInputDeviceId();
-    const constraints: MediaTrackConstraints = {
-      // Native Chromium DSP runs in the audio thread — can't be starved by
-      // our main-thread CV work the way RNNoise's ScriptProcessorNode was.
-      // Quality is the WebRTC NS3 algorithm Discord used pre-Krisp.
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    };
+    const constraints = getCaptureConstraints(this.settings);
     if (inputId) constraints.deviceId = { exact: inputId };
     return navigator.mediaDevices.getUserMedia({ audio: constraints });
+  }
+
+  private async reacquireMic(): Promise<void> {
+    if (!this.audioContext || !this.destination) return;
+    try {
+      const newStream = await this.acquireMicStream();
+      this.micSource?.disconnect();
+      this.localStream?.getTracks().forEach((t) => t.stop());
+      this.localStream = newStream;
+      this.micSource = this.audioContext.createMediaStreamSource(newStream);
+      await this.workletHost?.connect(
+        this.audioContext,
+        this.micSource,
+        this.destination,
+        this.workletCallbacks(),
+      );
+      this.applyWorkletConfig(
+        (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always')
+        && (this.settings.vadEngine === 'energy' || this.sileroFailed),
+      );
+      this.updateLocalTrackState();
+      console.log('[Audio] Mic re-acquired with updated DSP settings');
+    } catch (e) {
+      console.warn('[Audio] reacquireMic failed:', e);
+    }
   }
 
   private async applyStoredOutputDevice(): Promise<void> {
     const outputId = getStoredOutputDeviceId();
     if (!outputId) return;
-    // Playback is element-only, so the output device is applied per peer via
-    // HTMLMediaElement.setSinkId (more widely supported than AudioContext.setSinkId).
     for (const peer of this.peers.values()) {
       await peer.setOutputDevice(outputId);
     }
     console.log('[Audio] Output device applied to', this.peers.size, 'peer(s):', outputId);
   }
 
-  // Re-acquire mic from the new device, swap the source node in place.
-  // outputStream / destination stay the same so peer connections keep
-  // working without renegotiation.
   async applyInputDevice(_id: string | null): Promise<void> {
-    if (!this.audioContext || !this.gainNode) {
+    if (!this.audioContext || !this.destination) {
       console.log('[Audio] applyInputDevice: not initialized yet, will pick up on next session');
       return;
     }
@@ -524,7 +639,16 @@ export class AudioService {
       this.localStream?.getTracks().forEach((t) => t.stop());
       this.localStream = newStream;
       this.micSource = this.audioContext.createMediaStreamSource(newStream);
-      this.micSource.connect(this.gainNode);
+      await this.workletHost?.connect(
+        this.audioContext,
+        this.micSource,
+        this.destination,
+        this.workletCallbacks(),
+      );
+      this.applyWorkletConfig(
+        (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always')
+        && (this.settings.vadEngine === 'energy' || this.sileroFailed),
+      );
       this.updateLocalTrackState();
       console.log('[Audio] Input device switched');
     } catch (e) {
@@ -541,6 +665,10 @@ export class AudioService {
   }
 
   cleanup(): void {
+    this.sileroVad?.stop();
+    this.sileroVad = null;
+    this.workletHost?.destroy();
+    this.workletHost = null;
     for (const [, peer] of this.peers) {
       peer.close();
     }

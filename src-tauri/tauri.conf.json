@@ -1,13 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickvdyck/tauri-settings-schema/refs/heads/main/schemas/2.1.0/schema.json",
   "productName": "LeagueProxy",
-  "version": "0.1.0-beta.1",
-  "identifier": "com.leagueproxy.app",
+  "version": "1.0.0",
+  "identifier": "com.leagueproxy",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:8080",
-    "beforeBuildCommand": "npm run build:prod",
-    "beforeDevCommand": "npm run build"
+    "beforeBuildCommand": "",
+    "beforeDevCommand": "npm run build:dev"
   },
   "app": {
     "windows": [

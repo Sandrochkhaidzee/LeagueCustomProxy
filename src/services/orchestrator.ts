@@ -6,8 +6,7 @@ import { AudioService } from './audio';
 import { TrackingService, TrackingState } from './tracking';
 import { ChampionClassifier } from './champion-classifier';
 import { VolumeClient } from './volume-client';
-import { getAllyProximity } from './audio-prefs';
-import { PeerState } from '../core/types';
+import { PeerState, InputMode } from '../core/types';
 import '../core/window-globals';
 import { isStreamerMode } from '../core/streamer-detect';
 
@@ -16,6 +15,8 @@ export class Orchestrator {
   private gameState: GameStateService;
   private signaling: SignalingService;
   private audio: AudioService | null = null;
+  /** Mic-only pipeline for overlay VAD meter / LIVE indicator between games. */
+  private micMonitor: AudioService | null = null;
   private tracking: TrackingService | null = null;
   private volumeClient: VolumeClient | null = null;
   private session: GameSession | null = null;
@@ -40,9 +41,46 @@ export class Orchestrator {
   private selfMutedPref = false;
   private muteAllPref = false;
 
+  private overlayMicLevel = 0;
+  private overlayMicTransmitting = false;
+  private overlaySpeakingPeers: Record<string, boolean> = {};
+
   constructor() {
     this.gameState = new GameStateService();
     this.signaling = new SignalingService();
+  }
+
+  private bindOverlayAudioCallback(audio: AudioService): void {
+    audio.setOverlayAudioCallback((audioState) => {
+      this.overlayMicLevel = audioState.micLevel;
+      this.overlayMicTransmitting = audioState.micTransmitting;
+      this.overlaySpeakingPeers = audioState.speakingPeers;
+      this.broadcastOverlayState();
+    });
+  }
+
+  private stopMicMonitor(): void {
+    if (!this.micMonitor) return;
+    this.micMonitor.setOverlayAudioCallback(null);
+    this.micMonitor.cleanup();
+    this.micMonitor = null;
+    this.overlayMicLevel = 0;
+    this.overlayMicTransmitting = false;
+  }
+
+  /** Start mic capture for settings preview when no game session is active. */
+  async ensureMicMonitor(): Promise<void> {
+    if (this.audio || this.micMonitor) return;
+    this.micMonitor = new AudioService(this.signaling, '__monitor__');
+    this.micMonitor.setSelfMuted(this.selfMutedPref);
+    try {
+      await this.micMonitor.initMicrophone();
+      this.bindOverlayAudioCallback(this.micMonitor);
+      this.broadcastOverlayState();
+    } catch (e) {
+      console.warn('[LoLProxChat] Mic monitor failed:', e);
+      this.stopMicMonitor();
+    }
   }
 
   start(): void {
@@ -158,6 +196,7 @@ export class Orchestrator {
     console.log('[LoLProxChat] Starting session: room=' + session.roomId);
 
     // Initialize audio (mic + WebRTC)
+    this.stopMicMonitor();
     this.audio = new AudioService(this.signaling, this.localSummonerName);
     try {
       await this.audio.initMicrophone();
@@ -170,6 +209,7 @@ export class Orchestrator {
     // Carry over any mute toggles the user set before/between sessions.
     this.audio.setSelfMuted(this.selfMutedPref);
     this.audio.setMuteAll(this.muteAllPref);
+    this.bindOverlayAudioCallback(this.audio);
 
     // Join signaling room. v0.3: team is sent so the server can do team-aware
     // proximity (allies always full volume; enemies fade out at vision range).
@@ -317,7 +357,7 @@ export class Orchestrator {
 
     // Stop reporting if our position is stale (CV has been extrapolating
     // for >2s). The server prunes positions older than STALE_POSITION_MS
-    // (60s) on its own, but we want to stop polluting earlier than that
+    // (5s) on its own, but we want to stop polluting earlier than that
     // when CV has clearly lost the player.
     if (this.tracking.getHoldDurationSec() > 2) {
       this.broadcastOverlayState();
@@ -343,7 +383,7 @@ export class Orchestrator {
         position,
         this.session.roomId,
         this.localSummonerName,
-        getAllyProximity(),
+        false,
       );
       this.audio.applyPeerVolumes(result.peerVolumes);
     } catch (e) {
@@ -428,6 +468,9 @@ export class Orchestrator {
 
   private broadcastOverlayState(): void {
     const audio = this.audio;
+    const monitor = this.micMonitor;
+    const micSource = audio ?? monitor;
+    const snap = micSource?.getOverlaySnapshot();
     const nearbyPeers = audio ? Array.from(this.peerStates.values())
       .map((p) => ({
         summonerName: p.summonerName,
@@ -436,12 +479,16 @@ export class Orchestrator {
         isMuted: p.isMuted,
         isMutedByLocal: audio.isPlayerMuted(p.summonerName),
         isDead: p.isDead,
+        isSpeaking: !!this.overlaySpeakingPeers[p.summonerName],
       })) : [];
 
     const data = {
       selfMuted: this.selfMutedPref,
       muteAll: this.muteAllPref,
       nearbyPeers,
+      micLevel: snap?.micLevel ?? this.overlayMicLevel,
+      micTransmitting: snap?.micTransmitting ?? this.overlayMicTransmitting,
+      inputMode: micSource?.getInputMode() ?? null,
       trackingState: this.tracking?.getState() ?? 'none',
       lastPosition: this.tracking?.getLastPosition() ?? null,
       filteredImageUrl: this.tracking?.getFilteredImageUrl() ?? null,
@@ -493,6 +540,7 @@ export class Orchestrator {
   toggleSelfMute(): boolean {
     this.selfMutedPref = !this.selfMutedPref;
     this.audio?.setSelfMuted(this.selfMutedPref);
+    this.micMonitor?.setSelfMuted(this.selfMutedPref);
     this.broadcastOverlayState();
     return this.selfMutedPref;
   }
@@ -514,9 +562,27 @@ export class Orchestrator {
     }, clamped);
   }
   setPTTState(held: boolean): void { this.audio?.setPTTState(held); }
-  updateSettings(settings: any): void { this.audio?.updateSettings(settings); }
-  applyInputDevice(id: string | null): Promise<void> | void { return this.audio?.applyInputDevice(id); }
-  applyOutputDevice(id: string | null): Promise<void> | void { return this.audio?.applyOutputDevice(id); }
+  updateSettings(settings: any): void {
+    if (this.audio) {
+      this.audio.updateSettings(settings);
+      return;
+    }
+    if (this.micMonitor) {
+      this.micMonitor.updateSettings(settings);
+      return;
+    }
+    void this.ensureMicMonitor().then(() => {
+      this.micMonitor?.updateSettings(settings);
+    });
+  }
+  applyInputDevice(id: string | null): Promise<void> | void {
+    if (this.audio) return this.audio.applyInputDevice(id);
+    return this.micMonitor?.applyInputDevice(id);
+  }
+  applyOutputDevice(id: string | null): Promise<void> | void {
+    if (this.audio) return this.audio.applyOutputDevice(id);
+    return this.micMonitor?.applyOutputDevice(id);
+  }
 
   getSessionPlayers(): { summonerName: string; championName: string; team: string }[] {
     if (!this.session) return [];
@@ -618,6 +684,7 @@ export class Orchestrator {
     this.tracking = null;
     this.volumeClient = null;
     this.audio?.cleanup();
+    this.audio = null;
     this.signaling.leaveRoom();
     this.gameState.clearSession();
     this.session = null;

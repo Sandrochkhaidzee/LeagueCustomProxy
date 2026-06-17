@@ -1,6 +1,6 @@
 [package]
 name = "leagueproxy"
-version = "0.1.0-beta.1"
+version = "1.0.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -22,3 +22,17 @@ windows = { version = "0.58", features = [
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+# Default release — balanced size/speed. lto=false keeps link times reasonable on Windows MSVC.
+[profile.release]
+lto = false
+codegen-units = 16
+strip = "symbols"
+
+# Faster iteration when you only need a working exe (dev script uses this via --profile).
+[profile.release-fast]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 256
+strip = false
