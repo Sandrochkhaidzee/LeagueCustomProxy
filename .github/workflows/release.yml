@@ -12,11 +12,11 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: npm
@@ -25,52 +25,84 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Run tests
+        run: npm test
+
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build frontend
+      - name: Generate app icons
+        run: npm run generate:icons
+
+      - name: Build client frontend
         env:
-          PROXCHAT_SERVER: http://26.36.227.156:3100
           PROXCHAT_DEV_BUILD: '0'
           WEBPACK_CLEAN: '1'
         run: npm run build:release
 
-      - name: Build release exe
+      - name: Build client exe
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: npx tauri build --no-bundle
 
-      - name: Compute SHA-256
-        id: hash
+      - name: Stage client exe
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path src-tauri/target/release -Filter *.exe | Select-Object -First 1
-          if (-not $exe) { throw "No exe found in target/release" }
-          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
-          "sha256=$hash" >> $env:GITHUB_OUTPUT
-          "exe_name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+          $exe = Get-ChildItem -Path src-tauri/target/release/leagueproxy.exe -ErrorAction Stop
           Copy-Item $exe.FullName leagueproxy.exe
-          Write-Host "Built $($exe.Name) SHA-256: $hash"
+          $hash = (Get-FileHash leagueproxy.exe -Algorithm SHA256).Hash
+          "client_sha256=$hash" >> $env:GITHUB_OUTPUT
+        id: client_hash
+
+      - name: Build signaling server bundle
+        run: npm ci --prefix server --no-audit --no-fund && npm run build --prefix server
+
+      - name: Build server frontend
+        env:
+          PROXCHAT_DEV_BUILD: '0'
+          WEBPACK_CLEAN: '1'
+        run: npm run build:server
+
+      - name: Build server exe
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: npx tauri build --no-bundle --config src-tauri/tauri.server.conf.json -- --bin leagueproxy-server
+
+      - name: Stage server exe
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path src-tauri/target/release/leagueproxy-server.exe -ErrorAction Stop
+          Copy-Item $exe.FullName server.exe
+          $hash = (Get-FileHash server.exe -Algorithm SHA256).Hash
+          "server_sha256=$hash" >> $env:GITHUB_OUTPUT
+        id: server_hash
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
-          files: leagueproxy.exe
+          files: |
+            leagueproxy.exe
+            server.exe
           generate_release_notes: true
           body: |
             ## Quick start
 
-            1. Join the host **Radmin VPN** network (see README).
-            2. Download `leagueproxy.exe` below.
-            3. Verify SHA-256, then run it.
-            4. League → **Borderless** → custom game with the group.
+            **Host:** download `server.exe`, enter protocol/IP/port, click **Start server**, share the URL.
 
-            **Host must run the signaling server** before the match (`scripts/start-server.bat`).
+            **Players:** download `leagueproxy.exe`, enter the host's protocol, IP, and port on the connect screen each launch.
+
+            League → **Borderless** → custom game with the group.
 
             ## SHA-256
 
+            **leagueproxy.exe**
             ```
-            ${{ steps.hash.outputs.sha256 }}
+            ${{ steps.client_hash.outputs.client_sha256 }}
+            ```
+
+            **server.exe**
+            ```
+            ${{ steps.server_hash.outputs.server_sha256 }}
             ```
 
             ## Safety

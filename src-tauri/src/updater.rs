@@ -40,7 +40,7 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
     if !resp.status().is_success() {
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(
-                "No GitHub release published yet — create a release with leagueproxy.exe attached"
+                "No GitHub release published yet — create a release with leagueproxy.exe and server.exe attached"
                     .into(),
             );
         }
@@ -56,6 +56,12 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
         .to_string();
 
     let current = env!("CARGO_PKG_VERSION").to_string();
+
+    let is_server_build = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().and_then(|n| n.to_str().map(String::from)))
+        .map(|n| n.to_lowercase().contains("server"))
+        .unwrap_or(false);
 
     let assets = json["assets"].as_array();
     let pick_named = |target: &str| -> Option<String> {
@@ -84,9 +90,14 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
                 .map(String::from)
         })
     };
-    let download_url = pick_named("leagueproxy.exe")
-        .or_else(|| pick_named("lolproxchat.exe"))
-        .or_else(pick_any_exe);
+    let download_url = if is_server_build {
+        pick_named("server.exe")
+            .or_else(|| pick_named("leagueproxy-server.exe"))
+    } else {
+        pick_named("leagueproxy.exe")
+            .or_else(|| pick_named("lolproxchat.exe"))
+    }
+    .or_else(pick_any_exe);
 
     let notes = json["body"].as_str().map(String::from);
 

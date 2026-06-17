@@ -48,6 +48,12 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
       invoke('set_toggle_key', { vk: payload.vk })
         .catch((e) => console.warn('[Background] set_toggle_key failed:', e));
       break;
+    case 'setServerUrl':
+      orchestrator.applyServerUrl(payload.url);
+      break;
+    case 'disconnectServer':
+      orchestrator.disconnectFromServer();
+      break;
     case 'calibrationBounds':
       orchestrator.setMinimapCalibration(payload);
       break;
@@ -76,6 +82,10 @@ window.addEventListener('overlayAction', ((event: CustomEvent) => {
       orchestrator.ensureMicMonitor()
         .catch((e) => console.warn('[LoLProxChat] ensureMicMonitor failed:', e));
       break;
+    case 'resumeAudio':
+      orchestrator.resumeAudioPipelines()
+        .catch((e) => console.warn('[LoLProxChat] resumeAudio failed:', e));
+      break;
   }
 }) as EventListener);
 
@@ -94,5 +104,20 @@ listen<string>('global_shortcut', (event) => {
       break;
   }
 }).catch((e) => console.warn('[LoLProxChat] global_shortcut listen failed:', e));
+
+listen<{ screen_x: number; screen_y: number; screen_width: number; screen_height: number }>(
+  'calibration:bounds',
+  (event) => {
+    const b = event.payload;
+    orchestrator.setMinimapCalibration({
+      screenX: b.screen_x,
+      screenY: b.screen_y,
+      screenWidth: b.screen_width,
+      screenHeight: b.screen_height,
+    });
+  },
+).catch((e) => console.warn('[LoLProxChat] calibration:bounds listen failed:', e));
+
+window.__lolproxchat_shutdown = () => orchestrator.shutdownForExit();
 
 console.log('LoLProxChat background service started');

@@ -1,6 +1,6 @@
 {
   "name": "leagueproxy",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "directories": {
     "doc": "docs"
@@ -10,7 +10,10 @@
     "build:dev": "cross-env PROXCHAT_DEV_BUILD=1 node scripts/build-frontend.js",
     "build:prod": "cross-env PROXCHAT_DEV_BUILD=0 node scripts/build-frontend.js",
     "build:release": "cross-env PROXCHAT_DEV_BUILD=0 node scripts/build-frontend.js",
-    "test": "node --experimental-strip-types --test src/services/audio-worklet/vad-math.test.ts"
+    "build:server": "cross-env PROXCHAT_DEV_BUILD=0 node scripts/build-frontend-server.js",
+    "build:server:dev": "cross-env PROXCHAT_DEV_BUILD=1 node scripts/build-frontend-server.js",
+    "generate:icons": "node scripts/generate-icons.mjs",
+    "test": "node --experimental-strip-types --test src/overlay/resize-helpers.test.ts src/services/audio-volume.test.ts src/services/audio-transmit.test.ts src/services/tracking-helpers.test.ts src/services/template-match-math.test.ts src/services/audio-worklet/vad-math.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +28,8 @@
     "copy-webpack-plugin": "^14.0.0",
     "cross-env": "^10.1.0",
     "dotenv": "^17.3.1",
+    "sharp": "^0.34.5",
+    "to-ico": "^1.1.5",
     "ts-loader": "^9.5.4",
     "typescript": "^5.9.3",
     "webpack": "^5.105.4",

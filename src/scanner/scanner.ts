@@ -1,42 +1,139 @@
-// Scanner window — the transparent overlay that sits on top of the minimap.
-// CRITICAL: this window is composited into the GDI BitBlt screen-grab that feeds
-// CV (capture.rs grabs the desktop DC), so ANYTHING it renders inside the
-// minimap rectangle is fed back into the next capture frame. We can't hide it
-// with WDA_EXCLUDEFROMCAPTURE — that broke ShadowPlay / OBS recording of the
-// whole app. So the rule here is: render nothing that overlaps a champion icon.
-//
-// History of this trap (each instance corrupted CV until removed):
-//  - The HSV-filtered debug image used to be painted here; it fed back as teal
-//    and was moved to a thumbnail in the panel's Settings area.
-//  - The tracked-position dot was *also* drawn here (an 8px red disc at the
-//    locked position). It was assumed safe because "red is outside the teal
-//    filter range" — but that misses the mechanism: the dot landed on top of
-//    the champion icon every frame, OCCLUDING the teal self-ring the detector
-//    keys on (and adding a spurious red/enemy blob). With Debug on this drove
-//    drift, cross-map jumps and "no teal blobs" — i.e. watching the tracker via
-//    the dot broke the tracker. The tracked position now renders ONLY in the
-//    debug thumbnail (generateFilteredImage() in tracking.ts), a separate
-//    canvas that is never captured.
-
+import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 import { listen } from '@tauri-apps/api/event';
 
 const scannerRoot = document.getElementById('scanner-root')!;
 
 interface SceneUpdate {
-  // Whether the user has Debug toggled on. When false, hide all debug visuals.
   debugEnabled: boolean;
 }
 
 listen<SceneUpdate>('scanner:scene', (event) => {
   const { debugEnabled } = event.payload;
-
-  // Red region border — calibration sanity check that the scanner is aligned to
-  // the minimap. It rides the minimap's own frame (the outermost edge, outside
-  // the playable area where champion icons sit), so unlike the dot it doesn't
-  // occlude the self-ring. It is still captured, so keep it strictly edge-only.
   scannerRoot.style.boxShadow = debugEnabled
     ? 'inset 0 0 0 3px rgba(255, 0, 0, 0.85)'
     : '';
-});
+}).catch((e) => console.warn('[Scanner] scanner:scene listen failed:', e));
+
+let calibrationActive = false;
+
+function setCalibrationActive(active: boolean): void {
+  calibrationActive = active;
+  document.body.classList.toggle('calibration-active', active);
+}
+
+listen('calibration:begin', () => setCalibrationActive(true)).catch(() => {});
+listen('calibration:end', () => setCalibrationActive(false)).catch(() => {});
+
+interface DragState {
+  kind: string;
+  startX: number;
+  startY: number;
+  origX: number;
+  origY: number;
+  origW: number;
+  origH: number;
+}
+
+let drag: DragState | null = null;
+
+async function readBounds(): Promise<{ x: number; y: number; w: number; h: number }> {
+  const b = await invoke<{
+    screen_x: number;
+    screen_y: number;
+    screen_width: number;
+    screen_height: number;
+  }>('get_scanner_screen_bounds');
+  return { x: b.screen_x, y: b.screen_y, w: b.screen_width, h: b.screen_height };
+}
+
+async function emitBounds(): Promise<void> {
+  const b = await invoke<{
+    screen_x: number;
+    screen_y: number;
+    screen_width: number;
+    screen_height: number;
+  }>('get_scanner_screen_bounds');
+  await emit('calibration:bounds', b);
+}
+
+function onPointerDown(e: PointerEvent, kind: string): void {
+  if (!calibrationActive) return;
+  e.preventDefault();
+  e.stopPropagation();
+  void readBounds().then((b) => {
+    drag = {
+      kind,
+      startX: e.screenX,
+      startY: e.screenY,
+      origX: b.x,
+      origY: b.y,
+      origW: b.w,
+      origH: b.h,
+    };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  });
+}
+
+function onPointerMove(e: PointerEvent): void {
+  if (!drag || !calibrationActive) return;
+  e.preventDefault();
+  const dx = e.screenX - drag.startX;
+  const dy = e.screenY - drag.startY;
+  let { origX: x, origY: y, origW: w, origH: h } = drag;
+  switch (drag.kind) {
+    case 'corner-tr':
+      w = drag.origW + dx;
+      h = drag.origH - dy;
+      y = drag.origY + dy;
+      break;
+    case 'corner-br':
+      w = drag.origW + dx;
+      h = drag.origH + dy;
+      break;
+    case 'edge-top':
+      h = drag.origH - dy;
+      y = drag.origY + dy;
+      break;
+    case 'edge-right':
+      w = drag.origW + dx;
+      break;
+    case 'edge-bottom':
+      h = drag.origH + dy;
+      break;
+    default:
+      break;
+  }
+  w = Math.max(40, w);
+  h = Math.max(40, h);
+  void invoke('set_scanner_bounds', { x, y, width: w, height: h });
+}
+
+function onPointerUp(e: PointerEvent): void {
+  if (!drag) return;
+  drag = null;
+  void emitBounds();
+  try {
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+  } catch { /* ignore */ }
+}
+
+const handles: [string, string][] = [
+  ['corner-tr', '#corner-tr'],
+  ['corner-br', '#corner-br'],
+  ['edge-top', '#edge-top'],
+  ['edge-right', '#edge-right'],
+  ['edge-bottom', '#edge-bottom'],
+];
+
+for (const [kind, sel] of handles) {
+  const el = document.querySelector(sel) as HTMLElement | null;
+  if (!el) continue;
+  el.addEventListener('pointerdown', (e) => onPointerDown(e, kind));
+  el.addEventListener('pointermove', onPointerMove);
+  el.addEventListener('pointerup', onPointerUp);
+  el.addEventListener('pointercancel', onPointerUp);
+}
+
 
 export {};

@@ -1,4 +1,5 @@
-import { WS_URL } from '../core/config';
+import { getWsUrl } from '../core/config';
+import { getStoredConnectionName } from '../core/server-prefs';
 
 export type SignalType = 'offer' | 'answer' | 'ice-candidate';
 
@@ -21,14 +22,18 @@ type OnPeerPosition = (peer: PositionBroadcast) => void;
 type OnSignal = (signal: SignalMessage) => void;
 type OnPeerLeave = (summonerName: string) => void;
 type OnPeerJoined = (name: string) => void;
+type OnConnectionLost = (reason?: string) => void;
+
+/** Server policy-violation close — kicked by host. Do not auto-reconnect. */
+const WS_CLOSE_KICKED = 1008;
+
+/** Reconnect attempts after an unexpected close before notifying the app. */
+const MAX_RECONNECT_ATTEMPTS = 4;
 
 export class SignalingService {
   private ws: WebSocket | null = null;
   private localName: string = '';
-  // Saved so reconnect can rejoin the same room with the same identity
   private currentRoomId: string | null = null;
-  // v0.3: team is fixed for the session (sent on join) and used by the server
-  // for team-aware proximity.
   private currentTeam: 'ORDER' | 'CHAOS' | null = null;
   private currentHandlers: {
     onPeerPosition: OnPeerPosition;
@@ -39,6 +44,30 @@ export class SignalingService {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionallyClosed = false;
+  private onConnectionLost: OnConnectionLost | null = null;
+  /** Connected to host with hello only — visible in host admin before in-game join. */
+  private inLobby = false;
+  private messageHandlerWs: WebSocket | null = null;
+
+  /** Open WebSocket and send hello so the host admin panel lists this client. */
+  connectLobby(onConnectionLost?: OnConnectionLost): void {
+    this.inLobby = true;
+    this.currentRoomId = null;
+    this.currentTeam = null;
+    this.currentHandlers = null;
+    this.onConnectionLost = onConnectionLost ?? null;
+    this.intentionallyClosed = false;
+    this.reconnectAttempt = 0;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.sendHello();
+      return;
+    }
+    this.openSocket();
+  }
 
   joinRoom(
     roomId: string,
@@ -48,39 +77,89 @@ export class SignalingService {
     onSignal: OnSignal,
     onPeerLeave: OnPeerLeave,
     onPeerJoined?: OnPeerJoined,
+    onConnectionLost?: OnConnectionLost,
   ): void {
+    this.inLobby = false;
     this.localName = localName;
     this.currentRoomId = roomId;
     this.currentTeam = team;
     this.currentHandlers = { onPeerPosition, onSignal, onPeerLeave, onPeerJoined };
+    this.onConnectionLost = onConnectionLost ?? null;
     this.intentionallyClosed = false;
     this.reconnectAttempt = 0;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.attachMessageHandler(this.ws);
+      this.sendHello();
+      this.sendJoin();
+      return;
+    }
     this.openSocket();
   }
 
   private openSocket(): void {
-    if (!this.currentRoomId || !this.currentHandlers) return;
-    if (this.ws) {
-      try { this.ws.close(); } catch { /* ignore */ }
+    const wsUrl = getWsUrl();
+    if (!wsUrl) {
+      console.warn('[Signaling] No signaling server URL configured — not connecting');
+      return;
+    }
+    if (!this.inLobby && (!this.currentRoomId || !this.currentHandlers)) {
+      return;
     }
 
-    const { onPeerPosition, onSignal, onPeerLeave, onPeerJoined } = this.currentHandlers;
-    const roomId = this.currentRoomId;
-    const localName = this.localName;
+    if (this.ws) {
+      try { this.ws.close(); } catch { /* ignore */ }
+      this.messageHandlerWs = null;
+    }
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(wsUrl);
     this.ws = ws;
-
-    const team = this.currentTeam;
 
     ws.addEventListener('open', () => {
       console.log('[Signaling] WebSocket connected');
       this.reconnectAttempt = 0;
-      // v0.3: include team in join. Older servers ignore the extra field.
-      ws.send(JSON.stringify({ type: 'join', room: roomId, name: localName, team }));
+      this.sendHello();
+      if (!this.inLobby) {
+        this.sendJoin();
+      }
     });
 
+    this.attachMessageHandler(ws);
+    this.attachCloseHandler(ws);
+
+    ws.addEventListener('error', (err) => {
+      console.error('[Signaling] WebSocket error:', err);
+    });
+  }
+
+  private sendHello(): void {
+    const label = getStoredConnectionName();
+    if (label && this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'hello', label }));
+    }
+  }
+
+  private sendJoin(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.currentRoomId || !this.currentHandlers) return;
+    this.ws.send(JSON.stringify({
+      type: 'join',
+      room: this.currentRoomId,
+      name: this.localName,
+      team: this.currentTeam,
+    }));
+  }
+
+  private attachMessageHandler(ws: WebSocket): void {
+    if (this.messageHandlerWs === ws) return;
+    this.messageHandlerWs = ws;
     ws.addEventListener('message', (event) => {
+      if (!this.currentHandlers) return;
+
+      const { onPeerPosition, onSignal, onPeerLeave, onPeerJoined } = this.currentHandlers;
       let msg: any;
       try {
         msg = JSON.parse(event.data as string);
@@ -91,7 +170,6 @@ export class SignalingService {
 
       switch (msg.type) {
         case 'room_state': {
-          // Existing peers already in the room
           const peers: string[] = msg.peers || [];
           for (const name of peers) {
             onPeerJoined?.(name);
@@ -112,10 +190,6 @@ export class SignalingService {
         }
 
         case 'signal': {
-          // Envelope: { type: 'offer' | 'answer' | 'ice-candidate', payload: <whatever> }
-          // Older builds sent the raw SDP/candidate without an envelope; SDPs have a
-          // `.type` field of their own so offers/answers happened to work, but ICE
-          // candidates had no type and were silently dropped.
           onSignal({
             type: msg.payload?.type,
             from: msg.from,
@@ -143,23 +217,45 @@ export class SignalingService {
         }
       }
     });
+  }
 
-    ws.addEventListener('close', () => {
-      console.log('[Signaling] WebSocket disconnected');
+  private attachCloseHandler(ws: WebSocket): void {
+    ws.addEventListener('close', (ev: CloseEvent) => {
+      console.log('[Signaling] WebSocket disconnected', ev.code, ev.reason);
       if (this.intentionallyClosed) return;
-      // Exponential backoff capped at 30s
+
+      const reason = ev.reason?.toLowerCase() ?? '';
+      const kicked = ev.code === WS_CLOSE_KICKED || reason.includes('kick');
+      if (kicked) {
+        console.log('[Signaling] Kicked by host — not reconnecting');
+        this.intentionallyClosed = true;
+        this.reconnectAttempt = MAX_RECONNECT_ATTEMPTS + 1;
+        if (this.reconnectTimer !== null) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        this.onConnectionLost?.('Kicked by host. Use Connect to rejoin.');
+        return;
+      }
+
       this.reconnectAttempt++;
+      if (this.reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
+        console.log('[Signaling] Host server unreachable — stopping reconnect');
+        if (this.reconnectTimer !== null) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        this.onConnectionLost?.();
+        return;
+      }
       const delayMs = Math.min(30000, 500 * Math.pow(2, this.reconnectAttempt - 1));
       console.log('[Signaling] Reconnecting in ' + delayMs + 'ms (attempt ' + this.reconnectAttempt + ')');
       if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
+        if (this.intentionallyClosed) return;
         this.openSocket();
       }, delayMs);
-    });
-
-    ws.addEventListener('error', (err) => {
-      console.error('[Signaling] WebSocket error:', err);
     });
   }
 
@@ -172,35 +268,45 @@ export class SignalingService {
     }
   }
 
-  /**
-   * v0.2: send the local player's XY coordinates to the server, where they
-   * land in the room state and feed the next /compute-volumes request.
-   */
   sendCoords(x: number, y: number): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'coords', x, y }));
     }
   }
 
-  /** Current room ID + local player name, for HTTP requests that need them
-   *  (volume-client's /compute-volumes uses both in the v0.2 request body). */
   getCurrentRoom(): string | null { return this.currentRoomId; }
   getLocalName(): string { return this.localName; }
+
+  isLobbyConnected(): boolean {
+    return this.inLobby && this.ws?.readyState === WebSocket.OPEN;
+  }
 
   sendSignal(signal: SignalMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
         type: 'signal',
         to: signal.to,
-        // Envelope so the receiver can identify ice-candidates (which carry
-        // no `.type` field of their own, unlike RTCSessionDescriptionInit).
         payload: { type: signal.type, payload: signal.payload },
       }));
     }
   }
 
+  private closePromise: Promise<void> | null = null;
+
+  reconnect(): void {
+    if (!this.inLobby && (!this.currentRoomId || !this.currentHandlers)) return;
+    this.intentionallyClosed = false;
+    this.reconnectAttempt = 0;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.openSocket();
+  }
+
   leaveRoom(): void {
     this.intentionallyClosed = true;
+    this.inLobby = false;
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -208,9 +314,41 @@ export class SignalingService {
     this.currentRoomId = null;
     this.currentTeam = null;
     this.currentHandlers = null;
-    if (this.ws) {
-      try { this.ws.close(); } catch { /* ignore */ }
-      this.ws = null;
+    this.onConnectionLost = null;
+    void this.closeSocket();
+  }
+
+  /** Wait for the WebSocket to close (used on app exit so the host drops the client). */
+  closeSocket(): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise;
     }
+    this.intentionallyClosed = true;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const ws = this.ws;
+    this.ws = null;
+    this.messageHandlerWs = null;
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+      this.closePromise = Promise.resolve();
+      return this.closePromise;
+    }
+    this.closePromise = new Promise((resolve) => {
+      const finish = () => {
+        this.closePromise = null;
+        resolve();
+      };
+      ws.addEventListener('close', finish, { once: true });
+      try {
+        ws.close(1000, 'client shutdown');
+      } catch {
+        finish();
+        return;
+      }
+      window.setTimeout(finish, 500);
+    });
+    return this.closePromise;
   }
 }

@@ -2,6 +2,7 @@
 
 mod capture;
 mod global_keys;
+mod scanner_host;
 mod lcu;
 mod updater;
 
@@ -24,7 +25,13 @@ fn append_log(state: tauri::State<LogFile>, line: String) {
 }
 
 #[tauri::command]
-fn exit_app(app: tauri::AppHandle) {
+async fn exit_app(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.eval(
+            "window.__lolproxchat_shutdown && window.__lolproxchat_shutdown()",
+        );
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
     app.exit(0);
 }
 
@@ -275,6 +282,10 @@ fn main() {
             updater::download_and_apply_update,
             global_keys::set_ptt_key,
             global_keys::set_toggle_key,
+            scanner_host::begin_scanner_calibration,
+            scanner_host::end_scanner_calibration,
+            scanner_host::get_scanner_screen_bounds,
+            scanner_host::set_scanner_bounds,
         ])
         // Closing the panel ("overlay") window should exit the whole app —
         // otherwise the scanner window (which is decorationless and
@@ -282,10 +293,21 @@ fn main() {
         // close it. Same applies in reverse: any window-close request
         // tears down the app cleanly.
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                window.app_handle().exit(0);
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(overlay) = app.get_webview_window("overlay") {
+                        let _ = overlay.eval(
+                            "window.__lolproxchat_shutdown && window.__lolproxchat_shutdown()",
+                        );
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                    }
+                    app.exit(0);
+                });
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error running tauri application");
+        .build(tauri::generate_context!("tauri.conf.json"))
+        .expect("error building tauri application")
+        .run(|_app, _event| {});
 }

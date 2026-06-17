@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
+import { invalidateRelayCache, probeSignalingServer } from '../core/config';
+import { isServerUrlConfigured, setStoredServerUrl, clearStoredServerUrl, getStoredServerUrl } from '../core/server-prefs';
 import { GameStateService, GameSession, TauriGameState } from './game-state';
 import { SignalingService, SignalMessage, PositionBroadcast } from './signaling';
 import { AudioService } from './audio';
@@ -26,6 +28,8 @@ export class Orchestrator {
   private volumeTickId: number | null = null;
   private configPollId: number | null = null;
   private gameStatePollId: number | null = null;
+  private serverHealthPollId: number | null = null;
+  private consecutiveHealthFailures = 0;
   private positionTickRunning = false;
   private sessionActive = false;
   private lastOverlayRepositionTime = 0;
@@ -35,15 +39,15 @@ export class Orchestrator {
   private dpiScale = 1;
   private lastGameState: TauriGameState | null = null;
 
-  // User mute prefs survive across session start/end so the panel's MIC / VOL
-  // buttons stay sticky when toggled outside a game (audio is null between
-  // games). On session start these get pushed into the new AudioService.
+  // User mute prefs survive across session start/end (e.g. keyboard shortcuts).
   private selfMutedPref = false;
   private muteAllPref = false;
 
   private overlayMicLevel = 0;
   private overlayMicTransmitting = false;
   private overlaySpeakingPeers: Record<string, boolean> = {};
+  private sessionStarting = false;
+  private overlayHeartbeatId: number | null = null;
 
   constructor() {
     this.gameState = new GameStateService();
@@ -70,7 +74,12 @@ export class Orchestrator {
 
   /** Start mic capture for settings preview when no game session is active. */
   async ensureMicMonitor(): Promise<void> {
-    if (this.audio || this.micMonitor) return;
+    if (this.audio) return;
+    if (this.micMonitor) {
+      await this.micMonitor.resumePipeline();
+      this.broadcastOverlayState();
+      return;
+    }
     this.micMonitor = new AudioService(this.signaling, '__monitor__');
     this.micMonitor.setSelfMuted(this.selfMutedPref);
     try {
@@ -89,8 +98,55 @@ export class Orchestrator {
     // Poll Tauri backend for game state every 3 seconds
     this.gameStatePollId = window.setInterval(() => this.pollGameState(), 3000) as unknown as number;
 
+    // When connected to a host but not in-game, probe /health so we notice if server.exe stops.
+    this.serverHealthPollId = window.setInterval(() => this.pollServerHealth(), 10000) as unknown as number;
+
+    // Keep overlay UI fresh (mic meter, lifecycle text) even when idle.
+    this.overlayHeartbeatId = window.setInterval(
+      () => this.broadcastOverlayState(),
+      1000,
+    ) as unknown as number;
+
     // Also poll immediately on start
     this.pollGameState();
+  }
+
+  private async pollServerHealth(): Promise<void> {
+    if (!isServerUrlConfigured()) {
+      this.consecutiveHealthFailures = 0;
+      return;
+    }
+    // During a game session the WebSocket close handler owns disconnect logic.
+    if (this.session) return;
+    // Lobby WebSocket handles disconnect; skip duplicate HTTP probe while connected.
+    if (this.signaling.isLobbyConnected()) {
+      this.consecutiveHealthFailures = 0;
+      return;
+    }
+
+    const url = getStoredServerUrl();
+    if (!url) return;
+
+    const probe = await probeSignalingServer(url);
+    if (probe.ok) {
+      this.consecutiveHealthFailures = 0;
+      return;
+    }
+
+    this.consecutiveHealthFailures++;
+    if (this.consecutiveHealthFailures >= 2) {
+      this.handleServerLost(probe.error);
+    }
+  }
+
+  private handleServerLost(reason?: string): void {
+    if (!isServerUrlConfigured()) return;
+    console.log('[LoLProxChat] Host server lost:', reason ?? 'connection closed');
+    this.consecutiveHealthFailures = 0;
+    this.disconnectFromServer();
+    window.dispatchEvent(new CustomEvent('serverDisconnected', {
+      detail: { reason: reason ?? 'Host server disconnected.' },
+    }));
   }
 
   private async pollGameState(): Promise<void> {
@@ -182,9 +238,8 @@ export class Orchestrator {
         );
 
         if (session) {
-          this.session = session;
-          console.log('[LoLProxChat] Session created! Room:', session.roomId);
-          this.startSession(session);
+          console.log('[LoLProxChat] Session ready, room:', session.roomId);
+          void this.startSession(session);
         }
       }
     } catch (e) {
@@ -193,23 +248,43 @@ export class Orchestrator {
   }
 
   private async startSession(session: GameSession): Promise<void> {
+    if (this.sessionActive || this.sessionStarting) return;
+    if (!isServerUrlConfigured()) {
+      console.warn('[LoLProxChat] Cannot start session — signaling server URL not set');
+      this.broadcastOverlayState();
+      return;
+    }
+
+    this.sessionStarting = true;
     console.log('[LoLProxChat] Starting session: room=' + session.roomId);
 
     // Initialize audio (mic + WebRTC)
     this.stopMicMonitor();
-    this.audio = new AudioService(this.signaling, this.localSummonerName);
+    this.audio = new AudioService(this.signaling, session.localPlayer.summonerName || this.localSummonerName);
     try {
       await this.audio.initMicrophone();
       console.log('[LoLProxChat] Microphone initialized');
     } catch (e) {
       console.error('[LoLProxChat] Mic init failed — aborting session:', e);
+      this.audio.cleanup();
       this.audio = null;
+      this.session = null;
+      this.sessionActive = false;
+      await this.reconnectLobbyAfterSession();
+      void this.ensureMicMonitor();
+      this.broadcastOverlayState();
+      this.sessionStarting = false;
       return;
     }
+
+    this.session = session;
+    this.localSummonerName = session.localPlayer.summonerName || this.localSummonerName;
+
     // Carry over any mute toggles the user set before/between sessions.
     this.audio.setSelfMuted(this.selfMutedPref);
     this.audio.setMuteAll(this.muteAllPref);
     this.bindOverlayAudioCallback(this.audio);
+    await this.audio.resumePipeline();
 
     // Join signaling room. v0.3: team is sent so the server can do team-aware
     // proximity (allies always full volume; enemies fade out at vision range).
@@ -221,6 +296,8 @@ export class Orchestrator {
       (peer) => this.handlePeerPosition(peer),
       (signal) => this.handleSignal(signal),
       (name) => this.handlePeerLeave(name),
+      undefined,
+      () => this.handleServerLost('Lost connection to host server.'),
     );
 
     this.sessionActive = true;
@@ -301,7 +378,17 @@ export class Orchestrator {
       console.error('[LoLProxChat] Tracking initialization failed:', e);
     }
 
+    this.sessionStarting = false;
     // Overlay is managed by Tauri window configuration — no manual window open needed
+  }
+
+  /** After a game session ends, return to lobby presence if still connected to a host. */
+  private async reconnectLobbyAfterSession(): Promise<void> {
+    this.signaling.leaveRoom();
+    await this.signaling.closeSocket();
+    if (isServerUrlConfigured()) {
+      this.signaling.connectLobby(() => this.handleServerLost('Lost connection to host server.'));
+    }
   }
 
   private async positionTick(): Promise<void> {
@@ -383,7 +470,7 @@ export class Orchestrator {
         position,
         this.session.roomId,
         this.localSummonerName,
-        false,
+        true,
       );
       this.audio.applyPeerVolumes(result.peerVolumes);
     } catch (e) {
@@ -442,9 +529,19 @@ export class Orchestrator {
   }
 
   private computeLifecycleStatus(): string {
+    if (!isServerUrlConfigured()) {
+      return 'Connect to host server';
+    }
+    const micPipe = this.audio ?? this.micMonitor;
+    if (micPipe?.isPipelineSuspended()) {
+      return 'Click LeagueProxy panel to enable microphone';
+    }
     const gs = this.lastGameState;
     if (!gs || !gs.isLeagueRunning) return 'Waiting for League of Legends';
     if (this.session) {
+      if (!this.audio) {
+        return 'Mic unavailable — check Windows microphone permission';
+      }
       const ts = this.tracking?.getState();
       if (ts === 'scanning') return 'Searching for your champion on the minimap';
       // LOCKED with no peers in the room — empty waiting state handled elsewhere
@@ -561,7 +658,57 @@ export class Orchestrator {
       // Position updates handled by volume tick
     }, clamped);
   }
-  setPTTState(held: boolean): void { this.audio?.setPTTState(held); }
+  setPTTState(held: boolean): void {
+    this.audio?.setPTTState(held);
+    this.micMonitor?.setPTTState(held);
+  }
+
+  /** Resume suspended Web Audio (required after auto-start without a click on the overlay). */
+  async resumeAudioPipelines(): Promise<void> {
+    const tasks: Promise<boolean>[] = [];
+    if (this.audio) tasks.push(this.audio.resumePipeline());
+    if (this.micMonitor) tasks.push(this.micMonitor.resumePipeline());
+    if (tasks.length === 0 && !this.session) {
+      await this.ensureMicMonitor();
+    }
+    await Promise.all(tasks);
+    this.broadcastOverlayState();
+  }
+
+  applyServerUrl(url: string): void {
+    setStoredServerUrl(url);
+    invalidateRelayCache();
+    if (this.session) {
+      this.signaling.reconnect();
+    } else {
+      this.signaling.connectLobby(() => this.handleServerLost('Lost connection to host server.'));
+    }
+  }
+
+  disconnectFromServer(): void {
+    if (this.session) {
+      this.endSession(false);
+    } else {
+      this.signaling.leaveRoom();
+      this.stopMicMonitor();
+    }
+    clearStoredServerUrl();
+    invalidateRelayCache();
+    this.broadcastOverlayState();
+  }
+
+  /** Tear down signaling before the app process exits. */
+  async shutdownForExit(): Promise<void> {
+    if (this.session) {
+      this.endSession(false);
+    } else {
+      this.stopMicMonitor();
+    }
+    await this.signaling.closeSocket();
+    clearStoredServerUrl();
+    invalidateRelayCache();
+  }
+
   updateSettings(settings: any): void {
     if (this.audio) {
       this.audio.updateSettings(settings);
@@ -667,7 +814,7 @@ export class Orchestrator {
     });
   }
 
-  private endSession(): void {
+  private endSession(reconnectLobby = true): void {
     this.positionTickRunning = false;
     this.sessionActive = false;
 
@@ -685,7 +832,6 @@ export class Orchestrator {
     this.volumeClient = null;
     this.audio?.cleanup();
     this.audio = null;
-    this.signaling.leaveRoom();
     this.gameState.clearSession();
     this.session = null;
     this.peerStates.clear();
@@ -699,5 +845,11 @@ export class Orchestrator {
 
     // Notify overlay that session ended
     window.dispatchEvent(new CustomEvent('sessionEnded'));
+
+    if (reconnectLobby) {
+      void this.reconnectLobbyAfterSession();
+    } else {
+      this.signaling.leaveRoom();
+    }
   }
 }

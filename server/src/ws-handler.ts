@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { ClientMessage, ServerMessage } from './types.js';
 import type { RoomManager } from './rooms.js';
+import type { EventLog } from './admin.js';
 import { TokenBucket, LIMITS } from './rate-limit.js';
 
 function send(ws: WebSocket, msg: ServerMessage): void {
@@ -13,7 +14,12 @@ function sendError(ws: WebSocket, message: string): void {
   send(ws, { type: 'error', message });
 }
 
-export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
+export function handleConnection(
+  ws: WebSocket,
+  rooms: RoomManager,
+  eventLog: EventLog,
+  clientId: string,
+): void {
   // Per-connection message rate limiter. Each WebSocket gets its own bucket
   // so a single noisy client can't block a normal one. Capacity matches the
   // ~10 Hz position-broadcast cadence plus signaling bursts at game start.
@@ -34,6 +40,17 @@ export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
     }
 
     switch (msg.type) {
+      case 'hello': {
+        const label = msg.label?.trim();
+        if (!label || label.length > 24) {
+          sendError(ws, 'hello requires label (1–24 characters)');
+          return;
+        }
+        rooms.setLabel(ws, label);
+        eventLog.info(`${label} connected`, { clientId, label });
+        break;
+      }
+
       case 'join': {
         if (!msg.room || !msg.name) {
           sendError(ws, 'join requires room and name');
@@ -54,6 +71,20 @@ export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
         // and computeTieredVolumes falls back to legacy team-blind behavior.
         const team = msg.team === 'ORDER' || msg.team === 'CHAOS' ? msg.team : undefined;
         const peers = rooms.join(msg.room, msg.name, ws, team);
+
+        const pending = rooms.getConnectionMeta(ws);
+        const displayLabel = pending?.label;
+        eventLog.info(
+          displayLabel
+            ? `${displayLabel} joined as ${msg.name} in room ${msg.room}${team ? ` (${team})` : ''}`
+            : `${msg.name} joined room ${msg.room}${team ? ` (${team})` : ''}`,
+          {
+            clientId,
+            roomId: msg.room,
+            name: msg.name,
+            label: displayLabel ?? undefined,
+          },
+        );
 
         // Send room_state to the joiner
         send(ws, { type: 'room_state', peers });
@@ -127,12 +158,12 @@ export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
   ws.on('close', () => {
     const info = rooms.leave(ws);
     if (info) {
-      // Need to get others AFTER leave — they're still in the room
-      // Since we already removed this ws, getOthersInRoom won't work.
-      // We need to broadcast to remaining peers in the room.
-      // Use getPeers approach via findInRoom instead.
-      // Actually, after leave the room still has remaining clients.
-      // We can iterate getPeers and findInRoom for each.
+      eventLog.info(`${info.label ?? info.name} left room ${info.roomId}`, {
+        clientId: info.clientId,
+        roomId: info.roomId,
+        name: info.name,
+        label: info.label ?? undefined,
+      });
       const peerNames = rooms.getPeers(info.roomId);
       for (const name of peerNames) {
         const peer = rooms.findInRoom(info.roomId, name);
@@ -140,6 +171,13 @@ export function handleConnection(ws: WebSocket, rooms: RoomManager): void {
           send(peer.ws, { type: 'peer_left', name: info.name });
         }
       }
+    } else {
+      const meta = rooms.getConnectionMeta(ws);
+      const label = meta?.label;
+      eventLog.info(label ? `${label} disconnected` : 'Client disconnected', {
+        clientId,
+        label: label ?? undefined,
+      });
     }
   });
 }

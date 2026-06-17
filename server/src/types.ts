@@ -2,9 +2,10 @@ import type { WebSocket } from 'ws';
 
 // Client → Server messages
 export interface ClientMessage {
-  type: 'join' | 'signal' | 'position' | 'coords';
+  type: 'join' | 'signal' | 'position' | 'coords' | 'hello';
   room?: string;    // required for 'join'
   name?: string;    // required for 'join'
+  label?: string;   // for 'hello' — display name from connect screen
   to?: string;      // required for 'signal' (target player name)
   payload?: any;    // for 'signal' (SDP/ICE data)
   blob?: string;    // for 'position' (peer presence metadata — name/champion/mute/dead state)
@@ -31,8 +32,11 @@ export interface ServerMessage {
 }
 
 export interface ClientInfo {
+  clientId: string;
+  connectedAt: number;
   roomId: string;
   name: string;
+  label: string | null;
   ws: WebSocket;
   // Latest XY position the client reported via 'coords'. Undefined until the
   // first 'coords' message arrives or if the client predates v0.2.

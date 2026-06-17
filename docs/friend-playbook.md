@@ -1,6 +1,6 @@
 # LeagueProxy — Friend Group Setup
 
-Proximity voice for custom 5v5 games. Hear teammates at full volume; enemies only when close on the map.
+Proximity voice for custom 5v5 games. Hear **nearby** teammates and enemies — allies fade by distance like enemies (always on).
 
 ## Safety rules
 
@@ -13,9 +13,9 @@ Proximity voice for custom 5v5 games. Hear teammates at full volume; enemies onl
 ## Current release
 
 ```
-File:    leagueproxy.exe
-Version: 1.0.0
-Server:  http://26.36.227.156:3100 (Radmin — host runs start-server.bat)
+Files:   leagueproxy.exe (players), server.exe (host)
+Version: 2.0.0
+Server:  Host runs server.exe; players connect on launch (Disconnect to change host)
 ```
 
 SHA-256 is posted on each [GitHub Release](https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases).
@@ -30,101 +30,90 @@ SHA-256 is posted on each [GitHub Release](https://github.com/Sandrochkhaidzee/L
    ```
 4. First launch: SmartScreen may warn — **More info → Run anyway** (unsigned hobby build)
 5. Allow microphone access when prompted
+6. **Each launch:** enter protocol, host IP, and port on the connect screen and click **Connect**
 
 ## Every game night
 
 1. Set League to **Borderless** mode
-2. All 10 players launch **`leagueproxy.exe`** before or during champ select
-3. Host creates custom game and invites everyone
-4. Once in match, the panel docks beside the minimap — peers appear within seconds
-5. Talk normally:
-   - **MIC** = self-mute
-   - **VOL** = mute everyone
-   - Per-row mute for individual players
+2. Launch **`leagueproxy.exe`** — enter protocol, host IP, and port → **Connect**
+3. All 10 players do the same before or during champ select
+4. Host creates custom game and invites everyone
+5. Once in match, the panel docks beside the minimap — peers appear within seconds
+6. Talk normally:
+   - **LIVE** / **IDLE** = voice detected vs silent (Voice Activation default)
+   - Collapse chevron (left of Settings) shrinks the panel to a header bar
+   - Per-row **MUTE** for individual players
    - Default input mode is **Voice Activation** (speak to transmit)
 
-## Radmin VPN setup (recommended for friends — no VPS needed)
+## Host setup (recommended — no VPS needed)
 
-Radmin VPN gives your group a **private virtual LAN** (e.g. `26.x.x.x` addresses). It does **not** replace the proximity chat app or the signaling server — but it lets **one friend host the server at home** without paying for a VPS or opening router ports.
+A **private network** (LAN, VPN, or similar) lets one friend host the signaling server at home without paying for a VPS. Players connect using the host’s **protocol, IP, and port**.
 
 ```mermaid
 flowchart LR
-    subgraph radmin [Radmin VPN Network]
-        Host[Host PC runs signaling server :3100]
+    subgraph network [Private network]
+        Host[Host PC runs signaling server]
         F1[Friend 1 + leagueproxy.exe]
         F2[Friend 2 + leagueproxy.exe]
         F10[... up to 10 players]
     end
 
-    Host -->|ws://26.x.x.x:3100| F1
-    Host -->|ws://26.x.x.x:3100| F2
-    Host -->|ws://26.x.x.x:3100| F10
-    F1 <-->|WebRTC voice direct on VPN| F2
+    Host -->|ws/wss host:port| F1
+    Host -->|ws/wss host:port| F2
+    Host -->|ws/wss host:port| F10
+    F1 <-->|WebRTC voice| F2
 ```
 
-### What Radmin VPN does vs. does not do
+### What the network does vs. the app
 
-| | Radmin VPN | leagueproxy.exe |
-|--|------------|-----------------|
-| Private network between friends | Yes | No |
+| | Private network / VPN | leagueproxy.exe |
+|--|----------------------|-----------------|
+| Reachable IP between friends | Yes | No |
 | Match room + proximity volume math | No | Needs signaling server |
 | Voice audio | No | WebRTC between players |
 | Position tracking | No | Minimap CV on each PC |
 
 ### Setup (one-time)
 
-**1. Create a Radmin network** (you as admin)
+**1. Pick a network everyone can join**
 
-- Install [Radmin VPN](https://www.radmin-vpn.com/) on your PC
-- Create a network → share name + password with friends
-- Everyone installs Radmin VPN and joins the same network
+Use a LAN, a VPN your group already uses, or any setup where every player can reach the host’s IP.
 
 **2. Host runs the signaling server** (pick one friend with a stable PC — usually you)
+
+Download **`server.exe`** from the same GitHub release as `leagueproxy.exe`. Enter **protocol**, **host IP**, and **port**, then click **Start server** and **Copy URL**.
+
+Alternatively (developers / manual):
 
 ```bat
 scripts\start-server.bat
 ```
 
-Or manually:
+**3. Note the host’s IP**
 
-```powershell
-cd server
-npm install
-npm run build
-$env:PORT=3100; npm start
-```
+Use the address friends will use to reach the host on your network (e.g. a VPN or LAN IP).
 
-**3. Note the host's Radmin IP**
+**4. Share connection details with friends**
 
-In Radmin VPN, click your network → find your IP (looks like `26.12.34.56`).
+Host copies the URL from **Copy URL** (e.g. `http://192.168.1.10:3100`). Friends enter **protocol**, **host IP**, and **port** when the app launches, or after **Disconnect** to switch hosts.
 
-**4. Rebuild the client pointed at the VPN host** (host only)
+**5. Windows Firewall** on the host: allow inbound traffic on the **TCP port** you chose.
 
-Edit `.env`:
+### Every game night
 
-```
-PROXCHAT_SERVER=http://YOUR_RADMIN_IP:3100
-```
+1. Host runs **`server.exe`** and clicks **Start server**
+2. Everyone launches `leagueproxy.exe`, enters the host’s protocol/IP/port, and connects
+3. Play custom 5v5 as usual
 
-Rebuild with `scripts\build-client.bat` and distribute the new exe to all friends — or publish a GitHub release.
-
-**5. Windows Firewall** on the host: allow inbound **TCP port 3100** (Node signaling server).
-
-### Every game night with Radmin
-
-1. Everyone connects to the **Radmin VPN network** first
-2. Host starts the signaling server (`scripts\start-server.bat`)
-3. Everyone launches `leagueproxy.exe` and plays custom 5v5 as usual
-
-### Why this is a good fit
+### Why self-hosting works well
 
 - **No VPS cost** — server runs on your PC
-- **Private** — only VPN members can reach your server; you control position data
-- **Better voice** — WebRTC often connects **directly over Radmin IPs**, no internet TURN relay needed
+- **Private** — only people who can reach your IP join; you control position data
+- **Better voice** — WebRTC often connects **directly** on LAN/VPN without internet TURN relay
 
 ### If you skip self-hosting
 
-This build uses the host server at **`http://26.36.227.156:3100`** (Radmin). The host must run `start-server.bat` during every session.
+Everyone still needs the host’s **protocol, IP, and port** — there is **no default** in the exe. The host shares connection details each game night; friends enter them when the app starts.
 
 ## Troubleshooting
 
@@ -134,11 +123,13 @@ This build uses the host server at **`http://26.36.227.156:3100`** (Radmin). The
 | No peers in list | All players need the app running; wait ~10 seconds after load-in |
 | Overlay missing | Switch League to **Borderless** (not Fullscreen) |
 | No voice | Check mic permissions; confirm peers show in panel |
-| Can't reach server on Radmin | Host running `start-server.bat`? Firewall allows port 3100? Everyone on same Radmin network? |
+| Can't reach server | Host running **server.exe**? Correct protocol/IP/port? Firewall allows the TCP port? |
 | Vanguard concern | App uses Riot-approved APIs only — no memory reads or injection |
 
 ## Build location (host only)
 
-Distribute: `release\leagueproxy.exe` or GitHub Releases.
+Distribute: `release\leagueproxy.exe` + `release\server.exe`, or GitHub Releases.
 
-Rebuild: `scripts\build-client.bat`. In-app **Check for Updates** pulls from [GitHub Releases](https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases).
+Rebuild client: `scripts\build-client.bat`. Rebuild host: `scripts\build-server.bat`.
+
+In-app **Check for Updates** pulls the matching exe (`leagueproxy.exe` or `server.exe`) from [GitHub Releases](https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases).

@@ -16,6 +16,9 @@
         </div>
       </div>
       <div class="header-controls">
+        <button id="btn-collapse" class="icon-btn icon-btn-svg" title="Collapse panel" aria-label="Collapse">
+          <svg id="collapse-chevron" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+        </button>
         <button id="btn-settings" class="icon-btn icon-btn-svg" title="Settings" aria-label="Settings">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66Z"/></svg>
         </button>
@@ -24,8 +27,42 @@
         </button>
       </div>
     </div>
+    <div id="connect-gate" class="connect-gate">
+      <div class="connect-gate-body">
+        <p class="connect-gate-hint">Enter your name and the host signaling address to join voice chat.</p>
+        <div class="setting-row">
+          <label title="Name shown to the host.">Name</label>
+          <input id="connection-name" class="connection-name-input" type="text" maxlength="24" autocomplete="nickname" />
+        </div>
+        <div class="setting-row">
+          <label title="HTTP or HTTPS.">Protocol</label>
+          <select id="server-protocol" class="server-protocol-select">
+            <option value="" disabled selected hidden>Select</option>
+            <option value="http">HTTP</option>
+            <option value="https">HTTPS</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label title="Host address or hostname.">Host</label>
+          <input id="server-host" class="server-host-input" type="text" autocomplete="off" />
+        </div>
+        <div class="setting-row">
+          <label title="Signaling server port.">Port</label>
+          <input id="server-port" class="host-port-input" type="number" min="1" max="65535" />
+        </div>
+        <div class="setting-row">
+          <label></label>
+          <button id="btn-connect-server" class="icon-btn">Connect</button>
+        </div>
+        <div id="connect-status" class="connect-status"></div>
+      </div>
+    </div>
     <div id="player-list" class="player-list">
-      <div class="empty-state">Waiting for nearby players...</div>
+      <div class="empty-state">Waiting for nearby players… League must be Borderless.</div>
+      <div id="calibrate-row" class="calibrate-row hidden">
+        <button id="btn-align-scanner" class="icon-btn">Align scanner</button>
+        <button id="btn-calibrate-done" class="icon-btn hidden">Done</button>
+      </div>
     </div>
     <div id="settings-panel" class="settings-panel hidden">
       <details class="settings-category" open>
@@ -36,9 +73,8 @@
             <select id="input-device"><option value="">Default</option></select>
           </div>
           <div class="setting-row">
-            <label title="Always Open = mic always on. Push to Talk = hold a key to talk. Voice Activation = mic turns on when you speak.">Input Mode</label>
+            <label title="Push to Talk = hold a key to talk. Voice Activation = mic turns on when you speak.">Input Mode</label>
             <select id="input-mode">
-              <option value="always">Always Open</option>
               <option value="ptt">Push to Talk</option>
               <option value="vad" selected>Voice Activation</option>
             </select>
@@ -49,6 +85,13 @@
               <div class="setting-value-group">
                 <input id="vad-sensitivity" type="range" min="0" max="100" value="50">
                 <span id="vad-sensitivity-label" class="setting-value-label">50</span>
+              </div>
+            </div>
+            <div class="setting-row">
+              <label title="How long the LIVE indicator stays on after you stop speaking.">Hold open</label>
+              <div class="setting-value-group">
+                <input id="vad-hangover" type="range" min="50" max="1000" step="50" value="300">
+                <span id="vad-hangover-label" class="setting-value-label">300ms</span>
               </div>
             </div>
             <div class="setting-row">
@@ -93,6 +136,10 @@
               <option value="standard">Standard (64 kbps)</option>
               <option value="high">High (128 kbps)</option>
             </select>
+          </div>
+          <div class="setting-row">
+            <label title="TURN relay helps voice work through strict NAT. STUN only is fine on a direct LAN or VPN.">Voice relay</label>
+            <span id="relay-status" class="relay-status">Checking…</span>
           </div>
         </div>
       </details>

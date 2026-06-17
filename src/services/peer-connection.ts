@@ -93,7 +93,7 @@ export class PeerConnection {
   private smoothedVolume: number | null = null;
   private lastSetVolumeMs = 0;
   private opusBitrate = OPUS_BITRATES.standard;
-  private inputMode: InputMode = 'always';
+  private inputMode: InputMode = 'vad';
 
   static setGlobalOpusQuality(quality: OpusQuality, inputMode: InputMode): void {
     PeerConnection.globalOpusQuality = quality;
@@ -101,7 +101,7 @@ export class PeerConnection {
   }
 
   private static globalOpusQuality: OpusQuality = 'standard';
-  private static globalInputMode: InputMode = 'always';
+  private static globalInputMode: InputMode = 'vad';
 
   onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
   // Fired when ICE has fully failed. The audio layer is responsible for

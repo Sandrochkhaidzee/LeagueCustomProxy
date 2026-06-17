@@ -1,4 +1,13 @@
+import {
+  bufferRms,
+  sensitivityToThresholds,
+  stepEnergyVad,
+  type EnergyVadState,
+} from './vad-math';
 import { Rnnoise, DenoiseState } from '@shiguredo/rnnoise-wasm';
+
+const FALLBACK_FFT = 2048;
+const FALLBACK_POLL_MS = 50;
 
 export interface AudioWorkletHostCallbacks {
   onLevel?: (rms: number) => void;
@@ -24,11 +33,15 @@ const DEFAULT_CONFIG: AudioWorkletHostConfig = {
   sileroFeed: false,
 };
 
-const WORKLET_URL = '/background/audio-processor.js';
+const WORKLET_URL = new URL('../background/audio-processor.js', window.location.href).href;
 
 export class AudioWorkletHost {
   private node: AudioWorkletNode | null = null;
   private fallbackGain: GainNode | null = null;
+  private fallbackAnalyser: AnalyserNode | null = null;
+  private fallbackVadState: EnergyVadState = { speechActive: false, hangoverSamplesRemaining: 0 };
+  private fallbackPollId: number | null = null;
+  private fallbackTimeBuf: Float32Array | null = null;
   private useWorklet = true;
   private config: AudioWorkletHostConfig = { ...DEFAULT_CONFIG };
   private callbacks: AudioWorkletHostCallbacks = {};
@@ -52,8 +65,10 @@ export class AudioWorkletHost {
       this.node = null;
     }
     if (this.fallbackGain) {
+      this.stopFallbackPoll();
       this.fallbackGain.disconnect();
       this.fallbackGain = null;
+      this.fallbackAnalyser = null;
     }
     if (typeof context.audioWorklet?.addModule !== 'function') {
       console.warn('[AudioWorklet] audioWorklet unavailable — falling back to GainNode');
@@ -95,9 +110,43 @@ export class AudioWorkletHost {
   ): GainNode {
     this.fallbackGain = context.createGain();
     this.fallbackGain.gain.value = this.config.gain;
+    this.fallbackAnalyser = context.createAnalyser();
+    this.fallbackAnalyser.fftSize = FALLBACK_FFT;
+    this.fallbackTimeBuf = new Float32Array(this.fallbackAnalyser.fftSize);
     source.connect(this.fallbackGain);
-    this.fallbackGain.connect(destination);
+    this.fallbackGain.connect(this.fallbackAnalyser);
+    this.fallbackAnalyser.connect(destination);
+    this.startFallbackPoll();
     return this.fallbackGain;
+  }
+
+  private startFallbackPoll(): void {
+    this.stopFallbackPoll();
+    const tick = () => {
+      if (!this.fallbackAnalyser || !this.fallbackTimeBuf) return;
+      this.fallbackAnalyser.getFloatTimeDomainData(this.fallbackTimeBuf);
+      const rms = bufferRms(this.fallbackTimeBuf);
+      this.callbacks.onLevel?.(rms);
+      if (this.config.vadEnabled) {
+        const { open, close } = sensitivityToThresholds(this.config.vadSensitivity);
+        const windowMs = (this.fallbackTimeBuf.length / this.fallbackAnalyser.context.sampleRate) * 1000;
+        const hangoverSteps = Math.max(1, Math.round(this.config.vadHangoverMs / windowMs));
+        const prev = this.fallbackVadState.speechActive;
+        this.fallbackVadState = stepEnergyVad(rms, this.fallbackVadState, open, close, hangoverSteps);
+        if (this.fallbackVadState.speechActive !== prev) {
+          this.debounceSpeech(this.fallbackVadState.speechActive);
+        }
+      }
+      this.fallbackPollId = window.setTimeout(tick, FALLBACK_POLL_MS);
+    };
+    this.fallbackPollId = window.setTimeout(tick, FALLBACK_POLL_MS);
+  }
+
+  private stopFallbackPoll(): void {
+    if (this.fallbackPollId !== null) {
+      clearTimeout(this.fallbackPollId);
+      this.fallbackPollId = null;
+    }
   }
 
   private async initRnnoise(): Promise<void> {
@@ -151,6 +200,10 @@ export class AudioWorkletHost {
     if (this.fallbackGain) {
       this.fallbackGain.gain.value = this.config.gain;
     }
+    if (this.fallbackAnalyser && !this.config.vadEnabled) {
+      this.fallbackVadState = { speechActive: false, hangoverSamplesRemaining: 0 };
+      this.syncSpeechDebounced(false);
+    }
     this.applyConfig();
     if (this.config.rnnoiseEnabled && !prevRnnoise && !this.rnnoise) {
       void this.initRnnoise();
@@ -180,11 +233,17 @@ export class AudioWorkletHost {
     this.debounceSpeech(active);
   }
 
+  /** Keep host debounce aligned when clearing indicator state (e.g. input mode change). */
+  syncSpeechDebounced(active: boolean): void {
+    this.speechDebounced = active;
+  }
+
   setGain(gain: number): void {
     this.setConfig({ gain });
   }
 
   destroy(): void {
+    this.stopFallbackPoll();
     this.denoiseState?.destroy();
     this.denoiseState = null;
     this.rnnoise = null;
@@ -192,5 +251,6 @@ export class AudioWorkletHost {
     this.node = null;
     this.fallbackGain?.disconnect();
     this.fallbackGain = null;
+    this.fallbackAnalyser = null;
   }
 }

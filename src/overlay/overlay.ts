@@ -1,6 +1,17 @@
 import { invoke } from '@tauri-apps/api/core';
 import { setLoggingEnabled } from '../core/logging';
-import { listen } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
+import {
+  getStoredServerEndpointFields,
+  getStoredConnectionName,
+  setStoredServerEndpoint,
+  setStoredConnectionName,
+  normalizeConnectionName,
+  clearStoredServerUrl,
+  isServerUrlConfigured,
+} from '../core/server-prefs';
+import { buildServerUrl, parseServerEndpoint, type ServerEndpointFields } from '../core/server-endpoint';
+import { probeRelayStatus, probeSignalingServer } from '../core/config';
 import {
   checkForUpdate,
   downloadAndApply,
@@ -72,11 +83,47 @@ interface OverlayState {
 
 const playerList = document.getElementById('player-list')!;
 const btnSettings = document.getElementById('btn-settings')!;
+const btnCollapse = document.getElementById('btn-collapse')!;
 const btnClose = document.getElementById('btn-close')!;
 const panel = document.getElementById('panel')!;
+const connectStatus = document.getElementById('connect-status')!;
 const settingsPanel = document.getElementById('settings-panel')!;
 const transmitStatus = document.getElementById('transmit-status')!;
 const transmitLabel = document.getElementById('transmit-label')!;
+const collapseChevron = document.getElementById('collapse-chevron')!;
+const calibrateRow = document.getElementById('calibrate-row')!;
+const btnAlignScanner = document.getElementById('btn-align-scanner') as HTMLButtonElement;
+const btnCalibrateDone = document.getElementById('btn-calibrate-done') as HTMLButtonElement;
+const relayStatusEl = document.getElementById('relay-status')!;
+const serverProtocolSelect = document.getElementById('server-protocol') as HTMLSelectElement;
+const connectionNameInput = document.getElementById('connection-name') as HTMLInputElement;
+const serverHostInput = document.getElementById('server-host') as HTMLInputElement;
+const serverPortInput = document.getElementById('server-port') as HTMLInputElement;
+const btnConnectServer = document.getElementById('btn-connect-server') as HTMLButtonElement;
+
+const PANEL_COLLAPSED_KEY = 'lolproxchat.panelCollapsed';
+const UPDATE_DISMISS_KEY = 'lolproxchat.updateDismissed';
+
+function isPanelCollapsed(): boolean {
+  return localStorage.getItem(PANEL_COLLAPSED_KEY) === '1';
+}
+
+function setPanelCollapsed(collapsed: boolean): void {
+  localStorage.setItem(PANEL_COLLAPSED_KEY, collapsed ? '1' : '0');
+  panel.classList.toggle('collapsed', collapsed);
+  collapseChevron.style.transform = collapsed ? 'rotate(-90deg)' : '';
+  syncOverlayHeight();
+}
+
+if (isPanelCollapsed()) {
+  setPanelCollapsed(true);
+}
+
+btnCollapse.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  setPanelCollapsed(!panel.classList.contains('collapsed'));
+});
 
 const btnDebug = IS_DEV_BUILD ? document.getElementById('btn-debug')! : null;
 
@@ -101,22 +148,33 @@ const playerVolumes: Map<string, number> = new Map();
 btnClose.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
-  invoke('exit_app').catch(() => {
-    // Last resort if IPC fails — still better than a dead button.
-    window.close();
-  });
+  void (async () => {
+    if (isServerUrlConfigured()) {
+      await window.__lolproxchat_shutdown?.();
+    }
+    await invoke('exit_app');
+  })().catch(() => window.close());
 });
 
 btnSettings.addEventListener('click', () => {
+  if (panel.classList.contains('collapsed')) {
+    setPanelCollapsed(false);
+  }
   settingsPanel.classList.toggle('hidden');
   if (!settingsPanel.classList.contains('hidden')) {
+    sendToBackground('resumeAudio', {});
     refreshDeviceLists();
+    void refreshRelayStatus();
     const mode = (document.getElementById('input-mode') as HTMLSelectElement).value;
     if (shouldRunMicMonitor(mode)) {
       sendToBackground('ensureMicMonitor', {});
     }
   }
   syncOverlayHeight();
+});
+
+panel.addEventListener('pointerdown', () => {
+  sendToBackground('resumeAudio', {});
 });
 
 // --- Audio device pickers ---
@@ -185,28 +243,279 @@ const scanRateRow = IS_DEV_BUILD ? document.getElementById('scan-rate-row') : nu
 const btnCheckUpdate = document.getElementById('btn-check-update') as HTMLButtonElement;
 const updateStatus = document.getElementById('update-status')!;
 
-async function runUpdateCheck(): Promise<void> {
-  updateStatus.textContent = 'Checking for updates…';
+async function runUpdateCheck(auto = false): Promise<void> {
+  if (auto) {
+    updateStatus.textContent = 'Checking for updates…';
+  }
   try {
     const info = await checkForUpdate();
+    const dismissKey = UPDATE_DISMISS_KEY + ':' + info.latest_version;
+    if (auto && sessionStorage.getItem(dismissKey) === '1') {
+      updateStatus.textContent = '';
+      return;
+    }
     if (info.update_available && info.download_url) {
-      updateStatus.textContent = 'Update available: v' + info.latest_version + ' — applying…';
-      await downloadAndApply(info.download_url);
-      // If apply succeeds, the process exits before we reach here
+      if (auto) {
+        updateStatus.innerHTML = '';
+        const span = document.createElement('span');
+        span.textContent = 'Update v' + info.latest_version + ' available — ';
+        const installBtn = document.createElement('button');
+        installBtn.className = 'icon-btn';
+        installBtn.textContent = 'Install';
+        installBtn.addEventListener('click', () => {
+          void downloadAndApply(info.download_url!);
+        });
+        const dismissBtn = document.createElement('button');
+        dismissBtn.className = 'icon-btn';
+        dismissBtn.textContent = 'Dismiss';
+        dismissBtn.addEventListener('click', () => {
+          sessionStorage.setItem(dismissKey, '1');
+          updateStatus.textContent = '';
+        });
+        updateStatus.append(span, installBtn, dismissBtn);
+      } else {
+        updateStatus.textContent = 'Update available: v' + info.latest_version + ' — applying…';
+        await downloadAndApply(info.download_url);
+      }
     } else if (info.update_available && !info.download_url) {
       updateStatus.textContent = 'Update v' + info.latest_version
         + ' exists but no leagueproxy.exe on the release';
-    } else {
+    } else if (!auto) {
       updateStatus.textContent = 'Up to date (v' + info.current_version + ')';
+    } else {
+      updateStatus.textContent = '';
     }
   } catch (e) {
-    updateStatus.textContent = 'Update check failed: ' + formatInvokeError(e);
+    if (!auto) {
+      updateStatus.textContent = 'Update check failed: ' + formatInvokeError(e);
+    }
   }
 }
 
+setTimeout(() => void runUpdateCheck(true), 3000);
+
 btnCheckUpdate.addEventListener('click', () => {
-  void runUpdateCheck();
+  void runUpdateCheck(false);
 });
+
+async function refreshRelayStatus(): Promise<void> {
+  if (!isServerUrlConfigured()) {
+    relayStatusEl.textContent = 'Not configured';
+    relayStatusEl.className = 'relay-status';
+    return;
+  }
+  relayStatusEl.textContent = 'Checking…';
+  relayStatusEl.className = 'relay-status';
+  try {
+    const status = await probeRelayStatus(true);
+    if (status === 'turn') {
+      relayStatusEl.textContent = 'OK (TURN relay)';
+      relayStatusEl.classList.add('ok');
+    } else if (status === 'stun-only') {
+      relayStatusEl.textContent = 'STUN only (LAN OK)';
+      relayStatusEl.classList.add('warn');
+    } else {
+      relayStatusEl.textContent = 'Unknown';
+    }
+  } catch {
+    relayStatusEl.textContent = 'Check failed';
+  }
+}
+
+function readServerEndpointFields(): ServerEndpointFields {
+  return {
+    protocol: serverProtocolSelect.value,
+    host: serverHostInput.value,
+    port: serverPortInput.value,
+  };
+}
+
+function applyServerEndpointFields(fields: ServerEndpointFields): void {
+  serverProtocolSelect.value = fields.protocol;
+  serverHostInput.value = fields.host;
+  serverPortInput.value = fields.port;
+}
+
+function applyConnectionNameField(): void {
+  connectionNameInput.value = getStoredConnectionName();
+}
+
+function clearServerEndpointForm(): void {
+  connectionNameInput.value = '';
+  serverProtocolSelect.selectedIndex = 0;
+  serverHostInput.value = '';
+  serverPortInput.value = '';
+}
+
+function showConnectGate(): void {
+  panel.classList.remove('connected');
+  if (panel.classList.contains('collapsed')) {
+    setPanelCollapsed(false);
+  }
+  settingsPanel.classList.add('hidden');
+  clearServerEndpointForm();
+  connectStatus.textContent = '';
+  connectStatus.className = 'connect-status';
+  connectionNameInput.focus();
+  syncOverlayHeight();
+}
+
+function showMainApp(): void {
+  panel.classList.add('connected');
+  applyServerEndpointFields(getStoredServerEndpointFields());
+  syncOverlayHeight();
+}
+
+async function connectToServer(fields: ServerEndpointFields): Promise<boolean> {
+  const parsed = parseServerEndpoint(fields);
+  if (!parsed.ok) {
+    connectStatus.className = 'connect-status error';
+    connectStatus.textContent = parsed.error;
+    syncOverlayHeight();
+    return false;
+  }
+
+  btnConnectServer.disabled = true;
+  connectStatus.className = 'connect-status';
+  connectStatus.textContent = 'Checking server…';
+  syncOverlayHeight();
+
+  const probe = await probeSignalingServer(fields);
+  btnConnectServer.disabled = false;
+
+  if (!probe.ok) {
+    connectStatus.textContent = probe.error;
+    connectStatus.classList.add('error');
+    syncOverlayHeight();
+    return false;
+  }
+
+  setStoredConnectionName(connectionNameInput.value);
+  setStoredServerEndpoint(fields);
+  sendToBackground('setServerUrl', { url: buildServerUrl(parsed.endpoint) });
+  showMainApp();
+  void refreshRelayStatus();
+  connectStatus.textContent = 'Connected.';
+  connectStatus.classList.add('ok');
+  syncOverlayHeight();
+  return true;
+}
+
+async function syncConnectionGate(): Promise<void> {
+  if (!isServerUrlConfigured()) {
+    showConnectGate();
+    syncOverlayHeight();
+    return;
+  }
+
+  const fields = getStoredServerEndpointFields();
+  applyServerEndpointFields(fields);
+  applyConnectionNameField();
+  connectStatus.className = 'connect-status';
+  connectStatus.textContent = 'Checking server…';
+  syncOverlayHeight();
+
+  const probe = await probeSignalingServer(fields);
+  if (probe.ok) {
+    const parsed = parseServerEndpoint(fields);
+    if (parsed.ok) {
+      sendToBackground('setServerUrl', { url: buildServerUrl(parsed.endpoint) });
+    }
+    showMainApp();
+    connectStatus.textContent = '';
+  } else {
+    clearStoredServerUrl();
+    showConnectGate();
+    connectStatus.textContent = probe.error;
+    connectStatus.classList.add('error');
+  }
+  syncOverlayHeight();
+}
+
+window.addEventListener('serverDisconnected', ((event: CustomEvent<{ reason?: string }>) => {
+  clearStoredServerUrl();
+  showConnectGate();
+  const reason = event.detail?.reason;
+  if (reason) {
+    connectStatus.textContent = reason;
+    connectStatus.classList.add('error');
+  }
+  syncOverlayHeight();
+}) as EventListener);
+
+async function submitConnect(): Promise<void> {
+  const name = connectionNameInput.value;
+  if (!normalizeConnectionName(name)) {
+    connectStatus.className = 'connect-status error';
+    connectStatus.textContent = 'Enter your name (1–24 characters).';
+    connectionNameInput.focus();
+    syncOverlayHeight();
+    return;
+  }
+
+  const fields = readServerEndpointFields();
+  const parsed = parseServerEndpoint(fields);
+  if (!parsed.ok) {
+    connectStatus.className = 'connect-status';
+    connectStatus.textContent = parsed.error;
+    connectStatus.classList.add('error');
+    if (!fields.protocol) {
+      serverProtocolSelect.focus();
+    } else if (!fields.host.trim()) {
+      serverHostInput.focus();
+    } else {
+      serverPortInput.focus();
+    }
+    return;
+  }
+  const ok = await connectToServer(fields);
+  if (!ok && !connectStatus.classList.contains('error')) {
+    serverHostInput.focus();
+  }
+}
+
+btnConnectServer.addEventListener('click', () => void submitConnect());
+
+for (const el of [connectionNameInput, serverProtocolSelect, serverHostInput, serverPortInput]) {
+  el.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void submitConnect();
+    }
+  });
+}
+
+let scanningSinceMs: number | null = null;
+let calibrating = false;
+
+btnAlignScanner.addEventListener('click', () => {
+  calibrating = true;
+  btnAlignScanner.classList.add('hidden');
+  btnCalibrateDone.classList.remove('hidden');
+  invoke('begin_scanner_calibration').catch((e) => console.warn('[Overlay] calibration begin:', e));
+  void emit('calibration:begin');
+});
+
+btnCalibrateDone.addEventListener('click', () => {
+  calibrating = false;
+  btnCalibrateDone.classList.add('hidden');
+  btnAlignScanner.classList.remove('hidden');
+  invoke('end_scanner_calibration').catch((e) => console.warn('[Overlay] calibration end:', e));
+  void emit('calibration:end');
+});
+
+listen<{ screen_x: number; screen_y: number; screen_width: number; screen_height: number }>(
+  'calibration:bounds',
+  (event) => {
+    const b = event.payload;
+    sendToBackground('calibrationBounds', {
+      screenX: b.screen_x,
+      screenY: b.screen_y,
+      screenWidth: b.screen_width,
+      screenHeight: b.screen_height,
+    });
+  },
+).catch((e) => console.warn('[Overlay] calibration:bounds listen failed:', e));
 
 const btnOpenLogs = IS_DEV_BUILD ? document.getElementById('btn-open-logs') as HTMLButtonElement : null;
 if (btnOpenLogs) {
@@ -289,6 +598,52 @@ queueMicrotask(() => {
   sendToBackground('setPttKey', { vk: !Number.isNaN(vk) && vk > 0 ? vk : 0 });
 });
 
+// WH_KEYBOARD_LL does not always reach our hook when this webview has focus.
+// Mirror PTT here so IDLE→LIVE works while clicking around the overlay.
+let localPttDown = false;
+
+function readBoundPttVk(): number {
+  const stored = localStorage.getItem(PTT_VK_KEY);
+  if (stored === null) return 0;
+  const vk = parseInt(stored, 10);
+  return !Number.isNaN(vk) && vk > 0 ? vk : 0;
+}
+
+function handleOverlayPttKeydown(e: KeyboardEvent): void {
+  const boundVk = readBoundPttVk();
+  if (!boundVk) return;
+  const vk = browserKeyToWin32Vk(e.code);
+  if (vk === null || vk !== boundVk) return;
+  if (e.repeat) return;
+  e.preventDefault();
+  if (!localPttDown) {
+    localPttDown = true;
+    sendToBackground('resumeAudio', {});
+    sendToBackground('setPTT', { held: true });
+  }
+}
+
+function handleOverlayPttKeyup(e: KeyboardEvent): void {
+  const boundVk = readBoundPttVk();
+  if (!boundVk) return;
+  const vk = browserKeyToWin32Vk(e.code);
+  if (vk === null || vk !== boundVk) return;
+  e.preventDefault();
+  if (localPttDown) {
+    localPttDown = false;
+    sendToBackground('setPTT', { held: false });
+  }
+}
+
+window.addEventListener('keydown', handleOverlayPttKeydown, true);
+window.addEventListener('keyup', handleOverlayPttKeyup, true);
+window.addEventListener('blur', () => {
+  if (localPttDown) {
+    localPttDown = false;
+    sendToBackground('setPTT', { held: false });
+  }
+});
+
 if (btnDebug) {
   btnDebug.addEventListener('click', () => {
     debugEnabled = !debugEnabled;
@@ -326,7 +681,9 @@ const panelEl = document.querySelector('.panel');
 if (panelEl) {
   new ResizeObserver(syncOverlayHeight).observe(panelEl);
 }
-window.addEventListener('DOMContentLoaded', syncOverlayHeight);
+window.addEventListener('DOMContentLoaded', () => {
+  void syncConnectionGate();
+});
 
 document.querySelectorAll('.settings-category').forEach((el) => {
   el.addEventListener('toggle', syncOverlayHeight);
@@ -343,13 +700,15 @@ document.getElementById('input-mode')!.addEventListener('change', (e) => {
 });
 
 function shouldRunMicMonitor(mode: string): boolean {
-  return mode === 'vad' || mode === 'always';
+  return mode === 'vad' || mode === 'ptt';
 }
 
 const vadSettings = document.getElementById('vad-settings')!;
 const pttSettings = document.getElementById('ptt-settings')!;
 const vadSensitivityInput = document.getElementById('vad-sensitivity') as HTMLInputElement;
 const vadSensitivityLabel = document.getElementById('vad-sensitivity-label')!;
+const vadHangoverInput = document.getElementById('vad-hangover') as HTMLInputElement;
+const vadHangoverLabel = document.getElementById('vad-hangover-label')!;
 const vadEngineSelect = IS_DEV_BUILD
   ? document.getElementById('vad-engine') as HTMLSelectElement
   : null;
@@ -386,6 +745,10 @@ function loadPersistedAudioSettings(): void {
     vadSensitivityInput.value = String(s.vadSensitivity);
     vadSensitivityLabel.textContent = String(s.vadSensitivity);
   }
+  if (s.vadHangoverMs !== undefined) {
+    vadHangoverInput.value = String(s.vadHangoverMs);
+    vadHangoverLabel.textContent = s.vadHangoverMs + 'ms';
+  }
   if (s.vadEngine && vadEngineSelect) vadEngineSelect.value = s.vadEngine;
   if (s.noiseMode) noiseModeSelect.value = s.noiseMode;
   if (s.opusQuality) opusQualitySelect.value = s.opusQuality;
@@ -406,9 +769,7 @@ queueMicrotask(() => {
     sendToBackground('updateSettings', { vadEngine: 'energy' });
   }
   loadPersistedAudioSettings();
-  if (shouldRunMicMonitor((document.getElementById('input-mode') as HTMLSelectElement).value)) {
-    sendToBackground('ensureMicMonitor', {});
-  }
+  // Mic monitor starts on settings open / panel click (needs user gesture for Web Audio).
 });
 
 vadSensitivityInput.addEventListener('input', () => {
@@ -416,6 +777,13 @@ vadSensitivityInput.addEventListener('input', () => {
   vadSensitivityLabel.textContent = String(raw);
   saveAudioSettings({ vadSensitivity: raw });
   sendToBackground('updateSettings', { vadSensitivity: raw });
+});
+
+vadHangoverInput.addEventListener('input', () => {
+  const raw = parseInt(vadHangoverInput.value, 10);
+  vadHangoverLabel.textContent = raw + 'ms';
+  saveAudioSettings({ vadHangoverMs: raw });
+  sendToBackground('updateSettings', { vadHangoverMs: raw });
 });
 
 if (vadEngineSelect) {
@@ -701,6 +1069,16 @@ function renderState(state: OverlayState): void {
     emptyState.remove();
   }
 
+  // Show align-scanner after 15s in scanning state
+  if (state.trackingState === 'scanning' && !calibrating) {
+    if (scanningSinceMs === null) scanningSinceMs = performance.now();
+    const elapsed = performance.now() - scanningSinceMs;
+    calibrateRow.classList.toggle('hidden', elapsed < 15000);
+  } else {
+    scanningSinceMs = null;
+    if (!calibrating) calibrateRow.classList.add('hidden');
+  }
+
   // Debug info (dev builds only)
   if (IS_DEV_BUILD && debugEnabled) {
     const dbgEl = document.getElementById('debug-info');
@@ -722,6 +1100,13 @@ function renderState(state: OverlayState): void {
 window.addEventListener('overlayUpdate', ((event: CustomEvent) => {
   renderState(event.detail);
 }) as EventListener);
+
+window.addEventListener('sessionEnded', () => {
+  const mode = (document.getElementById('input-mode') as HTMLSelectElement | null)?.value;
+  if (mode && shouldRunMicMonitor(mode)) {
+    sendToBackground('ensureMicMonitor', {});
+  }
+});
 
 console.log('LoLProxChat overlay loaded');
 

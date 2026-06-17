@@ -1,6 +1,6 @@
 // src/services/volume-client.ts
 import { Position } from '../core/types';
-import { SERVER_URL } from '../core/config';
+import { getServerUrl } from '../core/config';
 
 interface VolumeResponse {
   // Always empty in v0.2 — kept on the wire only so older server builds that
@@ -10,10 +10,10 @@ interface VolumeResponse {
 }
 
 export class VolumeClient {
-  private endpoint: string;
-
-  constructor() {
-    this.endpoint = `${SERVER_URL}/compute-volumes`;
+  private endpoint(): string | null {
+    const base = getServerUrl();
+    if (!base) return null;
+    return `${base}/compute-volumes`;
   }
 
   /**
@@ -34,8 +34,13 @@ export class VolumeClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000);
 
+    const endpoint = this.endpoint();
+    if (!endpoint) {
+      throw new Error('Signaling server URL not configured');
+    }
+
     try {
-      const resp = await fetch(this.endpoint, {
+      const resp = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

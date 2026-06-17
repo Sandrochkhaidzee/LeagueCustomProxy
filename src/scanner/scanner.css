@@ -13,7 +13,15 @@ html, body {
   height: 100%;
 }
 
-/* Resize handles — currently visual-only, not wired to JS drag yet */
+/* Resize handles — wired during calibration mode */
+.corner, .edge {
+  pointer-events: none;
+}
+body.calibration-active .corner,
+body.calibration-active .edge {
+  pointer-events: auto;
+  background: rgba(255, 200, 50, 0.25);
+}
 .corner {
   position: absolute;
   width: 18px;

@@ -1737,7 +1737,7 @@ dependencies = [
 
 [[package]]
 name = "leagueproxy"
-version = "0.1.0-beta.1"
+version = "2.0.0"
 dependencies = [
  "base64 0.22.1",
  "reqwest 0.12.28",

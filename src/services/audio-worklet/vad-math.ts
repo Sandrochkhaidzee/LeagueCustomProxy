@@ -18,22 +18,22 @@ export interface EnergyVadState {
 }
 
 /**
- * One energy-VAD step with hysteresis and hangover (sample-domain).
- * `hangoverSamples` = hangoverMs * sampleRate / 1000.
+ * One energy-VAD step with hysteresis and hangover.
+ * `hangoverSteps` = number of RMS windows to hold open after signal drops below close.
  */
 export function stepEnergyVad(
   rms: number,
   state: EnergyVadState,
   openThreshold: number,
   closeThreshold: number,
-  hangoverSamples: number,
+  hangoverSteps: number,
 ): EnergyVadState {
   if (rms >= openThreshold) {
-    return { speechActive: true, hangoverSamplesRemaining: hangoverSamples };
+    return { speechActive: true, hangoverSamplesRemaining: hangoverSteps };
   }
   if (state.speechActive) {
     if (rms >= closeThreshold) {
-      return { speechActive: true, hangoverSamplesRemaining: hangoverSamples };
+      return { speechActive: true, hangoverSamplesRemaining: hangoverSteps };
     }
     const remaining = state.hangoverSamplesRemaining - 1;
     if (remaining > 0) {

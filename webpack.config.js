@@ -56,7 +56,6 @@ module.exports = {
   },
   plugins: [
     new webpack.DefinePlugin({
-      __PROXCHAT_SERVER__: JSON.stringify(process.env.PROXCHAT_SERVER || 'http://26.36.227.156:3100'),
       __DEV_BUILD__: JSON.stringify(isDevBuild),
     }),
     new CopyPlugin({
@@ -70,6 +69,7 @@ module.exports = {
         // Champion classifier model + labels
         { from: 'models/champion_classifier.onnx', to: 'models/' },
         { from: 'models/champion_labels.json', to: 'models/' },
+        { from: 'models/champion-icons-manifest.json', to: 'models/' },
         { from: 'models/silero_vad_legacy.onnx', to: 'models/' },
         // ONNX Runtime WASM + MJS loader files (both required for WASM backend)
         { from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded*.wasm', to: 'background/[name][ext]' },

@@ -11,6 +11,8 @@ declare global {
      * while Debug is on.
      */
     __lolproxchat_debug_enabled?: boolean;
+    /** Called from Rust before process exit so the host sees a clean disconnect. */
+    __lolproxchat_shutdown?: () => Promise<void>;
   }
 }
 

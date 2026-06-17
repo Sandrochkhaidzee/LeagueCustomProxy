@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LeagueProxy Server</title>
+  <link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+  <div id="panel" class="panel server-panel">
+    <div id="drag-handle" class="widget-header" data-tauri-drag-region>
+      <div class="header-left" data-tauri-drag-region>
+        <span class="widget-title" data-tauri-drag-region>LeagueProxy Host</span>
+        <div id="host-badge" class="transmit-status" title="Signaling server status">
+          <span id="host-dot" class="transmit-dot"></span>
+          <span id="host-label" class="transmit-label">STOPPED</span>
+        </div>
+      </div>
+      <div class="header-controls">
+        <button id="btn-collapse" class="icon-btn icon-btn-svg" title="Collapse panel" aria-label="Collapse">
+          <svg id="collapse-chevron" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+        </button>
+        <button id="btn-close" class="icon-btn icon-btn-svg icon-btn-close" title="Close" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="host-panel" class="host-panel">
+      <details class="settings-category" open>
+        <summary class="settings-category-header">Hosting</summary>
+        <div class="settings-category-body">
+          <div class="setting-row">
+            <label title="HTTP or HTTPS for the share URL.">Protocol</label>
+            <select id="host-protocol" class="server-protocol-select">
+              <option value="" disabled selected hidden>Select</option>
+              <option value="http">HTTP</option>
+              <option value="https">HTTPS</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label title="Address friends use to connect.">Host</label>
+            <input id="host-ip" class="server-host-input" type="text" autocomplete="off" />
+          </div>
+          <div class="setting-row">
+            <label title="TCP port for the signaling server.">Port</label>
+            <input id="host-port" class="host-port-input" type="number" min="1" max="65535" />
+          </div>
+          <div class="setting-row">
+            <label title="Start the Node signaling server on this PC (requires Node.js 24+).">Server</label>
+            <button id="btn-host-start" class="icon-btn">Start server</button>
+            <button id="btn-host-stop" class="icon-btn hidden">Stop server</button>
+          </div>
+          <div class="setting-row">
+            <label title="Share this URL with friends.">Share URL</label>
+            <button id="btn-copy-host-url" class="icon-btn">Copy URL</button>
+          </div>
+          <div id="host-status" class="host-status">Stopped — allow the TCP port through your firewall if friends cannot connect.</div>
+        </div>
+      </details>
+
+      <details class="settings-category hidden" id="connections-section">
+        <summary class="settings-category-header">Connections</summary>
+        <div class="settings-category-body">
+          <div id="host-log" class="host-log" aria-live="polite"></div>
+          <div id="host-clients" class="host-clients"></div>
+          <div class="setting-row">
+            <label></label>
+            <button id="btn-clear-log" class="icon-btn" type="button">Clear log view</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-category">
+        <summary class="settings-category-header">Updates</summary>
+        <div class="settings-category-body">
+          <div class="setting-row">
+            <label title="Search for a newer version of the host app right now.">Check for Updates</label>
+            <button id="btn-check-update" class="icon-btn">CHECK</button>
+          </div>
+          <div id="update-status" class="update-status"></div>
+        </div>
+      </details>
+    </div>
+  </div>
+  <script src="../background/background.js"></script>
+  <script src="overlay.js"></script>
+</body>
+</html>

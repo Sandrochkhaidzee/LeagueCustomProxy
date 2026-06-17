@@ -2,6 +2,49 @@
 
 All notable changes to LeagueProxy are documented here.
 
+## [2.0.0] — 2026-06-17
+
+Major release: dedicated host app, connect-on-launch flow, and improved tracking.
+
+### Host app
+
+- New **`server.exe`** desktop host (Tauri) — start/stop signaling, copy share URL, no Node.js required.
+- Embedded signaling server bundled inside the host app; `scripts/start-server.bat` remains for developers.
+- Host admin API with connection event log and live client list.
+- GitHub Actions release workflow builds and ships **both** `leagueproxy.exe` and `server.exe`.
+
+### Connect & networking
+
+- **Connect screen** on launch: protocol, host IP, port, and display name (session-only — re-enter each run).
+- **Disconnect** to change host without restarting the app.
+- No baked-in default server URL; host shares connection details each game night.
+- Relay status indicator (TURN vs STUN-only) in settings.
+
+### Voice & audio
+
+- Allies use proximity falloff like enemies (distance-based volume for everyone).
+- Refactored volume and transmit-indicator logic with unit tests.
+- Audio pipeline cleanup and more reliable LIVE / IDLE indicator.
+
+### Tracking
+
+- Champion **template matcher** for more reliable minimap icon identification.
+- Scanner calibration flow and improved blob scoring / jump limits.
+- Dynamic overlay resize with DPI-aware height sync.
+
+### App & UI
+
+- New app icons (client + server) generated from `assets/*.png` via `npm run generate:icons`.
+- Collapsible panel header; settings gear and close controls.
+- Overlay polish: connection status, relay line, calibrate row.
+
+### Developer
+
+- `scripts/build-server.bat` for local `server.exe` builds.
+- `webpack.server.config.js` and `dist-server/` frontend for the host app.
+- Unit tests for resize, audio volume/transmit, tracking helpers, template-match math, and VAD math.
+- CI runs tests and icon generation before Tauri builds.
+
 ## [1.0.0] — 2026-06-17
 
 First stable release for custom 5v5 friend groups.
@@ -32,11 +75,12 @@ First stable release for custom 5v5 friend groups.
 
 - Signaling server in `server/` (run via `scripts/start-server.bat`).
 - GitHub Actions release workflow builds `leagueproxy.exe` on version tags.
-- Radmin VPN–friendly setup documented in README and friend playbook.
+- Self-hosted signaling server documented in README and friend playbook.
 
 ### Developer
 
 - Release vs dev builds (`leagueproxy.exe` vs `leagueproxy-dev.exe`).
 - Split build scripts for faster iteration (`build-frontend-only`, `build-rust-only`).
 
+[2.0.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.0.0
 [1.0.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v1.0.0

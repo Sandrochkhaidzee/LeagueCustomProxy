@@ -6,21 +6,21 @@ Download **`leagueproxy.exe`** from [Releases](https://github.com/Sandrochkhaidz
 
 ## Players (3 steps)
 
-1. **Join Radmin VPN** — network name and password from the host (Discord).
+1. **Get connection details** from the host — protocol (HTTP/HTTPS), IP, and port.
 2. **Download** `leagueproxy.exe` from Releases → verify SHA-256 in the release notes.
-3. **Launch** the exe → open League in **Borderless** mode → join the host’s custom game.
+3. **Launch** the exe → enter protocol, host IP, and port → **Connect** → open League in **Borderless** mode → join the host’s custom game.
 
 First launch: Windows SmartScreen may warn → **More info → Run anyway**.
 
-No build tools needed. The release exe is preconfigured for the host server.
+No build tools needed.
 
 ## Host (you)
 
 Every game night, before anyone queues:
 
-1. Connect to **Radmin VPN**
-2. Run **`scripts\start-server.bat`** (leave the window open)
-3. Allow **TCP port 3100** through Windows Firewall (VPN only)
+1. Run **`server.exe`** (or `scripts\start-server.bat` for developers) — enter protocol, host IP, and port → **Start server**
+2. **Copy URL** and share with friends
+3. Allow the **TCP port** through Windows Firewall
 4. Launch **`leagueproxy.exe`** and create the custom lobby
 
 ## Requirements
@@ -29,7 +29,7 @@ Every game night, before anyone queues:
 |--|--|
 | OS | Windows 10/11 + WebView2 |
 | League | **Borderless** window mode (all 10 players) |
-| VPN | Radmin VPN — same network as host |
+| Network | Host IP reachable by all players (LAN, VPN, or port-forwarded) |
 | Use case | Private custom 5v5 with friends only |
 
 ## Safety
@@ -45,7 +45,7 @@ Every game night, before anyone queues:
 scripts\build-client.bat
 ```
 
-Requires Node.js 20+, Rust, and Visual Studio C++ Build Tools. Output: `release\leagueproxy.exe`.
+Requires Node.js 24+, Rust, and Visual Studio C++ Build Tools. Output: `release\leagueproxy.exe`.
 
 Faster iteration:
 
@@ -54,15 +54,16 @@ Faster iteration:
 | `scripts\build-frontend-only.bat` | You changed TS/HTML/CSS only |
 | `scripts\build-rust-only.bat` | You changed `src-tauri` only |
 | `scripts\build-client-dev.bat` | Dev exe with debug UI (`leagueproxy-dev.exe`) |
+| `scripts\build-server.bat` | Host app (`server.exe`) |
 
 ## Publish a release
 
 ```powershell
-git tag v1.0.0
-git push origin v1.0.0
+git tag v2.0.0
+git push origin v2.0.0
 ```
 
-GitHub Actions builds and attaches `leagueproxy.exe`. See [docs/PUBLISH.md](docs/PUBLISH.md).
+GitHub Actions builds and attaches `leagueproxy.exe` and `server.exe`. See [docs/PUBLISH.md](docs/PUBLISH.md).
 
 ## Attribution
 

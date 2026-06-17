@@ -12,18 +12,14 @@ if not exist .env copy .env.example .env
 set PROXCHAT_DEV_BUILD=0
 echo Building RELEASE client (no debug UI) ...
 if "%GITHUB_REPOSITORY%"=="" set "GITHUB_REPOSITORY=Sandrochkhaidzee/LeagueCustomProxy"
+call "%~dp0generate-icons.bat"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call npm run build:release
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call npx tauri build --no-bundle
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 if not exist "%~dp0..\release" mkdir "%~dp0..\release"
-for %%F in ("%~dp0..\src-tauri\target\release\*.exe") do (
-  copy /Y "%%F" "%~dp0..\release\leagueproxy.exe" >nul
-  echo.
-  echo Build complete: release\leagueproxy.exe
-  powershell -NoProfile -Command "Get-FileHash '%~dp0..\release\leagueproxy.exe' -Algorithm SHA256 | Format-List"
-  goto :done
-)
-echo ERROR: no exe in src-tauri\target\release
-exit /b 1
-:done
+copy /Y "%~dp0..\src-tauri\target\release\leagueproxy.exe" "%~dp0..\release\leagueproxy.exe" >nul
+echo.
+echo Build complete: release\leagueproxy.exe
+powershell -NoProfile -Command "Get-FileHash '%~dp0..\release\leagueproxy.exe' -Algorithm SHA256 | Format-List"

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickvdyck/tauri-settings-schema/refs/heads/main/schemas/2.1.0/schema.json",
   "productName": "LeagueProxy",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "identifier": "com.leagueproxy",
   "build": {
     "frontendDist": "../dist",

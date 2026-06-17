@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Position, MapType, MAP_DIMENSIONS } from '../core/types';
 import { getMinimapBounds, MinimapBounds } from '../core/map-calibration';
 import { ChampionClassifier } from './champion-classifier';
+import { ChampionTemplateMatcher } from './champion-template-matcher';
 import {
   computeMaxJumpPx,
   computeReacquireThreshold,
@@ -61,10 +62,12 @@ export class TrackingService {
   private filteredImageUrl: string | null = null;
   private lastDebugImageMs = 0;
 
-  // Champion classifier (ONNX model)
+  // Champion classifier (ONNX model) — fallback when template load fails
   private classifier: ChampionClassifier | null = null;
-  // Cached classifier scores per blob (refreshed periodically, not every frame)
+  private templateMatcher: ChampionTemplateMatcher | null = null;
+  // Cached identity scores per blob (template or classifier)
   private classifierScores: Map<string, number> = new Map();
+  private templateScores: Map<string, number> = new Map();
   // EMA-smoothed classifier scores to dampen single-frame misclassifications
   private smoothedClassifierScores: Map<string, number> = new Map();
   private lastClassifierRunMs = 0;
@@ -227,8 +230,15 @@ export class TrackingService {
     this.holdStartMs = 0;
   }
 
-  loadChampionTemplate(_championName: string): void {
-    console.log('[Tracking] Using color filter + blob detection');
+  loadChampionTemplate(championName: string): void {
+    this.templateMatcher = new ChampionTemplateMatcher();
+    void this.templateMatcher.load(championName).then((ok) => {
+      if (ok) {
+        console.log('[Tracking] Template matcher ready for', championName);
+      } else {
+        console.log('[Tracking] Template load failed — using ONNX classifier fallback');
+      }
+    });
   }
 
   setClassifier(classifier: ChampionClassifier): void {
@@ -363,11 +373,30 @@ export class TrackingService {
     }
   }
 
+  private updateTemplateScores(
+    tealBlobs: Blob[],
+    imageData: ImageData,
+    region: { x: number; y: number; width: number; height: number },
+  ): void {
+    if (!this.templateMatcher?.isLoaded()) return;
+    this.templateScores.clear();
+    for (const b of tealBlobs) {
+      const cropX = region.x + b.minX - 1;
+      const cropY = region.y + b.minY - 1;
+      const cropW = b.maxX - b.minX + 3;
+      const cropH = b.maxY - b.minY + 3;
+      const score = this.templateMatcher.scoreCrop(imageData, cropX, cropY, cropW, cropH);
+      this.templateScores.set(b.cx + ',' + b.cy, score);
+    }
+  }
+
   /**
    * Get cached classifier score for a blob.
    * Uses fuzzy matching: finds the closest cached blob center within icon diameter.
    */
   private getClassifierScore(blob: Blob): number {
+    const template = this.getTemplateScore(blob);
+    if (this.templateMatcher?.isLoaded()) return template;
     // Exact match first
     const exact = this.classifierScores.get(blob.cx + ',' + blob.cy);
     if (exact !== undefined) return exact;
@@ -378,6 +407,26 @@ export class TrackingService {
     let bestScore = 0;
     let bestDistSq = Infinity;
     for (const [key, score] of this.classifierScores) {
+      const [kx, ky] = key.split(',').map(Number);
+      const dx = blob.cx - kx;
+      const dy = blob.cy - ky;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < toleranceSq && distSq < bestDistSq) {
+        bestDistSq = distSq;
+        bestScore = score;
+      }
+    }
+    return bestScore;
+  }
+
+  private getTemplateScore(blob: Blob): number {
+    const exact = this.templateScores.get(blob.cx + ',' + blob.cy);
+    if (exact !== undefined) return exact;
+    const tolerance = Math.max(5, this.expectedIconDiam * 0.6);
+    const toleranceSq = tolerance * tolerance;
+    let bestScore = 0;
+    let bestDistSq = Infinity;
+    for (const [key, score] of this.templateScores) {
       const [kx, ky] = key.split(',').map(Number);
       const dx = blob.cx - kx;
       const dy = blob.cy - ky;
@@ -808,6 +857,9 @@ export class TrackingService {
 
             // Run classifier at most every 500ms (scan-rate independent)
             const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
+            if (tealBlobs.length > 0) {
+              this.updateTemplateScores(tealBlobs, imageData, region);
+            }
             if (
               this.classifier &&
               tealBlobs.length > 0 &&
@@ -860,7 +912,10 @@ export class TrackingService {
 
     // Wait ~1s for classifier EMA to stabilize (~0.5s without classifier),
     // independent of scan rate.
-    const hasClassifier = !!(this.classifier && this.classifier.isLoaded());
+    const hasClassifier = !!(
+      (this.templateMatcher && this.templateMatcher.isLoaded()) ||
+      (this.classifier && this.classifier.isLoaded())
+    );
     const warmupMs = hasClassifier ? 1000 : 500;
     if (performance.now() - this.scanStartMs < warmupMs) {
       if (this.onPositionUpdate && this.lastPosition) {
@@ -960,7 +1015,10 @@ export class TrackingService {
     }
 
     const tealBlobs = iconBlobs.filter(b => b.color === 'teal');
-    const hasClassifier = !!(this.classifier && this.classifier.isLoaded());
+    const hasClassifier = !!(
+      (this.templateMatcher && this.templateMatcher.isLoaded()) ||
+      (this.classifier && this.classifier.isLoaded())
+    );
 
     // No teal blobs at all — extrapolate position using decaying velocity
     if (tealBlobs.length === 0) {

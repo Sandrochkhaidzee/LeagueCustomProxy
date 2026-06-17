@@ -1,7 +1,6 @@
 import type { AudioSettings, InputMode, NoiseMode, OpusQuality, VadEngine } from '../core/types';
 
 const KEYS = {
-  allyProximity: 'lolproxchat.allyProximity',
   inputMode: 'lolproxchat.inputMode',
   inputVolume: 'lolproxchat.inputVolume',
   vadSensitivity: 'lolproxchat.vadSensitivity',
@@ -15,13 +14,9 @@ const KEYS = {
   playerVolumes: 'lolproxchat.playerVolumes',
 } as const;
 
+/** Teammates use distance falloff like enemies — always on, no user toggle. */
 export function getAllyProximity(): boolean {
-  // Ally proximity is disabled — teammates always at full volume.
-  return false;
-}
-
-export function setAllyProximity(_enabled: boolean): void {
-  localStorage.removeItem(KEYS.allyProximity);
+  return true;
 }
 
 function readBool(key: string, defaultValue: boolean): boolean {
@@ -36,7 +31,8 @@ function writeBool(key: string, value: boolean): void {
 }
 
 export function loadAudioSettings(): Partial<AudioSettings> {
-  const inputMode = localStorage.getItem(KEYS.inputMode) as InputMode | null;
+  const inputMode = localStorage.getItem(KEYS.inputMode);
+  const resolvedMode = inputMode === 'always' ? 'vad' : inputMode;
   const inputVolume = localStorage.getItem(KEYS.inputVolume);
   const vadSensitivity = localStorage.getItem(KEYS.vadSensitivity);
   const vadHangoverMs = localStorage.getItem(KEYS.vadHangoverMs);
@@ -50,7 +46,7 @@ export function loadAudioSettings(): Partial<AudioSettings> {
   } catch { /* ignore corrupt */ }
 
   return {
-    inputMode: inputMode === 'ptt' || inputMode === 'vad' || inputMode === 'always' ? inputMode : 'vad',
+    inputMode: resolvedMode === 'ptt' || resolvedMode === 'vad' ? resolvedMode : 'vad',
     inputVolume: inputVolume !== null ? Math.max(0, Math.min(1, parseFloat(inputVolume))) : 1,
     vadSensitivity: vadSensitivity !== null ? Math.max(0, Math.min(100, parseInt(vadSensitivity, 10))) : 50,
     vadHangoverMs: vadHangoverMs !== null ? Math.max(50, Math.min(1000, parseInt(vadHangoverMs, 10))) : 300,

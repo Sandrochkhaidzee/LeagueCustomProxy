@@ -5,6 +5,11 @@ import { getStoredInputDeviceId, getStoredOutputDeviceId, getCaptureConstraints 
 import { loadAudioSettings, saveAudioSettings, savePlayerVolume } from './audio-prefs';
 import { AudioWorkletHost } from './audio-worklet/host';
 import { SileroVadService } from './audio-worklet/silero-vad';
+import { isTransmitIndicatorLive } from './audio-transmit';
+import {
+  computeFinalPeerVolume,
+  resolveProximityTargets,
+} from './audio-volume';
 
 const DEFAULT_SETTINGS: AudioSettings = {
   inputMode: 'vad',
@@ -19,28 +24,6 @@ const DEFAULT_SETTINGS: AudioSettings = {
   noiseSuppression: true,
   autoGainControl: true,
 };
-
-/**
- * Compute the per-peer audio gain by combining the server-returned proximity
- * volume with the user's per-player slider preference.
- */
-export function computeFinalPeerVolume(proximityVol: number, sliderVol: number): number {
-  const p = Math.max(0, Math.min(1, proximityVol));
-  const s = Math.max(0, Math.min(1, sliderVol));
-  return p * s;
-}
-
-export function resolveProximityTargets(
-  responseVolumes: Record<string, number>,
-  connectedPeerNames: Iterable<string>,
-): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const [name, v] of Object.entries(responseVolumes)) out.set(name, v);
-  for (const name of connectedPeerNames) {
-    if (!out.has(name)) out.set(name, 0);
-  }
-  return out;
-}
 
 export type OverlayAudioState = {
   micLevel: number;
@@ -115,31 +98,31 @@ export class AudioService {
     return this.settings.inputMode;
   }
 
-  /** Header LIVE/IDLE — voice activity for VAD & Always Open; key held for PTT. */
+/** Header LIVE/IDLE — voice activity for VAD; key held for PTT. */
   private isTransmitIndicatorLive(): boolean {
-    if (this.selfMuted) return false;
-    if (this.settings.inputMode === 'ptt') return this.pttHeld;
-    if (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always') {
-      return this.speechActive;
-    }
-    return true;
+    return isTransmitIndicatorLive(
+      this.settings.inputMode,
+      this.selfMuted,
+      this.speechActive,
+      this.pttHeld,
+    );
+  }
+
+  /** Energy VAD in the worklet when VAD mode uses the energy engine (or Silero failed). */
+  private shouldUseEnergyVad(): boolean {
+    if (this.settings.inputMode !== 'vad') return false;
+    return this.settings.vadEngine === 'energy' || this.sileroFailed;
   }
 
   async initMicrophone(): Promise<void> {
     this.localStream = await this.acquireMicStream();
 
     this.audioContext = new AudioContext();
-    if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
-    }
-    await this.applyStoredOutputDevice();
+    await this.resumePipeline();
 
     this.micSource = this.audioContext.createMediaStreamSource(this.localStream);
     this.destination = this.audioContext.createMediaStreamDestination();
     this.workletHost = new AudioWorkletHost();
-
-    const vadUseEnergy = (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always')
-      && (this.settings.vadEngine === 'energy' || this.sileroFailed);
 
     await this.workletHost.connect(
       this.audioContext,
@@ -148,14 +131,35 @@ export class AudioService {
       this.workletCallbacks(),
     );
 
-    this.applyWorkletConfig(vadUseEnergy);
+    this.applyWorkletConfig();
     await this.setupSileroIfNeeded();
 
     this.outputStream = this.destination.stream;
     this.updateLocalTrackState();
 
     const nsLabel = this.settings.noiseMode === 'rnnoise' ? 'RNNoise worklet' : 'native browser NS';
-    console.log('[Audio] Mic pipeline ready (' + nsLabel + ')');
+    console.log('[Audio] Mic pipeline ready (' + nsLabel + '), context=' + this.audioContext.state);
+  }
+
+  /** WebView audio stays suspended until the user interacts with the overlay. */
+  isPipelineSuspended(): boolean {
+    return this.audioContext?.state === 'suspended';
+  }
+
+  async resumePipeline(): Promise<boolean> {
+    if (!this.audioContext) return false;
+    if (this.audioContext.state === 'suspended') {
+      try {
+        await this.audioContext.resume();
+        console.log('[Audio] AudioContext resumed →', this.audioContext.state);
+      } catch (e) {
+        console.warn('[Audio] AudioContext resume failed:', e);
+        return false;
+      }
+    }
+    await this.applyStoredOutputDevice();
+    this.emitOverlayAudioState();
+    return this.audioContext.state === 'running';
   }
 
   private workletCallbacks() {
@@ -166,16 +170,16 @@ export class AudioService {
     };
   }
 
-  private applyWorkletConfig(vadUseEnergy: boolean): void {
-    const wantsVoiceDetect = this.settings.inputMode === 'vad'
-      || this.settings.inputMode === 'always';
+  private applyWorkletConfig(): void {
+    const wantsVoiceDetect = this.settings.inputMode === 'vad';
+    const energyVad = this.shouldUseEnergyVad();
     const sileroActive = this.settings.inputMode === 'vad'
       && this.settings.vadEngine === 'silero'
       && !this.sileroFailed
       && this.sileroVad !== null;
     this.workletHost?.setConfig({
       gain: this.settings.inputVolume,
-      vadEnabled: wantsVoiceDetect && vadUseEnergy,
+      vadEnabled: wantsVoiceDetect && energyVad,
       vadSensitivity: this.settings.vadSensitivity,
       vadHangoverMs: this.settings.vadHangoverMs,
       rnnoiseEnabled: this.settings.noiseMode === 'rnnoise',
@@ -197,9 +201,9 @@ export class AudioService {
     if (!ok) {
       this.sileroFailed = true;
       this.sileroVad = null;
-      this.applyWorkletConfig(true);
+      this.applyWorkletConfig();
     } else {
-      this.applyWorkletConfig(false);
+      this.applyWorkletConfig();
     }
   }
 
@@ -224,7 +228,7 @@ export class AudioService {
       && !this.sileroFailed) {
       return;
     }
-    if (this.settings.inputMode !== 'vad' && this.settings.inputMode !== 'always') {
+    if (this.settings.inputMode !== 'vad') {
       return;
     }
     this.setSpeechActive(active);
@@ -240,6 +244,17 @@ export class AudioService {
     if (this.speechActive === active) return;
     this.speechActive = active;
     this.updateLocalTrackState();
+    this.emitOverlayAudioState();
+  }
+
+  private clearSpeechIndicator(): void {
+    this.workletHost?.syncSpeechDebounced(false);
+    if (!this.speechActive) {
+      this.emitOverlayAudioState();
+      return;
+    }
+    this.speechActive = false;
+    this.updateLocalTrackState();
   }
 
   /** Feed Silero from worklet audio chunks. */
@@ -251,7 +266,7 @@ export class AudioService {
     if (this.selfMuted) return false;
     if (this.settings.inputMode === 'ptt') return this.pttHeld;
     if (this.settings.inputMode === 'vad') return this.speechActive;
-    return true;
+    return false;
   }
 
   setPTTState(held: boolean): void {
@@ -262,18 +277,19 @@ export class AudioService {
 
   private lastTrackEnabled: boolean | null = null;
   private updateLocalTrackState(): void {
-    if (!this.outputStream) return;
-    const enabled = !this.selfMuted && this.isTransmitting();
-    for (const track of this.outputStream.getAudioTracks()) {
-      track.enabled = enabled;
-    }
-    if (enabled !== this.lastTrackEnabled) {
-      this.lastTrackEnabled = enabled;
-      let reason = 'always-open';
-      if (this.selfMuted) reason = 'selfMuted';
-      else if (this.settings.inputMode === 'ptt') reason = 'ptt=' + this.pttHeld;
-      else if (this.settings.inputMode === 'vad') reason = 'vad=' + this.speechActive;
-      console.log('[Audio] Local mic transmit → ' + enabled + ' (' + reason + ')');
+    if (this.outputStream) {
+      const enabled = !this.selfMuted && this.isTransmitting();
+      for (const track of this.outputStream.getAudioTracks()) {
+        track.enabled = enabled;
+      }
+      if (enabled !== this.lastTrackEnabled) {
+        this.lastTrackEnabled = enabled;
+        let reason = 'off';
+        if (this.selfMuted) reason = 'selfMuted';
+        else if (this.settings.inputMode === 'ptt') reason = 'ptt=' + this.pttHeld;
+        else if (this.settings.inputMode === 'vad') reason = 'vad=' + this.speechActive;
+        console.log('[Audio] Local mic transmit → ' + enabled + ' (' + reason + ')');
+      }
     }
     this.emitOverlayAudioState();
   }
@@ -562,10 +578,7 @@ export class AudioService {
       PeerConnection.setGlobalOpusQuality(this.settings.opusQuality, this.settings.inputMode);
     }
 
-    this.applyWorkletConfig(
-      (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always')
-      && (this.settings.vadEngine === 'energy' || this.sileroFailed),
-    );
+    this.applyWorkletConfig();
 
     if (prev.vadEngine !== this.settings.vadEngine
       || prev.inputMode !== this.settings.inputMode) {
@@ -579,9 +592,8 @@ export class AudioService {
     }
 
     if (prev.inputMode !== this.settings.inputMode
-      && this.settings.inputMode !== 'vad'
-      && this.settings.inputMode !== 'always') {
-      this.speechActive = false;
+      && (prev.inputMode === 'vad') !== (this.settings.inputMode === 'vad')) {
+      this.clearSpeechIndicator();
     }
 
     this.updateLocalTrackState();
@@ -608,10 +620,7 @@ export class AudioService {
         this.destination,
         this.workletCallbacks(),
       );
-      this.applyWorkletConfig(
-        (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always')
-        && (this.settings.vadEngine === 'energy' || this.sileroFailed),
-      );
+      this.applyWorkletConfig();
       this.updateLocalTrackState();
       console.log('[Audio] Mic re-acquired with updated DSP settings');
     } catch (e) {
@@ -645,10 +654,7 @@ export class AudioService {
         this.destination,
         this.workletCallbacks(),
       );
-      this.applyWorkletConfig(
-        (this.settings.inputMode === 'vad' || this.settings.inputMode === 'always')
-        && (this.settings.vadEngine === 'energy' || this.sileroFailed),
-      );
+      this.applyWorkletConfig();
       this.updateLocalTrackState();
       console.log('[Audio] Input device switched');
     } catch (e) {

@@ -66,7 +66,12 @@ class LolProxChatAudioProcessor extends AudioWorkletProcessor {
       const msg = ev.data;
       if (msg?.type === 'config') {
         if (typeof msg.gain === 'number') this.gain = msg.gain;
-        if (typeof msg.vadEnabled === 'boolean') this.vadEnabled = msg.vadEnabled;
+        if (typeof msg.vadEnabled === 'boolean') {
+          this.vadEnabled = msg.vadEnabled;
+          if (!msg.vadEnabled) {
+            this.resetVadState();
+          }
+        }
         if (typeof msg.vadSensitivity === 'number') this.vadSensitivity = msg.vadSensitivity;
         if (typeof msg.vadHangoverMs === 'number') this.vadHangoverMs = msg.vadHangoverMs;
         if (typeof msg.rnnoiseEnabled === 'boolean') this.rnnoiseEnabled = msg.rnnoiseEnabled;
@@ -87,12 +92,22 @@ class LolProxChatAudioProcessor extends AudioWorkletProcessor {
     };
   }
 
+  private resetVadState(): void {
+    const prev = this.vadState.speechActive;
+    this.vadState = { speechActive: false, hangoverSamplesRemaining: 0 };
+    if (prev) {
+      this.port.postMessage({ type: 'speech', active: false });
+    }
+  }
+
   private emitLevelAndVad(rms: number): void {
     if (this.vadEnabled) {
       const { open, close } = sensitivityToThresholds(this.vadSensitivity);
-      const hangoverSamples = Math.floor((this.vadHangoverMs / 1000) * sampleRate);
+      // Hangover is counted in RMS windows (~20 Hz), not raw samples.
+      const windowMs = (this.windowSize / sampleRate) * 1000;
+      const hangoverSteps = Math.max(1, Math.round(this.vadHangoverMs / windowMs));
       const prev = this.vadState.speechActive;
-      this.vadState = stepEnergyVad(rms, this.vadState, open, close, hangoverSamples);
+      this.vadState = stepEnergyVad(rms, this.vadState, open, close, hangoverSteps);
       if (this.vadState.speechActive !== prev) {
         this.port.postMessage({ type: 'speech', active: this.vadState.speechActive });
       }

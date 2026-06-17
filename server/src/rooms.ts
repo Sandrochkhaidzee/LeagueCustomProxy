@@ -1,23 +1,56 @@
 import type { WebSocket } from 'ws';
+import { randomUUID } from 'node:crypto';
 import type { ClientInfo } from './types.js';
 import type { TieredRoomClient } from './volumes.js';
+import type { AdminClient, EventLog } from './admin.js';
+
+interface ConnectionMeta {
+  clientId: string;
+  ip: string;
+  connectedAt: number;
+  label: string | null;
+}
 
 export class RoomManager {
   /** roomId → set of ClientInfo */
   private rooms = new Map<string, ClientInfo[]>();
   /** ws → ClientInfo (for fast lookup on disconnect) */
   private clients = new Map<WebSocket, ClientInfo>();
+  /** ws → meta for connections not yet in a room */
+  private pending = new Map<WebSocket, ConnectionMeta>();
+  /** clientId → ws */
+  private byClientId = new Map<string, WebSocket>();
+
+  registerConnection(ws: WebSocket, ip: string): string {
+    const clientId = randomUUID();
+    const meta: ConnectionMeta = { clientId, ip, connectedAt: Date.now(), label: null };
+    this.pending.set(ws, meta);
+    this.byClientId.set(clientId, ws);
+    return clientId;
+  }
 
   /**
    * Add a client to a room. Returns list of existing peer names (before this join).
-   * `team` is v0.3+ — when omitted the client is treated as legacy v0.2 and
-   * `computeTieredVolumes` falls back to team-blind 1200u behavior.
    */
   join(roomId: string, name: string, ws: WebSocket, team?: 'ORDER' | 'CHAOS'): string[] {
+    const pendingMeta = this.pending.get(ws);
+    const clientId = pendingMeta?.clientId ?? randomUUID();
+    const connectedAt = pendingMeta?.connectedAt ?? Date.now();
+    this.pending.delete(ws);
+    this.byClientId.set(clientId, ws);
+
     const existing = this.rooms.get(roomId) ?? [];
     const existingNames = existing.map(c => c.name);
 
-    const info: ClientInfo = { roomId, name, ws, team };
+    const info: ClientInfo = {
+      clientId,
+      connectedAt,
+      roomId,
+      name,
+      label: pendingMeta?.label ?? null,
+      ws,
+      team,
+    };
     existing.push(info);
     this.rooms.set(roomId, existing);
     this.clients.set(ws, info);
@@ -26,11 +59,19 @@ export class RoomManager {
   }
 
   /** Remove a client. Returns their info, or undefined if not found. */
-  leave(ws: WebSocket): { roomId: string; name: string } | undefined {
+  leave(ws: WebSocket): ClientInfo | undefined {
+    const pending = this.pending.get(ws);
+    if (pending) {
+      this.pending.delete(ws);
+      this.byClientId.delete(pending.clientId);
+      return undefined;
+    }
+
     const info = this.clients.get(ws);
     if (!info) return undefined;
 
     this.clients.delete(ws);
+    this.byClientId.delete(info.clientId);
 
     const room = this.rooms.get(info.roomId);
     if (room) {
@@ -41,7 +82,62 @@ export class RoomManager {
       }
     }
 
-    return { roomId: info.roomId, name: info.name };
+    return info;
+  }
+
+  kick(clientId: string, eventLog?: EventLog): boolean {
+    const ws = this.byClientId.get(clientId);
+    if (!ws) return false;
+
+    const info = this.clients.get(ws);
+    const display = info?.label ?? info?.name ?? clientId;
+    if (eventLog) {
+      eventLog.warn(`Kicked ${display}`, {
+        clientId,
+        roomId: info?.roomId,
+        name: info?.name,
+        label: info?.label ?? this.pending.get(ws)?.label ?? undefined,
+      });
+    }
+
+    ws.close(1008, 'kicked by host');
+    return true;
+  }
+
+  setLabel(ws: WebSocket, label: string): void {
+    const pending = this.pending.get(ws);
+    if (pending) {
+      pending.label = label;
+      return;
+    }
+    const info = this.clients.get(ws);
+    if (info) info.label = label;
+  }
+
+  listClients(): AdminClient[] {
+    const out: AdminClient[] = [];
+    for (const info of this.clients.values()) {
+      out.push({
+        clientId: info.clientId,
+        label: info.label,
+        roomId: info.roomId,
+        name: info.name,
+        team: info.team ?? null,
+        connectedAt: info.connectedAt,
+      });
+    }
+    for (const meta of this.pending.values()) {
+      out.push({
+        clientId: meta.clientId,
+        label: meta.label,
+        roomId: null,
+        name: null,
+        team: null,
+        connectedAt: meta.connectedAt,
+      });
+    }
+    out.sort((a, b) => a.connectedAt - b.connectedAt);
+    return out;
   }
 
   /** Get all peer names in a room. */
@@ -71,6 +167,10 @@ export class RoomManager {
     return this.clients.get(ws);
   }
 
+  getConnectionMeta(ws: WebSocket): ConnectionMeta | undefined {
+    return this.pending.get(ws);
+  }
+
   /**
    * Record a client's latest XY position. No-op if the ws isn't in a room.
    */
@@ -81,13 +181,7 @@ export class RoomManager {
   }
 
   /**
-   * Snapshot of all peer positions in a room, keyed by name. Skips the
-   * requester (`exceptName`) and skips entries with no position set yet,
-   * or whose position is older than `staleMs`.
-   *
-   * v0.2 server-side proximity flow: `computeVolumesFromRoom` calls this to
-   * get every other peer's most recent reported XY, then computes pairwise
-   * distance from the requester's position.
+   * Snapshot of all peer positions in a room, keyed by name.
    */
   getRoomPositions(
     roomId: string,
@@ -107,12 +201,6 @@ export class RoomManager {
     return out;
   }
 
-  /**
-   * v0.3 — snapshot of all clients in a room with just the fields
-   * `computeTieredVolumes` needs (name, team, position). Includes the
-   * requester; the function filters itself out by name. No staleness filter
-   * here — the caller decides per-peer.
-   */
   getRoomClients(roomId: string): TieredRoomClient[] {
     const room = this.rooms.get(roomId);
     if (!room) return [];

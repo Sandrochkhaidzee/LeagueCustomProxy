@@ -1,6 +1,6 @@
 [package]
 name = "leagueproxy"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -22,6 +22,14 @@ windows = { version = "0.58", features = [
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[[bin]]
+name = "leagueproxy"
+path = "src/main.rs"
+
+[[bin]]
+name = "leagueproxy-server"
+path = "src/server_main.rs"
 
 # Default release — balanced size/speed. lto=false keeps link times reasonable on Windows MSVC.
 [profile.release]

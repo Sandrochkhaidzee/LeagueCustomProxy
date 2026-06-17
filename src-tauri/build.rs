@@ -19,5 +19,8 @@ fn main() {
         "cargo:rustc-env=PROXCHAT_GITHUB_DOWNLOAD_PREFIX=https://github.com/{}/{}/releases/download/",
         owner, name
     );
+    println!("cargo:rerun-if-changed=tauri.conf.json");
+    println!("cargo:rerun-if-changed=tauri.server.conf.json");
+    println!("cargo:rerun-if-changed=../server/dist/signaling-server.cjs");
     tauri_build::build();
 }

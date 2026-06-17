@@ -22,7 +22,179 @@ html, body {
   transition: width 0.15s, min-width 0.15s, max-width 0.15s;
 }
 
-/* --- Collapsed state removed (collapse button retired) --- */
+/* --- Collapsed state: header-only bar --- */
+.panel.collapsed #player-list,
+.panel.collapsed #settings-panel,
+.panel.collapsed #host-panel,
+.panel.collapsed #connect-gate,
+.panel.collapsed .calibrate-row {
+  display: none !important;
+}
+
+/* Launch gate: connect before main panel is shown. */
+.panel:not(.connected) #player-list,
+.panel:not(.connected) #settings-panel,
+.panel:not(.connected) #transmit-status,
+.panel:not(.connected) #btn-collapse,
+.panel:not(.connected) #btn-settings {
+  display: none !important;
+}
+.panel.connected #connect-gate {
+  display: none !important;
+}
+
+.connect-gate {
+  padding: 10px 8px 12px;
+  border-top: 1px solid rgba(100, 120, 160, 0.2);
+}
+.connect-gate-hint {
+  font-size: 10px;
+  color: #8892a8;
+  text-align: center;
+  margin-bottom: 8px;
+  line-height: 1.35;
+}
+.connect-status {
+  font-size: 10px;
+  color: #8892a8;
+  text-align: center;
+  margin-top: 6px;
+  min-height: 14px;
+}
+.connect-status.error { color: #e74c4c; }
+.connect-status.ok { color: #3ecf6e; }
+
+/* Server host app: categories always visible (no settings toggle). */
+.panel.server-panel .host-panel {
+  padding: 4px 6px 8px;
+  border-top: 1px solid rgba(100, 120, 160, 0.2);
+  max-height: 420px;
+  overflow-y: auto;
+}
+.panel.server-panel .host-panel::-webkit-scrollbar { width: 4px; }
+.panel.server-panel .host-panel::-webkit-scrollbar-track { background: transparent; }
+.panel.server-panel .host-panel::-webkit-scrollbar-thumb { background: rgba(100, 120, 160, 0.3); border-radius: 2px; }
+
+.server-url-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(100, 120, 160, 0.35);
+  background: rgba(20, 25, 35, 0.9);
+  color: #cdcdcd;
+}
+
+.connection-name-input,
+.server-host-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(100, 120, 160, 0.35);
+  background: rgba(20, 25, 35, 0.9);
+  color: #cdcdcd;
+}
+
+.host-port-input {
+  width: 72px;
+  font-size: 10px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(100, 120, 160, 0.35);
+  background: rgba(20, 25, 35, 0.9);
+  color: #cdcdcd;
+}
+.host-port-input:disabled,
+.connection-name-input:disabled,
+.server-host-input:disabled,
+.server-protocol-select:disabled {
+  opacity: 0.55;
+}
+
+.server-protocol-select {
+  width: 88px;
+  font-size: 10px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(100, 120, 160, 0.35);
+  background: rgba(20, 25, 35, 0.9);
+  color: #cdcdcd;
+}
+
+.relay-status, .host-status {
+  font-size: 10px;
+  color: #8892a8;
+  text-align: right;
+  flex: 1;
+}
+
+.host-log {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 9px;
+  line-height: 1.45;
+  color: #a8b4c8;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(100, 120, 160, 0.25);
+  border-radius: 4px;
+  padding: 6px 8px;
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 6px;
+}
+.host-log:empty::before {
+  content: 'Server log appears here when running…';
+  color: #6a7388;
+  font-style: italic;
+}
+
+.host-clients {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.host-clients:empty::before {
+  content: 'No active connections.';
+  color: #6a7388;
+  font-size: 10px;
+  font-style: italic;
+}
+
+.host-client-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  color: #cdcdcd;
+  padding: 4px 6px;
+  border-radius: 3px;
+  background: rgba(20, 25, 35, 0.6);
+  border: 1px solid rgba(100, 120, 160, 0.2);
+}
+.host-client-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.host-client-ip {
+  color: #8892a8;
+  font-size: 9px;
+}
+.relay-status.ok { color: #3ecf6e; }
+.relay-status.warn { color: #e8b84a; }
+
+.calibrate-row {
+  padding: 6px 8px;
+  text-align: center;
+  border-top: 1px solid rgba(100, 120, 160, 0.15);
+}
 
 .widget-header {
   display: flex;

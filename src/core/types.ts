@@ -20,7 +20,7 @@ export interface PeerState {
   isDead: boolean;
 }
 
-export type InputMode = 'always' | 'ptt' | 'vad';
+export type InputMode = 'ptt' | 'vad';
 export type VadEngine = 'energy' | 'silero';
 export type NoiseMode = 'native' | 'rnnoise';
 export type OpusQuality = 'voice' | 'standard' | 'high';
