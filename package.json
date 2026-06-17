@@ -15,6 +15,9 @@
   "keywords": [],
   "author": "",
   "license": "AGPL-3.0-or-later",
+  "overrides": {
+    "glob": "^11.0.3"
+  },
   "description": "Proximity voice chat for League of Legends custom games",
   "repository": {
     "type": "git",

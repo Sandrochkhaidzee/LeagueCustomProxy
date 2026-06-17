@@ -25,12 +25,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build release exe
+      - name: Build frontend
         env:
           PROXCHAT_SERVER: http://26.36.227.156:3100
-          GITHUB_REPOSITORY: ${{ github.repository }}
           PROXCHAT_DEV_BUILD: '0'
           WEBPACK_CLEAN: '1'
+        run: npm run build:release
+
+      - name: Build release exe
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: npx tauri build --no-bundle
 
       - name: Compute SHA-256
