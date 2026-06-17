@@ -33,6 +33,9 @@ jobs:
       - name: Generate app icons
         run: npm run generate:icons
 
+      - name: Build signaling server bundle
+        run: npm ci --prefix server --no-audit --no-fund && npm run build --prefix server
+
       - name: Build client frontend
         env:
           PROXCHAT_DEV_BUILD: '0'
@@ -42,7 +45,7 @@ jobs:
       - name: Build client exe
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: npx tauri build --no-bundle
+        run: npx tauri build --no-bundle -- --bin leagueproxy
 
       - name: Stage client exe
         shell: pwsh
@@ -52,9 +55,6 @@ jobs:
           $hash = (Get-FileHash leagueproxy.exe -Algorithm SHA256).Hash
           "client_sha256=$hash" >> $env:GITHUB_OUTPUT
         id: client_hash
-
-      - name: Build signaling server bundle
-        run: npm ci --prefix server --no-audit --no-fund && npm run build --prefix server
 
       - name: Build server frontend
         env:

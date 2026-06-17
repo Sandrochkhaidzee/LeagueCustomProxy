@@ -16,7 +16,7 @@ call "%~dp0generate-icons.bat"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call npm run build:release
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-call npx tauri build --no-bundle
+call npx tauri build --no-bundle -- --bin leagueproxy
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 if not exist "%~dp0..\release" mkdir "%~dp0..\release"
 copy /Y "%~dp0..\src-tauri\target\release\leagueproxy.exe" "%~dp0..\release\leagueproxy.exe" >nul

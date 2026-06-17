@@ -14,7 +14,7 @@ echo Building DEV client (debug UI enabled) ...
 if "%GITHUB_REPOSITORY%"=="" set "GITHUB_REPOSITORY=Sandrochkhaidzee/LeagueCustomProxy"
 call npm run build:dev
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-call npx tauri build --no-bundle -- --profile release-fast
+call npx tauri build --no-bundle -- --profile release-fast --bin leagueproxy
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 if not exist "%~dp0..\release" mkdir "%~dp0..\release"
 for %%F in ("%~dp0..\src-tauri\target\release-fast\*.exe") do (
