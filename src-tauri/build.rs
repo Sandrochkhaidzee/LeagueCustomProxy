@@ -1,14 +1,28 @@
 fn main() {
     let repo = std::env::var("GITHUB_REPOSITORY").unwrap_or_else(|_| {
-        let owner = std::env::var("GITHUB_REPO_OWNER").unwrap_or_else(|_| "Sandrochkhaidzee".into());
-        let name = std::env::var("GITHUB_REPO_NAME").unwrap_or_else(|_| "LeagueCustomProxy".into());
+        let owner = std::env::var("GITHUB_REPO_OWNER")
+            .unwrap_or_else(|_| "Sandrochkhaidzee".into())
+            .trim()
+            .to_string();
+        let name = std::env::var("GITHUB_REPO_NAME")
+            .unwrap_or_else(|_| "LeagueCustomProxy".into())
+            .trim()
+            .to_string();
         format!("{}/{}", owner, name)
     });
     let (owner, name) = {
-        let mut parts = repo.splitn(2, '/');
+        let mut parts = repo.trim().splitn(2, '/');
         (
-            parts.next().unwrap_or("Sandrochkhaidzee").to_string(),
-            parts.next().unwrap_or("LeagueCustomProxy").to_string(),
+            parts
+                .next()
+                .unwrap_or("Sandrochkhaidzee")
+                .trim()
+                .to_string(),
+            parts
+                .next()
+                .unwrap_or("LeagueCustomProxy")
+                .trim()
+                .to_string(),
         )
     };
     println!(

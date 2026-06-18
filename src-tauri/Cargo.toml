@@ -1,6 +1,6 @@
 [package]
 name = "leagueproxy"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -12,6 +12,7 @@ sysinfo = "0.33"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 tokio = { version = "1", features = ["full"] }
 base64 = "0.22"
+rfd = "0.15"
 windows = { version = "0.58", features = [
   "Win32_Graphics_Gdi",
   "Win32_UI_WindowsAndMessaging",

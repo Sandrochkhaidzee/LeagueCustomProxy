@@ -14,7 +14,7 @@ Proximity voice for custom 5v5 games. Hear **nearby** teammates and enemies — 
 
 ```
 Files:   leagueproxy.exe (players), server.exe (host)
-Version: 2.2.0
+Version: 2.3.0
 Server:  Host runs server.exe; players connect on launch (Disconnect to change host)
 ```
 
@@ -81,13 +81,28 @@ Use a LAN, a VPN your group already uses, or any setup where every player can re
 
 **2. Host runs the signaling server** (pick one friend with a stable PC — usually you)
 
-Download **`server.exe`** from the same GitHub release as `leagueproxy.exe`. Enter **protocol**, **host IP**, and **port**, then click **Start server** and **Copy URL**.
+Download **`server.exe`** from the same GitHub release as `leagueproxy.exe`.
+
+- **Direct (LAN / VPN):** enter **protocol**, **host IP**, and **port**, then click **Start server** and **Copy URL**.
+- **Cloudflare (internet):** select **Cloudflare** mode, install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) once, click **Start server**, then **Copy URL** when the public hostname appears (no port forwarding; URL changes each session).
 
 Alternatively (developers / manual):
 
 ```bat
 scripts\start-server.bat
 ```
+
+### Host over the internet (Cloudflare)
+
+Use this when friends are not on the same LAN or VPN and you do not want to port-forward.
+
+1. Install **cloudflared** and ensure it is on your PATH.
+2. In **`server.exe`**, set **Mode** to **Cloudflare (internet)**.
+3. Click **Start server** — the app starts signaling locally and opens a Cloudflare quick tunnel.
+4. When the `*.trycloudflare.com` URL appears, click **Copy URL** and share it.
+5. Friends connect with **HTTPS**, the tunnel hostname, and port **443**.
+
+Test in a browser: `https://YOUR-HOSTNAME.trycloudflare.com/health` should return OK before friends connect.
 
 **3. Note the host’s IP**
 

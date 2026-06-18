@@ -29,6 +29,20 @@
         <summary class="settings-category-header">Hosting</summary>
         <div class="settings-category-body">
           <div class="setting-row">
+            <label title="How friends reach your signaling server.">Mode</label>
+            <select id="host-mode" class="server-protocol-select">
+              <option value="direct">Direct (LAN / VPN)</option>
+              <option value="cloudflare">Cloudflare (internet)</option>
+            </select>
+          </div>
+          <div id="cloudflare-path-row" class="setting-row hidden">
+            <label title="Path to cloudflared. Leave blank to auto-detect on PATH.">cloudflared</label>
+            <div class="path-input-group">
+              <input id="cloudflared-path" class="server-host-input" type="text" placeholder="Auto (PATH)" autocomplete="off" spellcheck="false" />
+              <button id="btn-browse-cloudflared" class="icon-btn path-browse-btn" type="button" title="Browse for cloudflared.exe" aria-label="Browse for cloudflared.exe">…</button>
+            </div>
+          </div>
+          <div id="direct-protocol-row" class="setting-row">
             <label title="HTTP or HTTPS for the share URL.">Protocol</label>
             <select id="host-protocol" class="server-protocol-select">
               <option value="" disabled selected hidden>Select</option>
@@ -36,7 +50,7 @@
               <option value="https">HTTPS</option>
             </select>
           </div>
-          <div class="setting-row">
+          <div id="direct-host-row" class="setting-row">
             <label title="Address friends use to connect.">Host</label>
             <input id="host-ip" class="server-host-input" type="text" autocomplete="off" />
           </div>
@@ -50,8 +64,8 @@
             <button id="btn-host-stop" class="icon-btn hidden">Stop server</button>
           </div>
           <div class="setting-row">
-            <label title="Share this URL with friends.">Share URL</label>
-            <button id="btn-copy-host-url" class="icon-btn">Copy URL</button>
+            <label title="Share connection details with friends.">Share Credentials</label>
+            <button id="btn-copy-host-url" class="icon-btn">Copy</button>
           </div>
           <div id="host-status" class="host-status">Stopped — allow the TCP port through your firewall if friends cannot connect.</div>
         </div>

@@ -60,6 +60,12 @@ export function buildServerUrl(endpoint: ServerEndpoint): string {
   return `${endpoint.protocol}://${formatHostPort(endpoint)}`;
 }
 
+/** Multi-line block for friends to paste into the connect screen. */
+export function formatServerCredentials(endpoint: ServerEndpoint): string {
+  const protocol = endpoint.protocol.toUpperCase();
+  return `Protocol: ${protocol}\nHost: ${endpoint.host}\nPort: ${endpoint.port}`;
+}
+
 export function buildWsUrl(endpoint: ServerEndpoint): string {
   const wsProto = endpoint.protocol === 'https' ? 'wss' : 'ws';
   return `${wsProto}://${formatHostPort(endpoint)}/ws`;

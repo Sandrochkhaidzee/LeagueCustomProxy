@@ -18,10 +18,11 @@ No build tools needed.
 
 Every game night, before anyone queues:
 
-1. Run **`server.exe`** (or `scripts\start-server.bat` for developers) — enter protocol, host IP, and port → **Start server**
+1. Run **`server.exe`** — pick **Direct (LAN / VPN)** or **Cloudflare (internet)** hosting mode → **Start server**
 2. **Copy URL** and share with friends
-3. Allow the **TCP port** through Windows Firewall
-4. Launch **`leagueproxy.exe`** and create the custom lobby
+3. **Direct mode:** allow the **TCP port** through Windows Firewall
+4. **Cloudflare mode:** install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) once (no port forwarding; public URL changes each session)
+5. Launch **`leagueproxy.exe`** and create the custom lobby
 
 ## Requirements
 
@@ -29,7 +30,7 @@ Every game night, before anyone queues:
 |--|--|
 | OS | Windows 10/11 + WebView2 |
 | League | **Borderless** window mode (all 10 players) |
-| Network | Host IP reachable by all players (LAN, VPN, or port-forwarded) |
+| Network | Host IP reachable by all players (LAN, VPN, port-forwarded, or Cloudflare tunnel) |
 | Use case | Private custom 5v5 with friends only |
 
 ## Safety

@@ -13,6 +13,10 @@ pub struct HostServerState {
     port: Mutex<u16>,
     pub(crate) admin_token: Mutex<Option<String>>,
     runtime_dir: Mutex<Option<PathBuf>>,
+    pub(crate) tunnel_child: Mutex<Option<Child>>,
+    pub(crate) tunnel_url: Mutex<Option<String>>,
+    pub(crate) tunnel_error: Mutex<Option<String>>,
+    pub(crate) cloudflared_path: Mutex<Option<String>>,
 }
 
 impl HostServerState {
@@ -23,10 +27,15 @@ impl HostServerState {
             port: Mutex::new(0),
             admin_token: Mutex::new(None),
             runtime_dir: Mutex::new(None),
+            tunnel_child: Mutex::new(None),
+            tunnel_url: Mutex::new(None),
+            tunnel_error: Mutex::new(None),
+            cloudflared_path: Mutex::new(None),
         }
     }
 
     pub fn stop(&self) {
+        crate::host_tunnel::stop_tunnel(self);
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
                 kill_process_tree(child.id());
@@ -46,7 +55,7 @@ impl Drop for HostServerState {
 }
 
 #[cfg(windows)]
-fn kill_process_tree(pid: u32) {
+pub(crate) fn kill_process_tree(pid: u32) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::process::Command::new("taskkill")
@@ -56,7 +65,7 @@ fn kill_process_tree(pid: u32) {
 }
 
 #[cfg(not(windows))]
-fn kill_process_tree(pid: u32) {
+pub(crate) fn kill_process_tree(pid: u32) {
     let _ = std::process::Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status();
@@ -78,6 +87,10 @@ fn validate_port(port: u16) -> Result<(), String> {
 
 fn current_port(state: &HostServerState) -> u16 {
     state.port.lock().ok().map(|g| *g).unwrap_or(0)
+}
+
+pub(crate) fn server_port(state: &HostServerState) -> u16 {
+    current_port(state)
 }
 
 pub(crate) fn is_server_running(state: &HostServerState) -> bool {

@@ -2,6 +2,7 @@
 
 mod host_server;
 mod host_server_admin;
+mod host_tunnel;
 mod updater;
 
 use std::fs::File;
@@ -160,6 +161,10 @@ fn main() {
             host_server::stop_signaling_server,
             host_server::signaling_server_status,
             host_server::set_signaling_port,
+            host_tunnel::start_cloudflare_tunnel,
+            host_tunnel::cloudflare_tunnel_status,
+            host_tunnel::set_cloudflared_path,
+            host_tunnel::pick_cloudflared_exe,
             host_server_admin::host_admin_status,
             host_server_admin::host_admin_logs,
             host_server_admin::host_admin_kick,

@@ -4,9 +4,38 @@ import {
   type ServerEndpointFields,
 } from './server-endpoint';
 
+export type HostMode = 'direct' | 'cloudflare';
+
 const PROTOCOL_KEY = 'lolproxchat.hostProtocol';
 const HOST_KEY = 'lolproxchat.hostIp';
 const PORT_KEY = 'lolproxchat.hostPort';
+const MODE_KEY = 'lolproxchat.hostMode';
+const CLOUDFLARED_PATH_KEY = 'lolproxchat.cloudflaredPath';
+
+export function getStoredHostMode(): HostMode {
+  try {
+    const mode = localStorage.getItem(MODE_KEY);
+    return mode === 'cloudflare' ? 'cloudflare' : 'direct';
+  } catch {
+    return 'direct';
+  }
+}
+
+export function setStoredHostMode(mode: HostMode): void {
+  localStorage.setItem(MODE_KEY, mode);
+}
+
+export function getStoredCloudflaredPath(): string {
+  try {
+    return localStorage.getItem(CLOUDFLARED_PATH_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function setStoredCloudflaredPath(path: string): void {
+  localStorage.setItem(CLOUDFLARED_PATH_KEY, path.trim());
+}
 
 export function getStoredHostEndpointFields(): ServerEndpointFields {
   try {

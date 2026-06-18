@@ -121,6 +121,27 @@ html, body {
   color: #cdcdcd;
 }
 
+.path-input-group {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+  align-items: center;
+}
+
+.path-input-group .server-host-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.path-browse-btn {
+  flex-shrink: 0;
+  min-width: 28px;
+  padding: 3px 8px;
+  font-size: 14px;
+  line-height: 1;
+}
+
 .host-port-input {
   width: 72px;
   font-size: 10px;
@@ -152,6 +173,10 @@ html, body {
   color: #8892a8;
   text-align: right;
   flex: 1;
+}
+
+.host-status a {
+  color: #9ab4e8;
 }
 
 .host-log {

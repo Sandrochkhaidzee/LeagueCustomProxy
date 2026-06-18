@@ -2,6 +2,20 @@
 
 All notable changes to LeagueProxy are documented here.
 
+## [2.3.0] — 2026-06-18
+
+### Host app
+
+- Add **Cloudflare (internet)** hosting mode in `server.exe` — managed quick tunnel, auto-filled public HTTPS URL, stops with the signaling server.
+- **Direct** vs **Cloudflare** mode selector; optional **cloudflared** path with browse button (or auto-detect on PATH).
+- **Share Credentials** / **Copy** — copies `Protocol` / `Host` / `Port` block for friends to paste into the connect screen.
+- Fix host **Check for Updates** when `GITHUB_REPOSITORY` has trailing whitespace (baked API URL).
+- Fix Cloudflare tunnel URL parsing so status shows only the `trycloudflare.com` URL, not cloudflared log output.
+
+### Docs
+
+- README and friend playbook: Cloudflare hosting instructions.
+
 ## [2.2.0] — 2026-06-18
 
 ### Updates & connect screen
@@ -101,6 +115,7 @@ First stable release for custom 5v5 friend groups.
 - Release vs dev builds (`leagueproxy.exe` vs `leagueproxy-dev.exe`).
 - Split build scripts for faster iteration (`build-frontend-only`, `build-rust-only`).
 
+[2.3.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.3.0
 [2.2.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.0.0
