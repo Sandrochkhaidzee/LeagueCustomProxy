@@ -30,6 +30,9 @@ node_modules/.cache/
 # Distribution build (local only)
 release/
 
+# Local-only host helper (not shipped)
+scripts/start-public-host.bat
+
 # Temp/logs
 logs.txt
 

@@ -215,6 +215,7 @@ fn main() {
                 Ok(h) => h.0 as isize,
                 Err(_) => return Ok(()),
             };
+            global_keys::set_overlay_hwnd(hwnd_addr);
             let window_for_loop = window.clone();
             tauri::async_runtime::spawn(async move {
                 use windows::Win32::Foundation::{HWND, POINT, RECT};

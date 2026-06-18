@@ -61,7 +61,6 @@ const btnCheckUpdate = document.getElementById('btn-check-update') as HTMLButton
 const updateStatus = document.getElementById('update-status')!;
 
 const PANEL_COLLAPSED_KEY = 'lolproxchat.server.panelCollapsed';
-const UPDATE_DISMISS_KEY = 'lolproxchat.server.updateDismissed';
 
 let lastLogId = 0;
 const logLines: string[] = [];
@@ -338,57 +337,25 @@ btnCopyHostUrl.addEventListener('click', () => {
     .catch((e) => { hostStatusEl.textContent = 'Copy failed: ' + formatInvokeError(e); });
 });
 
-async function runUpdateCheck(auto = false): Promise<void> {
-  if (auto) {
-    updateStatus.textContent = 'Checking for updates…';
-  }
+async function runUpdateCheck(): Promise<void> {
+  updateStatus.textContent = 'Checking for updates…';
   try {
     const info = await checkForUpdate();
-    const dismissKey = UPDATE_DISMISS_KEY + ':' + info.latest_version;
-    if (auto && sessionStorage.getItem(dismissKey) === '1') {
-      updateStatus.textContent = '';
-      return;
-    }
     if (info.update_available && info.download_url) {
-      if (auto) {
-        updateStatus.innerHTML = '';
-        const span = document.createElement('span');
-        span.textContent = 'Update v' + info.latest_version + ' available — ';
-        const installBtn = document.createElement('button');
-        installBtn.className = 'icon-btn';
-        installBtn.textContent = 'Install';
-        installBtn.addEventListener('click', () => {
-          void downloadAndApply(info.download_url!);
-        });
-        const dismissBtn = document.createElement('button');
-        dismissBtn.className = 'icon-btn';
-        dismissBtn.textContent = 'Dismiss';
-        dismissBtn.addEventListener('click', () => {
-          sessionStorage.setItem(dismissKey, '1');
-          updateStatus.textContent = '';
-        });
-        updateStatus.append(span, installBtn, dismissBtn);
-      } else {
-        updateStatus.textContent = 'Update available: v' + info.latest_version + ' — applying…';
-        await downloadAndApply(info.download_url);
-      }
+      updateStatus.textContent = 'Update available: v' + info.latest_version + ' — applying…';
+      await downloadAndApply(info.download_url);
     } else if (info.update_available && !info.download_url) {
       updateStatus.textContent = 'Update v' + info.latest_version
         + ' exists but no server.exe on the release';
-    } else if (!auto) {
-      updateStatus.textContent = 'Up to date (v' + info.current_version + ')';
     } else {
-      updateStatus.textContent = '';
+      updateStatus.textContent = 'Up to date (v' + info.current_version + ')';
     }
   } catch (e) {
-    if (!auto) {
-      updateStatus.textContent = 'Update check failed: ' + formatInvokeError(e);
-    }
+    updateStatus.textContent = 'Update check failed: ' + formatInvokeError(e);
   }
 }
 
-setTimeout(() => void runUpdateCheck(true), 3000);
-btnCheckUpdate.addEventListener('click', () => void runUpdateCheck(false));
+btnCheckUpdate.addEventListener('click', () => void runUpdateCheck());
 
 function sendToBackground(action: string, payload: unknown): void {
   window.dispatchEvent(new CustomEvent('overlayAction', { detail: { action, payload } }));

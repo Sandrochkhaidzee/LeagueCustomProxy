@@ -21,7 +21,7 @@
 //!      keyboard light doesn't toggle on every PTT press.
 
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -31,8 +31,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     KEYEVENTF_KEYUP, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK,
-    KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, GetForegroundWindow, GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+    HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+    WM_SYSKEYUP,
 };
 
 const VK_CAPITAL: u32 = 0x14;
@@ -42,6 +43,10 @@ static PTT_VK: AtomicU32 = AtomicU32::new(0);
 
 /// Currently-bound toggle-self-mute virtual-key code. 0 = unbound.
 static TOGGLE_VK: AtomicU32 = AtomicU32::new(0);
+
+/// Overlay window HWND (as isize). When the overlay has focus, the JS layer
+/// handles PTT so typing in text fields isn't swallowed by the global hook.
+static OVERLAY_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// Channel into the tokio worker that actually emits Tauri events. The hook
 /// proc only ever does a non-blocking `send` on this — no allocations, no
@@ -78,6 +83,11 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         // (would produce 2-3 spurious PttDown/PttUp pairs per physical
         // keypress). LLKHF_INJECTED = 0x10 in KBDLLHOOKSTRUCT.flags.
         if kb.flags.0 & 0x10 != 0 {
+            return CallNextHookEx(*HOOK.0.get(), code, wparam, lparam);
+        }
+
+        let overlay_hwnd = OVERLAY_HWND.load(Ordering::Relaxed);
+        if overlay_hwnd != 0 && GetForegroundWindow().0 == overlay_hwnd as *mut _ {
             return CallNextHookEx(*HOOK.0.get(), code, wparam, lparam);
         }
 
@@ -186,6 +196,12 @@ pub fn setup_hook(app: AppHandle) {
         }
         let _ = UnhookWindowsHookEx(h);
     });
+}
+
+/// Called once from main.rs setup so the hook can defer to the overlay webview
+/// when it has keyboard focus (connect gate, settings text fields, etc.).
+pub fn set_overlay_hwnd(hwnd: isize) {
+    OVERLAY_HWND.store(hwnd, Ordering::Relaxed);
 }
 
 /// JS-callable: rebind the PTT key by Win32 virtual-key code. Pass 0 to unbind.

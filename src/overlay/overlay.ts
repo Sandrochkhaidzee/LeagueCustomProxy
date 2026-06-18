@@ -102,7 +102,6 @@ const serverPortInput = document.getElementById('server-port') as HTMLInputEleme
 const btnConnectServer = document.getElementById('btn-connect-server') as HTMLButtonElement;
 
 const PANEL_COLLAPSED_KEY = 'lolproxchat.panelCollapsed';
-const UPDATE_DISMISS_KEY = 'lolproxchat.updateDismissed';
 
 function isPanelCollapsed(): boolean {
   return localStorage.getItem(PANEL_COLLAPSED_KEY) === '1';
@@ -242,60 +241,32 @@ navigator.mediaDevices.addEventListener('devicechange', () => {
 const scanRateRow = IS_DEV_BUILD ? document.getElementById('scan-rate-row') : null;
 const btnCheckUpdate = document.getElementById('btn-check-update') as HTMLButtonElement;
 const updateStatus = document.getElementById('update-status')!;
+const btnCheckUpdateGate = document.getElementById('btn-check-update-gate') as HTMLButtonElement;
+const updateStatusGate = document.getElementById('update-status-gate')!;
 
-async function runUpdateCheck(auto = false): Promise<void> {
-  if (auto) {
-    updateStatus.textContent = 'Checking for updates…';
-  }
+async function runUpdateCheck(statusEl: HTMLElement): Promise<void> {
+  statusEl.textContent = 'Checking for updates…';
   try {
     const info = await checkForUpdate();
-    const dismissKey = UPDATE_DISMISS_KEY + ':' + info.latest_version;
-    if (auto && sessionStorage.getItem(dismissKey) === '1') {
-      updateStatus.textContent = '';
-      return;
-    }
     if (info.update_available && info.download_url) {
-      if (auto) {
-        updateStatus.innerHTML = '';
-        const span = document.createElement('span');
-        span.textContent = 'Update v' + info.latest_version + ' available — ';
-        const installBtn = document.createElement('button');
-        installBtn.className = 'icon-btn';
-        installBtn.textContent = 'Install';
-        installBtn.addEventListener('click', () => {
-          void downloadAndApply(info.download_url!);
-        });
-        const dismissBtn = document.createElement('button');
-        dismissBtn.className = 'icon-btn';
-        dismissBtn.textContent = 'Dismiss';
-        dismissBtn.addEventListener('click', () => {
-          sessionStorage.setItem(dismissKey, '1');
-          updateStatus.textContent = '';
-        });
-        updateStatus.append(span, installBtn, dismissBtn);
-      } else {
-        updateStatus.textContent = 'Update available: v' + info.latest_version + ' — applying…';
-        await downloadAndApply(info.download_url);
-      }
+      statusEl.textContent = 'Update available: v' + info.latest_version + ' — applying…';
+      await downloadAndApply(info.download_url);
     } else if (info.update_available && !info.download_url) {
-      updateStatus.textContent = 'Update v' + info.latest_version
+      statusEl.textContent = 'Update v' + info.latest_version
         + ' exists but no leagueproxy.exe on the release';
-    } else if (!auto) {
-      updateStatus.textContent = 'Up to date (v' + info.current_version + ')';
     } else {
-      updateStatus.textContent = '';
+      statusEl.textContent = 'Up to date (v' + info.current_version + ')';
     }
   } catch (e) {
-    if (!auto) {
-      updateStatus.textContent = 'Update check failed: ' + formatInvokeError(e);
-    }
+    statusEl.textContent = 'Update check failed: ' + formatInvokeError(e);
   }
 }
 
-setTimeout(() => void runUpdateCheck(true), 3000);
-
 btnCheckUpdate.addEventListener('click', () => {
-  void runUpdateCheck(false);
+  void runUpdateCheck(updateStatus);
+});
+btnCheckUpdateGate.addEventListener('click', () => {
+  void runUpdateCheck(updateStatusGate);
 });
 
 async function refreshRelayStatus(): Promise<void> {
@@ -609,7 +580,15 @@ function readBoundPttVk(): number {
   return !Number.isNaN(vk) && vk > 0 ? vk : 0;
 }
 
+function isTextInputTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return target.isContentEditable;
+}
+
 function handleOverlayPttKeydown(e: KeyboardEvent): void {
+  if (isTextInputTarget(e.target)) return;
   const boundVk = readBoundPttVk();
   if (!boundVk) return;
   const vk = browserKeyToWin32Vk(e.code);
@@ -624,6 +603,7 @@ function handleOverlayPttKeydown(e: KeyboardEvent): void {
 }
 
 function handleOverlayPttKeyup(e: KeyboardEvent): void {
+  if (isTextInputTarget(e.target)) return;
   const boundVk = readBoundPttVk();
   if (!boundVk) return;
   const vk = browserKeyToWin32Vk(e.code);

@@ -2,6 +2,18 @@
 
 All notable changes to LeagueProxy are documented here.
 
+## [2.2.0] — 2026-06-18
+
+### Updates & connect screen
+
+- Remove startup auto-update — check for updates manually with **CHECK** only.
+- Add **Updates** section to the connect screen so players can update before joining a server.
+- Fix connect form layout (label overlap and inconsistent field alignment).
+
+### Input
+
+- Fix PTT hotkey swallowing keys while typing in the connect form (e.g. hostnames containing `T`).
+
 ## [2.1.0] — 2026-06-17
 
 ### Connect & networking
@@ -89,6 +101,7 @@ First stable release for custom 5v5 friend groups.
 - Release vs dev builds (`leagueproxy.exe` vs `leagueproxy-dev.exe`).
 - Split build scripts for faster iteration (`build-frontend-only`, `build-rust-only`).
 
+[2.2.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v2.0.0
 [1.0.0]: https://github.com/Sandrochkhaidzee/LeagueCustomProxy/releases/tag/v1.0.0

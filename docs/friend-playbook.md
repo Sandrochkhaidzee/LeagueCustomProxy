@@ -14,7 +14,7 @@ Proximity voice for custom 5v5 games. Hear **nearby** teammates and enemies — 
 
 ```
 Files:   leagueproxy.exe (players), server.exe (host)
-Version: 2.1.0
+Version: 2.2.0
 Server:  Host runs server.exe; players connect on launch (Disconnect to change host)
 ```
 
